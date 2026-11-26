@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import math
@@ -1180,9 +1181,17 @@ class PlanWidget(WorkspaceWidget):
 
         # Engines may suggest values for their parameters, given the radiation mode. The
         # lookup may go online, so the dialog opens with the suggestions of an earlier
-        # lookup and gets the current ones when they arrive.
+        # lookup, or those found without the network, and gets the current ones when
+        # they arrive.
         radiation_mode = self._cmb_radiation.currentText()
         key = (engine_name, radiation_mode)
+        lookup = getattr(engine_cls, "config_choices", None)
+        if key not in self._engine_choices and callable(lookup):
+            try:
+                if "offline" in inspect.signature(lookup).parameters:
+                    self._engine_choices[key] = lookup(radiation_mode, offline=True)
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                logger.debug("Could not collect local choices for %s: %s", engine_name, exc)
         dialog = ConfigFormDialog(
             engine_cls.config_model(),
             initial=self._engine_props.get(engine_name, {}),
@@ -1191,11 +1200,11 @@ class PlanWidget(WorkspaceWidget):
             choices=self._engine_choices.get(key, {}),
             exclude=set(ENGINE_FORM_EXCLUDE),
         )
-        if callable(getattr(engine_cls, "config_choices", None)):
+        if callable(lookup):
             dialog.choices_loaded.connect(
                 lambda choices, key=key: self._engine_choices.__setitem__(key, choices)
             )
-            dialog.load_choices(engine_cls.config_choices, radiation_mode)
+            dialog.load_choices(lookup, radiation_mode)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._engine_props[engine_name] = dialog.values()
             self._update_dirty_state()

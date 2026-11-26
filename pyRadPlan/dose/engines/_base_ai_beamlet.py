@@ -1,5 +1,6 @@
 """AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai.modelhub`` model contract."""
 
+import importlib.util
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -172,40 +173,32 @@ class DoseCalcModelConfig(PyRadPlanBaseModel):
 class AIBeamletEngine(PencilBeamEngineAbstract):
     """AI-driven pencil-beam dose engine.
 
-    What it does
-    - Builds a beamlet-aligned regular sampling grid (depth, lateral, lateral) for each ray.
-    - Samples CT on that grid and feeds it, along with the bixel energy, into an AI model
-        to predict a local dose cuboid. This is done as a batch per ray.
-    - Maps world dose-grid voxel centers into the beamlet-local frame and interpolates the
-        predicted cuboid at those points.
-    - Emits sparse bixel contributions (linear indices + `physical_dose`) that the base
-        pencil-beam engine accumulates into the dose influence matrix.
+    For each ray the engine samples the CT on a regular cuboid aligned with the beamlet
+    axis, with axes (depth, lateral, lateral), and lets the model predict the dose cuboid
+    of every beamlet of the ray from it and the beamlet energy. The predicted cuboids are
+    interpolated linearly at the dose-grid voxel centers and stored as sparse columns of
+    the dose influence matrix.
 
-    How it works
-    - Coordinate frames: world → BEV → beamlet-local via rotation/translation from the beam.
-    - Grid construction: uniform spacing in depth and lateral with configurable ranges; axis
-        order is (depth, lateral, lateral) to match model conventions.
-    - Model inference: model + preprocessor loaded with `pyRadPlan.ai.modelhub` from the
-        '<org>/<model>' id in `prop_dose_calc["model"]`; backend-agnostic arrays using the
-        Array API (`self.xp`). Loading executes the code shipped with the model: a model
-        folder placed under ``settings.ai.modelhub_local_models_dir`` by the user runs
-        as-is, a downloaded one only once trusted, with
-        ``pyRadPlan.ai.modelhub.trust_model("<org>/<model>")`` or
-        ``settings.ai.modelhub_trust_remote_code = True``
-        (``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``).
-    - Interpolation: 3D linear interpolation over (depth, lateral, lateral) axes to evaluate
-        predicted dose at world dose-grid locations.
-    - Scenarios: setup shifts are supported, each computed as its own geometry. Range
-        errors and several CT phases are refused (see ``supported_uncertainties``).
+    The model and its preprocessor are loaded with ``pyRadPlan.ai.modelhub`` from the
+    ``'<org>/<model>'`` id in ``prop_dose_calc["model"]``. Loading executes the code
+    shipped with the model: a model folder the user placed under
+    ``settings.ai.modelhub_local_models_dir`` runs as it is, a downloaded one only once
+    trusted, with ``pyRadPlan.ai.modelhub.trust_model("<org>/<model>")`` or
+    ``settings.ai.modelhub_trust_remote_code = True``
+    (``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``).
+
+    Setup scenarios are supported, each computed as its own geometry. Range errors and
+    several CT phases are refused (see ``supported_uncertainties``).
 
     Notes
     -----
-    - Inference is delegated to the model's own preprocessor: ``preprocess`` builds the
-        network input from the CT cuboid and the beamlet energies, and
-        ``predict(model, model_input)`` returns a dict of predicted cuboid batches keyed
-        by quantity name, one per quantity in ``metadata.dose_calc.quantities``.
-    - Positions are float32 on every backend; each ray's transforms are composed in
-        float64 on the host.
+    Inference is delegated to the model's own preprocessor: ``preprocess`` builds the
+    network input from the CT cuboid and the beamlet energies, and
+    ``predict(model, model_input)`` returns a dict of predicted cuboid batches keyed by
+    quantity name, one per quantity in ``metadata.dose_calc.quantities``.
+
+    Positions are float32 on every backend; each ray's transforms are composed in float64
+    on the host.
     """
 
     short_name = "AIBeamlet"
@@ -245,7 +238,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
     assumed_sparsity = 1e-2
 
     @classmethod
-    def config_choices(cls, radiation_mode: Optional[str] = None) -> dict[str, List[str]]:
+    def config_choices(
+        cls, radiation_mode: Optional[str] = None, *, offline: Optional[bool] = None
+    ) -> dict[str, List[str]]:
         """Suggested values per parameter, for the GUI's engine-configuration form.
 
         Lists the dose-calculation models available locally and, unless offline,
@@ -255,11 +250,19 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         models whose framework is not installed. For a model
         that is not on disk, only its ``model_config.json`` is fetched, never its
         weights. The list is a suggestion: any other id can still be typed.
+
+        Parameters
+        ----------
+        radiation_mode : str, optional
+            Leave out models trained for another radiation mode.
+        offline : bool, optional
+            ``True`` lists the models on disk only, without contacting the hub.
+            Defaults to :attr:`AiSettings.modelhub_offline`.
         """
         cfg = get_settings().ai
-        names = set(list_local_models()) | set(
-            list_hub_models(cfg.modelhub_hf_org, cfg.modelhub_offline)
-        )
+        if offline is None:
+            offline = cfg.modelhub_offline
+        names = set(list_local_models()) | set(list_hub_models(cfg.modelhub_hf_org, offline))
 
         models = []
         for name in sorted(names):
@@ -268,7 +271,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
                 continue
             # What is not on disk is judged by its config alone, which is fetched
             # without the weights.
-            model_dir = local_model_dir(name) or hub_config_dir(name, cfg.modelhub_offline)
+            model_dir = local_model_dir(name) or hub_config_dir(name, offline)
             if model_dir is None:
                 continue
 
@@ -287,8 +290,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             models.append(name)
         return {"model": models}
 
-    @staticmethod
-    def is_available(pln, machine) -> Tuple[bool, str]:
+    @classmethod
+    def is_available(cls, pln, machine=None) -> Tuple[bool, str]:
         """Whether the engine can run for *pln*, and why not.
 
         Never raises and never contacts the network: only a model already on disk
@@ -297,7 +300,9 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         mode, or the packages it declares under ``metadata.requirements`` are not
         installed -- or names a model that is not an ``'<org>/<model>'`` id. Without a
         model, or with one that is not on disk, the engine is available; the model is
-        then resolved, and downloaded if needed, only when a calculation runs.
+        then resolved, and downloaded if needed, only when a calculation runs. Where
+        nothing could be downloaded because the hub client is not installed (e.g. in the
+        browser), the engine is only available with a usable model on disk.
 
         Parameters
         ----------
@@ -326,14 +331,26 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         else:  # an already constructed engine
             model = getattr(prop_dose_calc, "model", None)
 
+        can_download = importlib.util.find_spec("huggingface_hub") is not None
+
         if not model:  # an empty name counts as "none given"
-            return True, ""
+            if can_download or cls.config_choices(radiation_mode, offline=True)["model"]:
+                return True, ""
+            return False, (
+                f"No AI dose-calculation model for '{radiation_mode}' is on disk, and none "
+                "can be downloaded because huggingface_hub is not installed."
+            )
         if "/" not in model:
             return False, f"Model '{model}' is not a '<org>/<model>'."
 
         model_dir = local_model_dir(model)
         if model_dir is None:
-            return True, ""
+            if can_download:
+                return True, ""
+            return False, (
+                f"Model '{model}' is not on disk and cannot be downloaded because "
+                "huggingface_hub is not installed."
+            )
 
         _, modality, missing = model_facts(model_dir)
         if radiation_mode and modality and modality != radiation_mode:

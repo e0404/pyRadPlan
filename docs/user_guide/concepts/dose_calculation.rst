@@ -335,11 +335,13 @@ scenario set that varies the range or the CT phase is refused with a ``ValueErro
 Availability
 ~~~~~~~~~~~~
 
-The engine is always offered in :func:`~pyRadPlan.dose.engines.get_available_engines` and in
-the GUI's engine list, so a model can be picked at all. It reports itself unavailable only when
-the plan names a model that is already on disk and cannot be used -- trained for another
-modality, or its declared packages are not installed -- or names a model that is not an
-``"<org>/<model>"`` id. The reason is part of the answer:
+The engine is offered in :func:`~pyRadPlan.dose.engines.get_available_engines` and in the
+GUI's engine list without a model on disk, so a model can be picked at all. It reports itself
+unavailable when the plan names a model that is already on disk and cannot be used -- trained
+for another modality, or its declared packages are not installed -- or names a model that is
+not an ``"<org>/<model>"`` id. Where nothing could be downloaded because ``huggingface_hub``
+is not installed, as in the web version, it is offered only with a usable model on disk. The
+reason is part of the answer:
 
 .. code-block:: python
 

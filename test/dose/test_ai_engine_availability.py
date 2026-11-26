@@ -271,8 +271,8 @@ def test_import_without_ml_framework(tmp_path):
 
         assert "AIBeamlet" in DOSE_ENGINES
         assert "HongPB" in get_available_engines("protons")
-        # the engine is offered, but a plan naming a model that declares torch is refused
-        assert "AIBeamlet" in get_available_engines("protons")
+        # nothing can be downloaded and the only model on disk declares torch
+        assert "AIBeamlet" not in get_available_engines("protons")
         pln = {{"radiation_mode": "protons", "machine": "Generic",
                "prop_dose_calc": {{"engine": "AIBeamlet", "model": "{DUMMY_MODEL}"}}}}
         assert "AIBeamlet" not in get_available_engines(pln)
@@ -356,3 +356,24 @@ def test_engine_offered_without_torch_for_a_model_that_does_not_need_it(tmp_path
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=300, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_engine_needs_a_model_on_disk_where_nothing_can_be_downloaded(monkeypatch, tmp_path):
+    """Without the hub client (e.g. in the browser) only a usable local model counts."""
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
+
+    available, reason = AIBeamletEngine.is_available("protons", None)
+    assert not available
+    assert "huggingface_hub" in reason
+
+    pln = {"radiation_mode": "protons", "prop_dose_calc": {"model": "OtherOrg/not-on-disk"}}
+    available, reason = AIBeamletEngine.is_available(pln, None)
+    assert not available
+    assert "huggingface_hub" in reason
+
+    repo_id = "OtherOrg/dosecalc-no-requirements"
+    _model_declaring(tmp_path, [], repo_id=repo_id)
+    assert AIBeamletEngine.is_available("protons", None) == (True, "")
+    pln["prop_dose_calc"]["model"] = repo_id
+    assert AIBeamletEngine.is_available(pln, None) == (True, "")

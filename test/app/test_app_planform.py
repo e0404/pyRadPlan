@@ -407,7 +407,10 @@ def test_form_choices_without_a_hub_client_offer_the_local_models_only(
     client, monkeypatch, tmp_path
 ):
     """As in Pyodide: no ``huggingface_hub``, so nothing is fetched and nothing fails."""
+    import json
+    import shutil
     import sys
+    from pathlib import Path
 
     from pyRadPlan._settings import get_settings
     from pyRadPlan.ai.modelhub import _load_model
@@ -415,12 +418,22 @@ def test_form_choices_without_a_hub_client_offer_the_local_models_only(
     monkeypatch.setitem(sys.modules, "huggingface_hub", None)
     monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
     monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
+    params = {"kind": "engine", "name": "AIBeamlet", "radiation_mode": "protons"}
+    # without a model on disk the engine cannot run here and has no form
+    assert client.ok("plan.form_choices", params)["result"]["choices"] == {}
+
+    model_id = "DKFZ-RadOpt/dummy_dosecalc_model"
+    source = Path(__file__).resolve().parents[1] / "data" / "ai_models" / model_id
+    shutil.copytree(source, tmp_path / model_id)
+    config_file = tmp_path / model_id / "model_config.json"
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    config["metadata"]["requirements"] = []
+    config_file.write_text(json.dumps(config), encoding="utf-8")
     _load_model.list_hub_models.cache_clear()
     _load_model.hub_config_dir.cache_clear()
     try:
-        params = {"kind": "engine", "name": "AIBeamlet", "radiation_mode": "protons"}
         result = client.ok("plan.form_choices", params)["result"]
     finally:
         _load_model.list_hub_models.cache_clear()
         _load_model.hub_config_dir.cache_clear()
-    assert result["choices"] == {"model": []}
+    assert result["choices"] == {"model": [{"value": model_id, "label": model_id}]}
