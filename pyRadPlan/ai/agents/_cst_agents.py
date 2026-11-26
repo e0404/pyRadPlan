@@ -11,6 +11,7 @@ from pyRadPlan.optimization.objectives import Objective, get_objectives_union
 from pyRadPlan.plan._plans import Plan
 from pyRadPlan._settings import get_settings
 
+from ._models import resolve_model
 from ._settings import load_ai_env
 from ._usage import log_run_usage
 
@@ -23,7 +24,7 @@ OBJECTIVES_SYSTEM_PROMPT = """
         The available objective types and the meaning of their parameters are fully
         described by the output schema. All dosimetric parameter values must be given as
         dose per fraction. If no prescribed dose is given, prescribe 2 Gy per fraction
-        to the target. Assign a priority (weight) to every objective and leave the
+        to the target. Assign a penalty (weight) to every objective and leave the
         'quantity' field at its default.
         """
 
@@ -32,7 +33,7 @@ OBJECTIVES_ADAPT_PROMPT = """
         distribution of a previous optimization run are provided. Assume that run used
         the objectives currently present in the structure set (also provided). Instead
         of proposing a generic template, adapt those objectives: adjust dose parameters
-        and priorities, and add or remove objectives, to fix shortcomings the QIs
+        and penalties, and add or remove objectives, to fix shortcomings the QIs
         reveal (insufficient target coverage or homogeneity, hot spots, avoidable OAR
         dose). Keep objectives that the QIs show to be working. Assume the QI dose
         values are given per fraction, on the same scale as the objectives, unless the
@@ -60,7 +61,7 @@ def _objective_summary(obj) -> dict:
         return {"definition": str(obj)}
     return {
         "name": obj.name,
-        "priority": obj.priority,
+        "penalty": obj.priority,
         "quantity": obj.quantity,
         "parameters": dict(zip(obj.parameter_names, obj.parameters)),
     }
@@ -248,7 +249,9 @@ def generate_voi_objectives(  # noqa: PLR0913
         {task_instruction}
         """
 
-    agent = Agent(effective_model, output_type=output_model, system_prompt=system_prompt)
+    agent = Agent(
+        resolve_model(effective_model), output_type=output_model, system_prompt=system_prompt
+    )
 
     result = agent.run_sync(user_prompt=user_prompt)
     log_run_usage(result, effective_model, operation="generate_voi_objectives")

@@ -38,7 +38,11 @@ def summarize_run_usage(result: Any, model: str) -> Optional[str]:
         return None
 
     cost_str = _estimate_cost(model, usage)
-    return f"Tokens: {input_tokens} in / {output_tokens} out | Est. cost: {cost_str}"
+    # input_tokens includes the cached ones; cache reads cost a fraction of new input
+    cache_read = usage.cache_read_tokens or 0
+    cache_write = usage.cache_write_tokens or 0
+    cache = f" (cache read {cache_read}, write {cache_write})" if cache_read or cache_write else ""
+    return f"Tokens: {input_tokens} in{cache} / {output_tokens} out | Est. cost: {cost_str}"
 
 
 def pop_last_run_usage() -> Optional[str]:
@@ -94,8 +98,8 @@ def _estimate_cost(model: str, usage: Any) -> str:
             PriceUsage(
                 input_tokens=usage.input_tokens or 0,
                 output_tokens=usage.output_tokens or 0,
-                cache_read_tokens=getattr(usage, "cache_read_tokens", None) or 0,
-                cache_write_tokens=getattr(usage, "cache_write_tokens", None) or 0,
+                cache_read_tokens=usage.cache_read_tokens or 0,
+                cache_write_tokens=usage.cache_write_tokens or 0,
             ),
             model_ref=model_ref,
             provider_id=provider_id,

@@ -312,7 +312,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         xp = self._array_backend
 
-        x0 = xp.zeros((self._dij.total_num_of_bixels,), dtype=xp.float64, device=self._device)
+        x0 = self._initial_point(xp, device=self._device)
         t_start = xp_utils.record_event(xp)
         result = self.solver.solve(x0)
         t_end = xp_utils.record_event(xp)

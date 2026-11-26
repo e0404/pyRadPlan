@@ -1,0 +1,20 @@
+{
+  "format": "pyRadPlan-goals",
+  "version": 1,
+  "name": "matRad PROSTATE phantom: prostate bed 68 Gy + pelvic nodes 56 Gy (SIB). Template values, not verified: NOT FOR CLINICAL USE",
+  "dose": "total",
+  "fractions": 30,
+  "goals": [
+    {"voi": "PTV_68", "metric": "D95", "op": ">=", "value": 64.6, "source": "95 % of 68 Gy"},
+    {"voi": "PTV_68", "metric": "D2", "op": "<=", "value": 72.8, "source": "107 % of 68 Gy"},
+    {"voi": "PTV_56", "metric": "D95", "op": ">=", "value": 53.2, "source": "95 % of 56 Gy"},
+    {"voi": "Rectum", "metric": "V65Gy", "op": "<=", "value": 35, "source": "RTOG 0534-like"},
+    {"voi": "Rectum", "metric": "V40Gy", "op": "<=", "value": 55, "source": "RTOG 0534-like"},
+    {"voi": "Bladder", "metric": "V65Gy", "op": "<=", "value": 50, "source": "RTOG 0534-like"},
+    {"voi": "Bladder", "metric": "V40Gy", "op": "<=", "value": 70, "source": "RTOG 0534-like"},
+    {"voi": "Rt femoral head", "metric": "max", "op": "<=", "value": 50, "source": "QUANTEC-like"},
+    {"voi": "Lt femoral head", "metric": "max", "op": "<=", "value": 50, "source": "QUANTEC-like"},
+    {"voi": "Penile_bulb", "metric": "mean", "op": "<=", "value": 52.5, "hard": false, "source": "QUANTEC-like"},
+    {"voi": "BODY", "metric": "max", "op": "<=", "value": 72.8, "hard": false, "source": "no hot spot above 107 %"}
+  ]
+}

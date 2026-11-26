@@ -1,0 +1,429 @@
+{
+  "name": "RTOG/NRG-style protocol constraints (template)",
+  "id": "rtog_template",
+  "version": "0.1-template",
+  "disclaimer": "PLACEHOLDER VALUES FOR DEVELOPMENT ONLY - NOT FOR CLINICAL USE. Values are plausible approximations, not verified against the original publications. Replace with your institution's validated protocol.",
+  "source": "Modelled after typical RTOG/NRG trial protocols; trial references are indicative only.",
+  "dose_reference": {
+    "type": "fractionation",
+    "note": "Dose values are physical doses for the site's prescription fractionation."
+  },
+  "units": {
+    "dose": "Gy",
+    "volume": "%",
+    "relative": "%Rx"
+  },
+  "sites": {
+    "prostate_conventional": {
+      "description": "Prostate, conventional fractionation (RTOG 0126-like)",
+      "prescription": {
+        "total_dose_gy": 78.0,
+        "num_fractions": 39
+      },
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 98,
+              "hard": true,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 107,
+              "hard": true,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "D2",
+              "op": "<=",
+              "value": 105,
+              "hard": false,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "Rectum": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V60Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": true
+            },
+            {
+              "metric": "V65Gy",
+              "op": "<=",
+              "value": 35,
+              "hard": true
+            },
+            {
+              "metric": "V70Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": true
+            },
+            {
+              "metric": "V75Gy",
+              "op": "<=",
+              "value": 15,
+              "hard": true
+            }
+          ]
+        },
+        "Bladder": {
+          "alpha_beta": 5,
+          "constraints": [
+            {
+              "metric": "V65Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": true
+            },
+            {
+              "metric": "V70Gy",
+              "op": "<=",
+              "value": 35,
+              "hard": true
+            },
+            {
+              "metric": "V75Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": true
+            },
+            {
+              "metric": "V80Gy",
+              "op": "<=",
+              "value": 15,
+              "hard": true
+            }
+          ]
+        },
+        "Femur_Head_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 10,
+              "hard": false
+            }
+          ]
+        },
+        "Femur_Head_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 10,
+              "hard": false
+            }
+          ]
+        }
+      }
+    },
+    "prostate_hypofractionated": {
+      "description": "Prostate, moderate hypofractionation 60 Gy / 20 fx (CHHiP-like)",
+      "prescription": {
+        "total_dose_gy": 60.0,
+        "num_fractions": 20
+      },
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 95,
+              "hard": true,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 105,
+              "hard": true,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "Rectum": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V40.5Gy",
+              "op": "<=",
+              "value": 38,
+              "hard": true
+            },
+            {
+              "metric": "V48.6Gy",
+              "op": "<=",
+              "value": 30,
+              "hard": true
+            },
+            {
+              "metric": "V52.7Gy",
+              "op": "<=",
+              "value": 22,
+              "hard": true
+            },
+            {
+              "metric": "V56.8Gy",
+              "op": "<=",
+              "value": 15,
+              "hard": true
+            }
+          ]
+        },
+        "Bladder": {
+          "alpha_beta": 5,
+          "constraints": [
+            {
+              "metric": "V48.6Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": true
+            },
+            {
+              "metric": "V60Gy",
+              "op": "<=",
+              "value": 5,
+              "hard": true
+            }
+          ]
+        },
+        "Femur_Head_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V40Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": false
+            }
+          ]
+        },
+        "Femur_Head_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V40Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": false
+            }
+          ]
+        }
+      }
+    },
+    "head_neck_conventional": {
+      "description": "Head and neck 70 Gy / 35 fx (RTOG 0522-like)",
+      "prescription": {
+        "total_dose_gy": 70.0,
+        "num_fractions": 35
+      },
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 100,
+              "hard": true,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 110,
+              "hard": false,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "min",
+              "op": ">=",
+              "value": 93,
+              "hard": false,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 45,
+              "hard": true
+            }
+          ]
+        },
+        "Brainstem": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 54,
+              "hard": true
+            }
+          ]
+        },
+        "Parotid_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 26,
+              "hard": false
+            }
+          ]
+        },
+        "Parotid_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 26,
+              "hard": false
+            }
+          ]
+        },
+        "Mandible": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 70,
+              "hard": true
+            }
+          ]
+        },
+        "OpticChiasm": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 54,
+              "hard": true
+            }
+          ]
+        },
+        "Larynx": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false
+            }
+          ]
+        }
+      }
+    },
+    "lung_conventional": {
+      "description": "NSCLC 60 Gy / 30 fx (RTOG 0617-like)",
+      "prescription": {
+        "total_dose_gy": 60.0,
+        "num_fractions": 30
+      },
+      "targets": {
+        "PTV": {
+          "constraints": [
+            {
+              "metric": "D95",
+              "op": ">=",
+              "value": 95,
+              "hard": true,
+              "unit": "%Rx"
+            },
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 120,
+              "hard": false,
+              "unit": "%Rx"
+            }
+          ]
+        }
+      },
+      "structures": {
+        "Lungs": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V20Gy",
+              "op": "<=",
+              "value": 37,
+              "hard": true
+            },
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 20,
+              "hard": true
+            }
+          ]
+        },
+        "Heart": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": false
+            },
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 20,
+              "hard": false
+            }
+          ]
+        },
+        "Esophagus": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 34,
+              "hard": false
+            }
+          ]
+        },
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 50,
+              "hard": true
+            }
+          ]
+        }
+      }
+    }
+  }
+}

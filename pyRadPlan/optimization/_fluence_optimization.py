@@ -69,6 +69,7 @@ def fluence_optimization(  # noqa: PLR0913
     *,
     opt_info: Optional[OptInfo] = None,
     scenarios: Union[bool, Sequence[int]] = False,
+    initial_fluence: Optional[np.ndarray] = None,
 ) -> PlanResult:
     """
     Trigger fluence optimization using the configuration stored in the pln object.
@@ -93,6 +94,9 @@ def fluence_optimization(  # noqa: PLR0913
         ``result.scenario_quantities`` (see :meth:`Dij.compute_result_ct_grid`).
         ``True`` selects every scenario of a dij with several scenarios; by default
         only the nominal scenario is reported.
+    initial_fluence : np.ndarray, optional
+        Fluence (one weight per bixel of *dij*) the solver starts from, e.g. the result of an
+        earlier optimization with the same beams. Default: all zeros.
 
     Returns
     -------
@@ -120,7 +124,9 @@ def fluence_optimization(  # noqa: PLR0913
     if opt_info is not None and records_history:
         planning_prob.obj_history = []
 
-    fluence, result_info = planning_prob.solve(_ct, _cst, _stf, _dij)
+    # Only passed when given, so problems overriding solve() without x0 keep working
+    start = {} if initial_fluence is None else {"x0": initial_fluence}
+    fluence, result_info = planning_prob.solve(_ct, _cst, _stf, _dij, **start)
 
     if opt_info is not None:
         # Only a problem that declares it actually fills the history; reporting an empty list

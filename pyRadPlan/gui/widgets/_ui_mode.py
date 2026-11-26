@@ -20,3 +20,6 @@ class UIMode(str, Enum):
     #: are editable; advanced configuration stays functional, is shown
     #: greyed out and keeps its current values.
     EDUCATIONAL = "educational"
+    #: The planning agent creates the plans; the main window shows an *Agent* tab
+    #: and one tab per plan it selected. The plan editor shows every field.
+    AGENTIC = "agentic"

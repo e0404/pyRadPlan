@@ -4,7 +4,7 @@ from ._objective import Objective
 from ._std import DoseUniformity
 from ._eud import EUD
 from ._max_dvh import MaxDVH
-from ._mean import MeanDose
+from ._mean import MeanDose, MeanOverdosing
 from ._min_dvh import MinDVH
 from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
@@ -24,6 +24,7 @@ register_objective(SquaredMimicking)
 register_objective(SquaredOverdosing)
 register_objective(SquaredUnderdosing)
 register_objective(MeanDose)
+register_objective(MeanOverdosing)
 register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
@@ -36,6 +37,7 @@ __all__ = [
     "EUD",
     "MaxDVH",
     "MeanDose",
+    "MeanOverdosing",
     "MinDVH",
     "SquaredDeviation",
     "SquaredMimicking",

@@ -505,7 +505,7 @@ def test_file_menu_ui_mode_switches_settings_and_plan_widget(qapp, gui_settings)
     gui_settings.ui_mode = "default"
     win = MainWindow(WorkspaceManager())
     actions = win._file_menu._ui_mode_actions
-    assert list(actions) == ["default", "educational"]
+    assert list(actions) == ["default", "educational", "agentic"]
     assert actions["default"].isChecked()
     assert win.plan_widget.ui_mode() is UIMode.DEFAULT
 
@@ -628,3 +628,328 @@ def test_workflow_offers_the_pending_plan_changes(qapp, test_data_photons, monke
 
     assert ws.pln.prop_stf["gantry_angles"][0] == 33.0
     assert not win.plan_widget.has_pending_changes()
+
+
+# ---- agentic mode ------------------------------------------------------------------
+
+
+@pytest.fixture
+def agentic(monkeypatch):
+    pytest.importorskip("pydantic_ai")
+    from pyRadPlan._settings import get_settings
+
+    monkeypatch.setattr(get_settings().gui, "ui_mode", "agentic")
+
+
+def test_agentic_mode_shows_agent_tab_with_plan_editor(qapp, agentic):
+    from pyRadPlan._settings import get_settings
+
+    win = MainWindow(WorkspaceManager())
+    assert win._left_stack.currentIndex() == 1
+    assert win._agent_tabs.tabText(0) == "Agent"
+    assert win.plan_widget.parent() is win.agent_panel.plan_page
+
+    get_settings().gui.ui_mode = "default"
+    win.apply_ui_mode_setting()
+    assert win._left_stack.currentIndex() == 0
+    assert win.plan_widget.parent() is win._plan_group
+
+
+def test_plan_tabs_hold_their_own_workspace_state(qapp, agentic, test_data_photons):
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    base_pln = ws.pln
+    dose = {"physical_dose": result["physicalDose"]}
+    plan_state = {
+        "cst": cst,
+        "pln": base_pln,
+        "stf": None,
+        "dij": None,
+        "results": {"current": dose, "Plan_1": dose},
+        "active_result": "current",
+    }
+    win._add_plan_tabs([{"label": "Plan 1", "tooltip": "t", "state": plan_state}])
+
+    ws.dij = "base dij"
+    win._agent_tabs.setCurrentIndex(1)
+    assert list(ws.results) == ["current", "Plan_1"] and ws.dij is None
+    assert ws.active_result == "current" and "physical_dose" in ws.result
+    assert win._classic_column.parent() is win._agent_tabs.widget(1)
+    assert win.plan_widget.parent() is win._plan_group
+
+    ws.dij = "plan dij"
+    win._agent_tabs.setCurrentIndex(0)
+    assert ws.dij == "base dij" and ws.result is None and not ws.results
+    win._agent_tabs.setCurrentIndex(1)
+    assert ws.dij is None  # a plan tab's dose influence is dropped when leaving it
+    assert list(ws.results) == ["current", "Plan_1"]
+
+    ws.ct = ct  # another patient: the plan tabs go
+    assert win._agent_tabs.count() == 1
+    assert win._classic_column.parent() is win._classic_page
+
+
+def _agent_plan(index, cst, dose, hard_ok=True):
+    goals = [
+        {
+            "goal": "Core max <= 1.6",
+            "hard": True,
+            "value": 1.5,
+            "margin": 0.1,
+            "rel_margin": 0.06 if hard_ok else -0.06,
+            "passed": hard_ok,
+        },
+        {
+            "goal": "PTV D95 >= 1.8",
+            "hard": False,
+            "value": 1.7,
+            "margin": -0.1,
+            "rel_margin": -0.05,
+            "passed": False,
+        },
+    ]
+    sod = {
+        "name": "Squared Overdosing",
+        "penalty": 3,
+        "quantity": "physical_dose",
+        "parameters": {"d_max": 1.0},
+    }
+    from pyRadPlan.ai.agents import PlanRecord
+    from pyRadPlan.result import create_result
+
+    return PlanRecord(
+        index=index,
+        beams={"gantry_angles": [0, 180], "couch_angles": [0, 0]},
+        objectives={"Core": [sod], "opt_ring": [sod]},
+        evaluation={
+            "all_hard_passed": hard_ok,
+            "num_failed": 1 + (not hard_ok),
+            "score": float(index),
+            "goals": goals,
+            "unresolved_goals": ["Rectum max <= 50"],
+        },
+        result=None if dose is None else create_result({"physical_dose": dose}),
+        cst=cst,
+    )
+
+
+def test_agent_result_tab_loads_plans_and_clear_run(qapp, agentic, test_data_photons):
+    from types import SimpleNamespace
+
+    from pyRadPlan.ai.agents import PlanningReport
+
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    panel = win.agent_panel
+    dose = result["physicalDose"]
+    plans = [_agent_plan(1, cst, dose, hard_ok=False), _agent_plan(2, cst, dose)]
+    panel._state = SimpleNamespace(plans=plans, pln=ws.pln, num_optimizations=2)
+    for plan in plans:
+        panel._on_agent_event("plan", {"plan": plan})
+    report = PlanningReport(all_hard_goals_met=True, summary="Done.", trade_offs=["Core vs PTV"])
+    panel._on_run_done(SimpleNamespace(output=report), None)
+    # the picks are results of their own; the active result is the one before the run
+    assert list(ws.results) == ["Plan_1"] and ws.result is None
+    assert ws.results["Plan_1"] is plans[1].result  # the plan's own PlanResult
+
+    # the report is in the result tab, not in the log
+    text = panel.result_widget.report.toPlainText()
+    assert "Core vs PTV" in text and "Rectum max <= 50" in text
+    assert "Core vs PTV" not in panel._log.toPlainText()
+    table = panel.result_widget.table
+    rows = [[table.item(r, c).text() for c in range(1, 6)] for r in range(table.rowCount())]
+    assert rows == [
+        ["1", "1", "1", "1", "2 beams · 2 obj · 1 helper"],
+        ["2 (Plan 1)", "0", "1", "2", "2 beams · 2 obj · 1 helper"],
+    ]
+    assert panel.progress_plot.legend_entries() == [
+        "Core max <= 1.6",
+        "PTV D95 >= 1.8 (soft)",
+        "Score",
+    ]
+
+    # Load plan adds a tab once, and reuses the tab of a selected plan
+    panel._on_load_requested(1)
+    assert [win._agent_tabs.tabText(i) for i in range(3)] == ["Agent", "Plan 1", "Opt 1"]
+    assert win._agent_tabs.currentIndex() == 2
+    win._agent_tabs.setCurrentIndex(0)
+    panel._on_load_requested(1)
+    panel._on_load_requested(2)
+    assert win._agent_tabs.count() == 3 and win._agent_tabs.currentIndex() == 1
+    win._agent_tabs.setCurrentIndex(0)
+
+    panel.clear_run()
+    assert win._agent_tabs.count() == 1 and table.rowCount() == 0
+    assert ws.result is None and not ws.results and not panel._log.toPlainText()
+    assert ws.pln is not None  # the plan stays
+
+    panel.agentic_plan_widget._spn_opt.setValue(3)
+    panel.clear_everything()
+    assert panel.agentic_plan_widget.max_optimizations == 8
+    assert ws.ct is ct and ws.cst is cst and ws.dij is None
+
+
+def test_agent_plan_line_names_blends_and_warm_starts(qapp):
+    from pyRadPlan.gui.widgets.agent._agent_panel import _plan_line
+
+    plan = _agent_plan(3, None, None)
+    plan.evaluation["optimizer"] = {"iterations": 40, "converged": True, "start_from": 2}
+    line = _plan_line(plan)
+    assert line.startswith("Optimization 3: score 3") and "(converged) from plan 2" in line
+    blend = _agent_plan(4, None, None)
+    blend.blend = {"plans": [1, 3], "weights": [0.75, 0.25]}
+    assert _plan_line(blend).startswith("Blend 4 (75 % plan 1 + 25 % plan 3): score 4")
+
+
+def test_agent_pareto_line_names_the_compromise(qapp):
+    from pyRadPlan.gui.widgets.agent._agent_panel import _pareto_line
+
+    result = {"plans": [2, 5], "num_blends": 95, "front_size": 40}
+    assert (
+        _pareto_line(result) == "Pareto front of plans 2, 5: no blend of 95 meets all hard goals"
+    )
+    result["compromise"] = {
+        "weights": [0.4, 0.6],
+        "score": 11.2,
+        "weakest_axes": [{"goal": "PAROTID_LT mean <= 26", "pct_of_range_from_best": 40.0}],
+    }
+    assert _pareto_line(result) == (
+        "Pareto front of plans 2, 5: 40 of 95 blends on the front · compromise 40 % plan 2 + "
+        "60 % plan 5 (score 11.2) · weakest PAROTID_LT mean"
+    )
+
+
+def test_agentic_plan_goals_form_the_protocol(qapp):
+    pytest.importorskip("pydantic_ai")
+    from pyRadPlan.ai.agents import Goal
+    from pyRadPlan.gui.widgets.agent import AgenticPlanWidget
+
+    widget = AgenticPlanWidget(WorkspaceManager(), tools={"optimize": "", "set_beams": ""})
+    assert widget.protocol().goals == [] and not widget.protocol().locked
+    goals = [
+        Goal(voi="PTV", metric="D95", op=">=", value=1.9),
+        Goal(voi="Cord", metric="max", op="<=", value=1.5, hard=False, source="table"),
+    ]
+    widget.set_goals(goals)
+    protocol = widget.protocol()
+    assert protocol.goals == goals and protocol.locked
+    assert widget.tools() == ["optimize", "set_beams"]
+
+    assert (widget.max_dij_calcs, widget.beam_range, widget.allow_couch, widget.max_iter) == (
+        3,
+        (1, 9),
+        True,
+        5000,
+    )
+    widget._spn_min_beams.setValue(12)  # the range stays valid
+    assert widget.beam_range == (9, 9)
+    widget._spn_max_beams.setValue(15)
+    widget._spn_min_beams.setValue(12)
+    widget._chk_couch.setChecked(False)
+    widget.reset()
+    assert widget.beam_range == (1, 9) and widget.allow_couch
+    widget.set_goals(goals)
+
+    widget._tbl_goals.item(0, 1).setText("D95%")
+    with pytest.raises(ValueError, match="row 1"):
+        widget.protocol()
+
+
+def test_agentic_plan_goals_import_export(qapp, tmp_path, monkeypatch):
+    pytest.importorskip("pydantic_ai")
+    from pyRadPlan.ai.agents import Goal
+    from pyRadPlan.gui.widgets.agent import AgenticPlanWidget
+    from PySide6.QtWidgets import QMessageBox
+
+    from pyRadPlan.plan import PhotonPlan
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: shown.append(a[2]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: shown.append(a[2]))
+    ws = WorkspaceManager()
+    widget = AgenticPlanWidget(ws, tools={"optimize": ""})
+    widget.import_goals(str(tmp_path / "missing.json"))
+    assert "plan first" in shown.pop()
+
+    ws.set_many(pln=PhotonPlan(num_of_fractions=20, dose_convention="total"))
+    goals = [Goal(voi="PTV", metric="D95", op=">=", value=57.0, hard=False)]
+    widget.set_goals(goals)
+    path = tmp_path / "goals.json"
+    widget.export_goals(str(path))
+    widget.set_goals([])
+    widget.import_goals(str(path))
+    assert widget.goals() == goals and not shown
+
+    ws.set_many(pln=PhotonPlan(num_of_fractions=19, dose_convention="per_fraction"))
+    widget.import_goals(str(path))
+    assert widget.goals()[0].value == 3.0 and "20 fractions" in shown.pop()
+    path.write_text("not json")
+    widget.import_goals(str(path))
+    assert "Cannot read" in shown.pop() and widget.goals()[0].value == 3.0
+
+
+def test_agent_pause_and_continue(qapp, agentic, test_data_photons, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+    from pydantic_ai import DeferredToolRequests
+    from pydantic_ai.messages import ToolCallPart
+
+    from pyRadPlan.ai.agents import PlanningReport, continue_planning_agent
+    from pyRadPlan.gui.widgets.agent import AgentPanel
+
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    panel = win.agent_panel
+    started = []
+    monkeypatch.setattr(panel, "_start", lambda *a, **k: started.append((a, k)))
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a[2]))
+
+    # Pause asks the running agent to stop before its next optimization
+    state = SimpleNamespace(plans=[], pln=ws.pln, num_optimizations=2, pause_requested=False)
+    panel._state = state
+    monkeypatch.setattr(AgentPanel, "is_busy", property(lambda self: True))
+    panel.pause_agent()
+    assert state.pause_requested and not panel._btn_pause.isEnabled()
+    monkeypatch.setattr(AgentPanel, "is_busy", property(lambda self: False))
+
+    call = ToolCallPart("optimize", {}, tool_call_id="c1")
+    paused = SimpleNamespace(
+        output=DeferredToolRequests(approvals=[call], metadata={"c1": {"reason": "review"}})
+    )
+    panel._on_run_done(paused, None)
+    assert "review after 2 optimization(s)" in panel._lbl_status.text()
+    assert not panel._feedback_box.isHidden() and not panel._btn_redirect.isHidden()
+    assert panel.agentic_plan_widget._spn_opt.isEnabled()  # budgets can change now
+
+    panel.agentic_plan_widget._spn_opt.setValue(12)
+    panel.agentic_plan_widget._spn_review.setValue(3)
+    panel._txt_feedback.setPlainText("Spare the parotids.")
+    panel.continue_agent("redirect")
+    ((args, kwargs),) = started
+    assert args[:4] == (state, continue_planning_agent, paused, "Spare the parotids.")
+    assert kwargs["action"] == "redirect" and kwargs["protocol"].goals == []
+    assert state.max_optimizations == 12 and state.review_every == 3
+    assert "Planner: redirect: Spare the parotids." in panel._log.toPlainText()
+    assert not panel._txt_feedback.toPlainText()
+
+    # After the report the box continues the conversation with a new instruction
+    panel._state = state
+    report = PlanningReport(all_hard_goals_met=True, summary="Done.")
+    panel._on_run_done(SimpleNamespace(output=report), None)
+    assert not panel._feedback_box.isHidden() and panel._btn_redirect.isHidden()
+    panel.continue_agent()
+    assert "instruction" in warnings.pop() and len(started) == 1
+    panel._txt_feedback.setPlainText("Try seven beams.")
+    panel.continue_agent()
+    assert started[-1][0][3] == "Try seven beams." and started[-1][1]["action"] == "continue"
+
+    panel.clear_run()
+    assert panel._session is None and panel._feedback_box.isHidden()

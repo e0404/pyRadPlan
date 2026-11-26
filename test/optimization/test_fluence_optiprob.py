@@ -348,3 +348,44 @@ def test_multi_scenario_gradient_backprojects_each_scenario_separately(small_pro
                 expected += factor * (mat.T @ cotangent)
 
     assert np.allclose(gradient, expected, rtol=1e-4, atol=1e-8 * np.abs(expected).max())
+
+
+def _scipy_cpu(pln, max_iter):
+    pln.prop_opt = {"solver": "scipy", "display": False, "max_iter": max_iter}
+
+
+def test_initial_fluence_is_where_the_solver_starts(small_proton_case, monkeypatch):
+    from pyRadPlan import fluence_optimization, settings  # noqa: PLC0415
+
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    pln, ct, cst, stf, dij = small_proton_case
+    _scipy_cpu(pln, 1)
+    seen = []
+
+    def solve(self, x0):
+        seen.append(np.asarray(xp_utils.to_numpy(x0)).copy())
+        return x0, {"num_iter": 0}
+
+    monkeypatch.setattr(OptimizerSciPy, "solve", solve)
+    start = np.linspace(0.0, 2.0, dij.total_num_of_bixels)
+    result = fluence_optimization(ct, cst, stf, dij, pln, initial_fluence=start)
+    np.testing.assert_array_equal(seen[-1], start)
+    np.testing.assert_array_equal(result.fluence, start)
+    fluence_optimization(ct, cst, stf, dij, pln)
+    assert not seen[-1].any()
+
+
+def test_initial_fluence_is_checked_and_clipped(small_proton_case, monkeypatch):
+    from pyRadPlan import fluence_optimization, settings  # noqa: PLC0415
+
+    monkeypatch.setattr(settings.xp, "prefer_gpu", False)
+    pln, ct, cst, stf, dij = small_proton_case
+    _scipy_cpu(pln, 1)
+    with pytest.raises(ValueError, match="bixels"):
+        fluence_optimization(ct, cst, stf, dij, pln, initial_fluence=np.ones(3))
+
+    prob = NonLinearFluencePlanningProblem(pln)
+    prob.solve(ct, cst, stf, dij, x0=-np.ones(dij.total_num_of_bixels))
+    assert np.all(prob._initial_point() == 0)
+    prob.solve(ct, cst, stf, dij)
+    assert prob._x0 is None  # a later solve without x0 starts from zero again

@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("pydantic_ai")
 
 from pyRadPlan._settings import get_settings
-from pyRadPlan.ai.agents import available_models
+from pyRadPlan.ai.agents import available_models, resolve_model
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,13 @@ def _no_dotenv(monkeypatch):
     # Keep these tests hermetic: don't let a local .env leak provider keys in.
     monkeypatch.setattr("pyRadPlan.ai.agents._models.load_ai_env", lambda *a, **k: None)
     monkeypatch.setattr(get_settings().ai, "agents_model", "claude-sonnet-4-5")
-    for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+    for env in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OLLAMA_BASE_URL",
+    ):
         monkeypatch.delenv(env, raising=False)
 
 
@@ -41,6 +47,14 @@ def test_available_models_adds_provider_when_key_present(monkeypatch):
     assert any("claude" in m for m in models)
     # No OpenAI key -> no OpenAI suggestions.
     assert not any("gpt" in m for m in models)
+
+
+def test_available_models_lists_ollama_with_base_url(monkeypatch):
+    # A local Ollama server needs no API key; its base URL is enough.
+    monkeypatch.setattr(get_settings().ai, "agents_model", "ollama:gpt-oss:20b")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+    assert available_models() == ["ollama:gpt-oss:20b"]
 
 
 def test_load_ai_env_populates_environment(tmp_path, monkeypatch):
@@ -107,3 +121,19 @@ def test_google_default_accepts_google_api_key_alias(monkeypatch):
     monkeypatch.setattr(get_settings().ai, "agents_model", "google-gla:gemini-custom")
     monkeypatch.setenv("GOOGLE_API_KEY", "dummy")
     assert available_models()[0] == "google-gla:gemini-custom"
+
+
+def test_resolve_model_never_forces_a_tool_call_on_anthropic(monkeypatch):
+    # Newer Claude models reject a forced tool_choice; pydantic-ai only knows that for models
+    # it already has a profile for
+    pytest.importorskip("anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    # claude-future-9: unknown to pydantic-ai, whose default would force the tool call
+    for name in ("anthropic:claude-sonnet-5-5", "claude-sonnet-5-5", "claude-future-9", None):
+        model = resolve_model(name)
+        assert model.profile["supports_forced_tool_choice"] is False
+        assert model.profile["supports_cache"]  # the provider's profile is kept
+    assert resolve_model(None).model_name == "claude-sonnet-4-5"
+    assert resolve_model("openai:gpt-4o") == "openai:gpt-4o"
+    obj = object()
+    assert resolve_model(obj) is obj

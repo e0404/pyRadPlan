@@ -1,0 +1,386 @@
+{
+  "name": "QUANTEC-style organ constraints (template)",
+  "id": "quantec_template",
+  "version": "0.1-template",
+  "disclaimer": "PLACEHOLDER VALUES FOR DEVELOPMENT ONLY - NOT FOR CLINICAL USE. Values are plausible approximations, not verified against the original publications. Replace with your institution's validated protocol.",
+  "source": "Modelled after QUANTEC (Int J Radiat Oncol Biol Phys 2010, vol 76 suppl.)",
+  "dose_reference": {
+    "type": "EQD2",
+    "note": "All dose values are EQD2 (2 Gy fractions)."
+  },
+  "units": {
+    "dose": "Gy",
+    "volume": "%"
+  },
+  "sites": {
+    "prostate": {
+      "description": "Pelvis, prostate / prostate bed",
+      "structures": {
+        "Rectum": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": true
+            },
+            {
+              "metric": "V60Gy",
+              "op": "<=",
+              "value": 35,
+              "hard": true
+            },
+            {
+              "metric": "V65Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": true
+            },
+            {
+              "metric": "V70Gy",
+              "op": "<=",
+              "value": 20,
+              "hard": true,
+              "endpoint": "Grade >=2 late rectal toxicity"
+            },
+            {
+              "metric": "V75Gy",
+              "op": "<=",
+              "value": 15,
+              "hard": true
+            }
+          ]
+        },
+        "Bladder": {
+          "alpha_beta": 5,
+          "constraints": [
+            {
+              "metric": "V65Gy",
+              "op": "<=",
+              "value": 50,
+              "hard": true
+            },
+            {
+              "metric": "V70Gy",
+              "op": "<=",
+              "value": 35,
+              "hard": true
+            },
+            {
+              "metric": "V75Gy",
+              "op": "<=",
+              "value": 25,
+              "hard": true
+            },
+            {
+              "metric": "V80Gy",
+              "op": "<=",
+              "value": 15,
+              "hard": true
+            }
+          ]
+        },
+        "Femur_Head_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 5,
+              "hard": false
+            }
+          ]
+        },
+        "Femur_Head_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V50Gy",
+              "op": "<=",
+              "value": 5,
+              "hard": false
+            }
+          ]
+        },
+        "PenileBulb": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 52,
+              "hard": false,
+              "endpoint": "Erectile dysfunction",
+              "note": "Mean-dose EQD2 conversion is approximate."
+            }
+          ]
+        }
+      }
+    },
+    "head_neck": {
+      "description": "Head and neck",
+      "structures": {
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 50,
+              "hard": true,
+              "endpoint": "Myelopathy"
+            }
+          ]
+        },
+        "Brainstem": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 54,
+              "hard": true,
+              "endpoint": "Neuropathy / necrosis"
+            }
+          ]
+        },
+        "Parotid_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 25,
+              "hard": false,
+              "endpoint": "Xerostomia (<25% function)"
+            }
+          ]
+        },
+        "Parotid_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 25,
+              "hard": false,
+              "endpoint": "Xerostomia (<25% function)"
+            }
+          ]
+        },
+        "OpticChiasm": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true,
+              "endpoint": "Optic neuropathy"
+            }
+          ]
+        },
+        "OpticNerve_L": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true
+            }
+          ]
+        },
+        "OpticNerve_R": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true
+            }
+          ]
+        },
+        "Cochlea_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false,
+              "endpoint": "Sensorineural hearing loss"
+            }
+          ]
+        },
+        "Cochlea_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false
+            }
+          ]
+        },
+        "Larynx": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 44,
+              "hard": false,
+              "endpoint": "Aspiration"
+            }
+          ]
+        },
+        "Mandible": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 70,
+              "hard": true,
+              "endpoint": "Osteoradionecrosis"
+            }
+          ]
+        }
+      }
+    },
+    "thorax": {
+      "description": "Lung / thorax",
+      "structures": {
+        "Lungs": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V20Gy",
+              "op": "<=",
+              "value": 30,
+              "hard": true,
+              "endpoint": "Symptomatic pneumonitis"
+            },
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 20,
+              "hard": true
+            }
+          ]
+        },
+        "Heart": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "V25Gy",
+              "op": "<=",
+              "value": 10,
+              "hard": false,
+              "endpoint": "Long-term cardiac mortality"
+            }
+          ]
+        },
+        "Esophagus": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 34,
+              "hard": false,
+              "endpoint": "Grade >=3 esophagitis"
+            }
+          ]
+        },
+        "SpinalCord": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 50,
+              "hard": true,
+              "endpoint": "Myelopathy"
+            }
+          ]
+        }
+      }
+    },
+    "brain": {
+      "description": "Brain",
+      "structures": {
+        "Brainstem": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 54,
+              "hard": true
+            }
+          ]
+        },
+        "OpticChiasm": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true
+            }
+          ]
+        },
+        "OpticNerve_L": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true
+            }
+          ]
+        },
+        "OpticNerve_R": {
+          "alpha_beta": 2,
+          "constraints": [
+            {
+              "metric": "max",
+              "op": "<=",
+              "value": 55,
+              "hard": true
+            }
+          ]
+        },
+        "Cochlea_L": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false
+            }
+          ]
+        },
+        "Cochlea_R": {
+          "alpha_beta": 3,
+          "constraints": [
+            {
+              "metric": "mean",
+              "op": "<=",
+              "value": 45,
+              "hard": false
+            }
+          ]
+        }
+      }
+    }
+  }
+}

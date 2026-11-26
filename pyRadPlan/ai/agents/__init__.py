@@ -15,7 +15,7 @@ os.environ.setdefault("PY_KEY_VALUE_DISABLE_BEARTYPE", "1")
 
 from ..._lazy import attach_lazy
 from ._settings import AiSettings as AiSettings, load_ai_env as load_ai_env
-from ._models import available_models as available_models
+from ._models import available_models as available_models, resolve_model as resolve_model
 from ._usage import pop_last_run_usage as pop_last_run_usage
 
 if TYPE_CHECKING:
@@ -31,6 +31,33 @@ if TYPE_CHECKING:
         beam_angles_system_prompt as beam_angles_system_prompt,
         cst_geometry_summary as cst_geometry_summary,
         generate_beam_angles as generate_beam_angles,
+    )
+    from ._planning import (
+        BooleanRecipe as BooleanRecipe,
+        Goal as Goal,
+        GoalFile as GoalFile,
+        IsodoseRecipe as IsodoseRecipe,
+        MarginRecipe as MarginRecipe,
+        PlanningReport as PlanningReport,
+        PlanningState as PlanningState,
+        PlanRecord as PlanRecord,
+        Protocol as Protocol,
+        RingRecipe as RingRecipe,
+        available_constraint_tables as available_constraint_tables,
+        continue_planning_agent as continue_planning_agent,
+        convert_fractionation as convert_fractionation,
+        create_planning_agent as create_planning_agent,
+        eqd2 as eqd2,
+        evaluate_protocol as evaluate_protocol,
+        load_constraint_table as load_constraint_table,
+        load_goals as load_goals,
+        physical_from_eqd2 as physical_from_eqd2,
+        plan_score as plan_score,
+        planning_tools as planning_tools,
+        run_planning_agent as run_planning_agent,
+        save_goals as save_goals,
+        select_distinct_plans as select_distinct_plans,
+        site_goals as site_goals,
     )
 
 __getattr__, __dir__, __all__ = attach_lazy(
@@ -48,6 +75,33 @@ __getattr__, __dir__, __all__ = attach_lazy(
             "cst_geometry_summary",
             "generate_beam_angles",
         ),
+        "._planning": (
+            "BooleanRecipe",
+            "Goal",
+            "GoalFile",
+            "IsodoseRecipe",
+            "MarginRecipe",
+            "PlanningReport",
+            "PlanningState",
+            "PlanRecord",
+            "Protocol",
+            "RingRecipe",
+            "available_constraint_tables",
+            "continue_planning_agent",
+            "convert_fractionation",
+            "create_planning_agent",
+            "eqd2",
+            "evaluate_protocol",
+            "load_constraint_table",
+            "load_goals",
+            "physical_from_eqd2",
+            "plan_score",
+            "planning_tools",
+            "run_planning_agent",
+            "save_goals",
+            "select_distinct_plans",
+            "site_goals",
+        ),
     },
-    eager=("AiSettings", "load_ai_env", "available_models", "pop_last_run_usage"),
+    eager=("AiSettings", "load_ai_env", "available_models", "pop_last_run_usage", "resolve_model"),
 )
