@@ -16,6 +16,7 @@ from ._registry import (
 )
 from ._resolve import resolve_model_dir, is_valid_model_dir, repo_subpath
 from ._load_model import load_model
+from ._pyanno4rt_loader import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
     "AiSettings",
@@ -29,4 +30,7 @@ __all__ = [
     "is_valid_model_dir",
     "repo_subpath",
     "load_model",
+    "OutcomeFeature",
+    "OutcomeModelSpec",
+    "load_pyanno4rt_model",
 ]

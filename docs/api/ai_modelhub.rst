@@ -30,6 +30,9 @@ Loading
    load_model
    BasePreprocessor
    OutcomePreprocessor
+   load_pyanno4rt_model
+   OutcomeModelSpec
+   OutcomeFeature
 
 
 Discovery
