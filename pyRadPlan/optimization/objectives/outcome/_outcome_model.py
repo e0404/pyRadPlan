@@ -96,7 +96,10 @@ class OutcomeModel(OutcomeObjective):
 
     @property
     def _model_device(self):
-        return next(self.nn_model.parameters()).device
+        tensor = next(self.nn_model.parameters(), None)
+        if tensor is None:
+            tensor = next(self.nn_model.buffers(), None)
+        return _torch().device("cpu") if tensor is None else tensor.device
 
     def setup(self, ct, cst) -> None:
         """Configure the preprocessor with the planning CT and structures."""

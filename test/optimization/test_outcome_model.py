@@ -501,3 +501,45 @@ def test_deepcopy_shares_the_model_but_not_the_data():
     assert clone.preprocessor is obj.preprocessor
     assert clone.cst_masks == ["Core"]
     assert clone.cst_masks is not obj.cst_masks
+
+
+def test_objective_info_names_the_voi(test_data_protons_raw):
+    from pyRadPlan.ct import validate_ct
+    from pyRadPlan.cst import validate_cst
+    from pyRadPlan.dij import validate_dij
+    from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
+    from pyRadPlan.plan import validate_pln
+    from pyRadPlan.stf import validate_stf
+
+    tmp = test_data_protons_raw
+    ct = validate_ct(tmp["ct"])
+    cst = validate_cst(tmp["cst"], ct=ct)
+    for voi in cst.vois:
+        voi.objectives = []
+    cst.vois[0].objectives = [MeanDoseLogistic(priority=1.0)]
+
+    prob = NonLinearFluencePlanningProblem(validate_pln(tmp["pln"]))
+    prob._ct, prob._cst = ct, cst
+    prob._dij, prob._stf = validate_dij(tmp["dij"]), validate_stf(tmp["stf"])
+    prob._initialize()
+    assert prob.collect_objective_info() == []
+
+    obj = prob._objective_list[0][1][0]
+    n = obj._dose_n if obj._dose_index is None else obj._dose_index.size
+    obj.compute_objective(np.full(n, 20.0))
+
+    assert prob.collect_objective_info() == [
+        {"objective": "Mean Dose Logistic", "voi": cst.vois[0].name, "history": obj.history}
+    ]
+
+
+@requires_torch
+def test_model_without_parameters_runs_on_the_cpu():
+    class Parameterless(torch.nn.Module):
+        def forward(self, dose):
+            return dose.mean() * 0.01
+
+    obj = _make_obj(model=(Parameterless(), DummyPreprocessor()))
+
+    assert obj._model_device == torch.device("cpu")
+    assert 0.0 < float(obj.compute_objective(_dose())) < 1.0

@@ -121,6 +121,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     _scenarios: ScenarioModel
 
     _objective_list: list[tuple]
+    _objective_voi_names: list[str]
     _constraint_list: list
     _terms: list[RobustTerm]
     _scenario_set: ScenarioSet
@@ -500,6 +501,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # sanitize objectives and constraints and manage required quantities
         voi_objectives, objectives, _ = self._collect_objectives()
         self._objective_list = objectives
+        self._objective_voi_names = [voi.name for voi, _ in voi_objectives]
         self._scenario_set = self._problem_scenarios(voi_objectives)
         self._terms = build_robust_terms(
             voi_objectives,
@@ -642,13 +644,17 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         return x, info
 
     def collect_objective_info(self) -> list[dict]:
-        """Collect auxiliary info reported by objectives after optimization."""
+        """Collect auxiliary info reported by objectives after optimization.
+
+        Each entry names the objective and the VOI it is attached to, followed by what
+        :meth:`Objective.report_info` returned.
+        """
         collected = []
-        for _mask, obj_list in self._objective_list:
+        for voi_name, (_mask, obj_list) in zip(self._objective_voi_names, self._objective_list):
             for obj in obj_list:
                 report = obj.report_info()
                 if report:
-                    collected.append({"objective": obj.name, **report})
+                    collected.append({"objective": obj.name, "voi": voi_name, **report})
         return collected
 
 

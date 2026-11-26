@@ -399,7 +399,8 @@ The options shared by all outcome objectives:
     pyanno4rt models are).
 
 The probabilities of all evaluations are reported in ``opt_info["objective_info"]``, a list with
-one entry per objective that reports something (``{"history": [...]}`` for outcome objectives).
+one entry per objective that reports something, naming the objective and its VOI
+(``{"objective": ..., "voi": ..., "history": [...]}`` for outcome objectives).
 Any objective can report data this way by implementing
 :meth:`~pyRadPlan.optimization.objectives.Objective.report_info`, and can prepare itself with
 the CT and the structure set in

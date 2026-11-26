@@ -84,7 +84,11 @@ class OutcomeObjective(Objective):
 
     @property
     def history(self) -> list[float]:
-        """Predicted probabilities of all objective evaluations of this optimization."""
+        """Predicted probabilities of all objective evaluations of this optimization.
+
+        With a robustness operator the objective is evaluated per scenario, so the entries
+        of the scenarios follow each other and are not told apart.
+        """
         return self._history
 
     def preprocess_image_reference_parameters(self, target_grid, index_list=None) -> None:
