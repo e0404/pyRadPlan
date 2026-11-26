@@ -96,10 +96,19 @@ jobs:
         - name: Install dependencies
           run: |
             python -m pip install --upgrade pip
-            python -m pip install -e ".[jax]" pytest pytest-timeout
+            python -m pip install -e ".[jax]" pytest pytest-cov pytest-timeout
             python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+        # test/ai and the AI dose engine tests need torch, which the main job does not install:
+        # their coverage comes from here. Codecov waits for all uploads of a commit before it
+        # reports (after_n_builds in codecov.yml: the main job's upload plus one per backend).
         - name: Run tests with pytest
-          run: pytest test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q --timeout=300
+          run: pytest test/ai test/core/xp_utils test/dose test/test_raytracersiddon.py test/stf -q --timeout=300 --cov=pyRadPlan --cov-report xml:.testreports/coverage.xml
+        - name: Upload coverage reports to Codecov
+          uses: codecov/codecov-action@v7
+          with:
+            token: ${{ secrets.CODECOV_TOKEN }}
+            flags: 'backend-${{ matrix.backend }}'
+            files: .testreports/coverage.xml
 
   # The lint results also go to GitHub code scanning, which compares them with the target branch
   # and reports the new ones on the pull request, like the code quality report of GitLab. The
