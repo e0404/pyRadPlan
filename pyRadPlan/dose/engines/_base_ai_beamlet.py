@@ -1,6 +1,8 @@
 """AI-driven pencil-beam dose engine, backed by the ``pyRadPlan.ai.modelhub`` model contract."""
 
 import logging
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Annotated, Any, ClassVar, List, Optional, Tuple
 
 import SimpleITK as sitk
@@ -31,10 +33,11 @@ from pyRadPlan.ai.modelhub import (
     load_model_with_dir,
     local_model_dir,
     model_facts,
+    resolve_model_dir,
     task_from_dir,
     task_from_name,
 )
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 
 from ._base import ct_phase_images
 from ._base_pencilbeam import PencilBeamEngineAbstract
@@ -124,6 +127,48 @@ def _host_vector(value: Any) -> np.ndarray:
     return np.reshape(np.asarray(value, dtype=np.float64), (3,))
 
 
+class GridParametersConfig(PyRadPlanBaseModel):
+    """Sampling-grid parameters a dose-calc model was trained on."""
+
+    model_config = ConfigDict(frozen=True)
+
+    spacing: float = Field(..., gt=0, description="Grid spacing [mm]")
+    lateral_range: float = Field(..., gt=0, description="Total width of the lateral grid [mm]")
+    depth_offset_start: float = Field(..., description="Depth offset start [mm]")
+    depth_range: float = Field(..., gt=0, description="Total depth range [mm]")
+
+
+class DoseCalcModelConfig(PyRadPlanBaseModel):
+    """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
+
+    The generic :func:`pyRadPlan.ai.modelhub.load_model` loader only cares about
+    ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
+    covers the extra fields the AI beamlet engine needs (sampling grid, quantities
+    produced, training assumptions) which live in the free-form ``metadata`` section
+    of a model's ``model_config.json``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    grid_parameters: GridParametersConfig
+    quantities: List[str] = Field(
+        default_factory=lambda: ["physical_dose"],
+        description="Quantities the model predicts, 'physical_dose' first",
+    )
+    radiation_mode: Optional[str] = None
+    energy_range_mev: Optional[Tuple[float, float]] = None
+    trained_machine: Optional[str] = None
+
+    @field_validator("quantities")
+    @classmethod
+    def _physical_dose_first(cls, quantities: List[str]) -> List[str]:
+        if not quantities or quantities[0] != "physical_dose":
+            raise ValueError(f"must start with 'physical_dose', got {quantities}")
+        if len(set(quantities)) != len(quantities):
+            raise ValueError(f"must not repeat a quantity, got {quantities}")
+        return quantities
+
+
 class AIBeamletEngine(PencilBeamEngineAbstract):
     """AI-driven pencil-beam dose engine.
 
@@ -198,25 +243,6 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         Field(ge=0.0, description="Predicted dose at or below which a voxel is not stored"),
     ] = 1e-7
     assumed_sparsity = 1e-2
-
-    def __init__(self, pln=None):
-        """Initialize the AI engine.
-
-        Parameters
-        ----------
-        pln : Any, optional
-            Plan-like object providing engine configuration, by default ``None``. If
-            provided, engine properties are derived from it and the model named in
-            `prop_dose_calc["model"]` is loaded (via `pyRadPlan.ai.modelhub.load_model`) at
-            dose-calc init time.
-
-        Returns
-        -------
-        None
-        """
-        self._model_modality = None
-        super().__init__(pln)
-        self.pln = pln
 
     @classmethod
     def config_choices(cls, radiation_mode: Optional[str] = None) -> dict[str, List[str]]:
@@ -343,12 +369,10 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         return bixel
 
     def _predict(self, ct_cuboid: Array, energies: Array) -> dict[str, Array]:
-        """Run one model prediction and return per-quantity arrays in ``self.xp``.
+        """Predict the dose cuboids of a batch of beamlets sharing one CT cuboid.
 
-        Delegates the inference procedure (forward pass(es), output scaling) to the
-        model's own preprocessor's ``predict``, which always returns a
-        ``{quantity_name: array}`` dict; this method only bridges array backends,
-        which is generic across all models.
+        The model's preprocessor runs the inference: ``preprocess`` builds the network
+        input and ``predict(model, model_input)`` returns ``{quantity: array}``.
 
         Parameters
         ----------
@@ -360,13 +384,42 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         Returns
         -------
         dict[str, Array]
-            Quantity name -> predicted cuboid batch, in ``self.xp``.
+            One ``(batch, depth, lateral, lateral)`` array in ``self.xp`` per declared
+            quantity; anything else the model returns is dropped.
+
+        Raises
+        ------
+        ValueError
+            If the prediction is not a dict holding every declared quantity in the
+            shape of the sampling grid.
         """
         xp = self.xp
         model_input = self.preprocessor.preprocess({"ct_cuboid": ct_cuboid, "energy": energies})
         result = self.preprocessor.predict(self.network, model_input)
 
-        return {q_name: to_namespace(xp, value) for q_name, value in result.items()}
+        quantities = self.model_cfg.quantities
+        if not isinstance(result, Mapping):
+            raise ValueError(
+                f"The preprocessor of model '{self.model}' must return a dict "
+                f"{{quantity: array}} from predict(), not {type(result).__name__}."
+            )
+        missing = [q for q in quantities if q not in result]
+        if missing:
+            raise ValueError(
+                f"Model '{self.model}' declares the quantities {quantities}, but its "
+                f"prediction lacks {missing} (it holds {list(result)})."
+            )
+
+        expected = (energies.shape[0], *ct_cuboid.shape)
+        predicted = {q: to_namespace(xp, result[q], device=self.device) for q in quantities}
+        for q_name, value in predicted.items():
+            if tuple(value.shape) != expected:
+                raise ValueError(
+                    f"Model '{self.model}' predicted '{q_name}' with shape "
+                    f"{tuple(value.shape)}, but the batch of {expected[0]} beamlets on its "
+                    f"sampling grid (depth, lateral, lateral) needs {expected}."
+                )
+        return predicted
 
     def _construct_grid(self):
         """Build the beamlet-local sampling grid the model was trained on.
@@ -678,32 +731,66 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         return scen_ray
 
     def _allocate_quantity_container(self, dij: dict[str, Any]):
-        """Allocate dij containers for all quantities declared by the model beyond physical_dose."""
-        extra = [q for q in self.model_cfg.quantities if q != "physical_dose"]
+        """Allocate dij containers for the quantities the model predicts beyond physical_dose."""
+        extra = self.model_cfg.quantities[1:]
         if extra:
             dij = self._allocate_quantity_matrices(dij, extra)
             logger.info("Allocated containers for extra quantities: %s", extra)
         return dij
 
-    def _check_training_data_compatibility(self, stf: SteeringInformation) -> None:
-        config = self.model_cfg
-        if config is None:
-            return
+    def _read_model_config(self, model_dir: Path) -> DoseCalcModelConfig:
+        """Judge a model by its ``model_config.json`` alone, before any of its code runs.
 
-        def _get(key, default=None):
-            if isinstance(config, dict):
-                return config.get(key, default)
-            return getattr(config, key, default)
+        Parameters
+        ----------
+        model_dir : Path
+            The resolved model directory.
 
-        pln_radiation_mode = getattr(self.pln, "radiation_mode", None)
-        radiation_mode = self._model_modality
-        if pln_radiation_mode and radiation_mode and radiation_mode != pln_radiation_mode:
+        Returns
+        -------
+        DoseCalcModelConfig
+            The validated ``metadata.dose_calc`` section.
+
+        Raises
+        ------
+        ValueError
+            If the section is missing or invalid, or the model was trained for another
+            radiation mode than the steering information's.
+        ImportError
+            If packages the model declares under ``metadata.requirements`` are missing.
+        """
+        raw_config, modality, missing = model_facts(model_dir)
+
+        dose_calc = (raw_config.get("metadata") or {}).get("dose_calc")
+        if not isinstance(dose_calc, dict):
+            raise ValueError(
+                f"Model '{self.model}' in '{model_dir}' has no 'metadata.dose_calc' section "
+                "in its model_config.json, so it is no dose-calculation model."
+            )
+        try:
+            model_cfg = DoseCalcModelConfig.model_validate(dose_calc)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Model '{self.model}' has an invalid 'metadata.dose_calc' section: {exc}"
+            ) from exc
+
+        radiation_mode = self._machine.radiation_mode
+        if modality and modality != radiation_mode:
             raise ValueError(
                 f"Model '{self.model}' was trained for radiation mode "
-                f"'{radiation_mode}' but the plan uses '{pln_radiation_mode}'."
+                f"'{modality}' but the plan uses '{radiation_mode}'."
             )
+        if missing:
+            raise ImportError(
+                f"Model '{self.model}' requires {', '.join(missing)}, which is not installed."
+            )
+        return model_cfg
 
-        trained_machine = _get("trained_machine")
+    def _check_training_data_compatibility(self, stf: SteeringInformation) -> None:
+        """Warn when the machine or the energies differ from the model's training data."""
+        config = self.model_cfg
+
+        trained_machine = config.trained_machine
         if trained_machine and self._machine.name != trained_machine:
             logger.warning(
                 "Machine '%s' differs from the machine used during model training ('%s'). "
@@ -712,7 +799,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
                 trained_machine,
             )
 
-        energy_range = _get("energy_range_mev")
+        energy_range = config.energy_range_mev
         if energy_range:
             all_energies = {e for beam in stf.beams for e in beam.energy_layers.keys()}
             out_of_range = sorted(
@@ -777,25 +864,29 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         if "/" not in self.model:
             raise ValueError(f"Model '{self.model}' is not a '<org>/<model>'.")
 
-        # The modelhub refuses downloaded code nobody trusted before importing any of it, also
-        # for a folder it downloaded, so the engine must not load a resolved folder directly.
+        # Resolving (and downloading) runs none of the model's code, so everything its
+        # model_config.json tells is checked before the model is loaded.
         try:
-            self.network, self.preprocessor, model_dir = load_model_with_dir(
-                repo_id=self.model, device=device_string(self.device)
-            )
+            model_dir = resolve_model_dir(repo_id=self.model)
         except FileNotFoundError as exc:
             raise FileNotFoundError(
                 f"AI model '{self.model}' is neither on disk nor could it be downloaded: {exc}"
             ) from exc
-        raw_config, self._model_modality, _ = model_facts(model_dir)
-        self.model_cfg = DoseCalcModelConfig.model_validate(
-            raw_config.get("metadata", {}).get("dose_calc", {})
+        self.model_cfg = self._read_model_config(model_dir)
+        self._check_training_data_compatibility(stf)
+
+        # Loading the resolved folder offline resolves nothing again. The modelhub still
+        # decides from the folder's provenance whether its code may run: downloaded code
+        # only once trusted.
+        self.network, self.preprocessor, _ = load_model_with_dir(
+            repo_id=self.model,
+            local_dir=model_dir,
+            offline=True,
+            device=device_string(self.device),
         )
 
         if self.ensemble_size is not None:
             self.preprocessor.config["ensemble_size"] = self.ensemble_size
-
-        self._check_training_data_compatibility(stf)
 
         dij = self._allocate_quantity_container(dij)
 
@@ -808,33 +899,3 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         self._construct_grid()
 
         return dij
-
-
-class GridParametersConfig(PyRadPlanBaseModel):
-    """Sampling-grid parameters a dose-calc model was trained on."""
-
-    model_config = ConfigDict(frozen=True)
-
-    spacing: float = Field(..., gt=0, description="Grid spacing [mm]")
-    lateral_range: float = Field(..., gt=0, description="Total width of the lateral grid [mm]")
-    depth_offset_start: float = Field(..., description="Depth offset start [mm]")
-    depth_range: float = Field(..., gt=0, description="Total depth range [mm]")
-
-
-class DoseCalcModelConfig(PyRadPlanBaseModel):
-    """AIBeamletEngine-specific model metadata, read from ``metadata.dose_calc``.
-
-    The generic :func:`pyRadPlan.ai.modelhub.load_model` loader only cares about
-    ``model_name``/``model_params``/``model_preprocessing``/``preprocessor_name``; this
-    covers the extra fields the AI beamlet engine needs (sampling grid, quantities
-    produced, training assumptions) which live in the free-form ``metadata`` section
-    of a model's ``model_config.json``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    grid_parameters: GridParametersConfig
-    quantities: List[str] = Field(default_factory=lambda: ["physical_dose"])
-    radiation_mode: Optional[str] = None
-    energy_range_mev: Optional[Tuple[float, float]] = None
-    trained_machine: Optional[str] = None

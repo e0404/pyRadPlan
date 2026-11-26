@@ -520,6 +520,132 @@ def test_range_scenarios_are_rejected(test_data_protons):
         )
 
 
+# --- model checks ----------------------------------------------------------
+
+
+@pytest.fixture
+def model_variant(tmp_path, monkeypatch):
+    """Make copies of the dummy model with a changed config, whose import leaves a file."""
+    models_dir = tmp_path / "models"
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", models_dir)
+    sentinel = tmp_path / "model-code-ran"
+    source = Path(__file__).resolve().parents[1] / "data" / "ai_models" / DUMMY_MODEL
+
+    def make(change_metadata):
+        model_dir = models_dir / "DKFZ-RadOpt" / "variant"
+        shutil.copytree(source, model_dir)
+        config_file = model_dir / "model_config.json"
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+        change_metadata(config["metadata"])
+        config_file.write_text(json.dumps(config), encoding="utf-8")
+        model_py = model_dir / "model.py"
+        model_py.write_text(
+            f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+            + model_py.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return "DKFZ-RadOpt/variant", sentinel
+
+    return make
+
+
+def _set_modality(metadata):
+    metadata["dose_calc"]["radiation_mode"] = "VHEE"
+
+
+def _drop_dose_calc(metadata):
+    del metadata["dose_calc"]
+
+
+def _quantities_without_dose_first(metadata):
+    metadata["dose_calc"]["quantities"] = ["let_dose", "physical_dose"]
+
+
+def _require_missing_package(metadata):
+    metadata["requirements"] = ["no_such_package_for_pyradplan"]
+
+
+@pytest.mark.parametrize(
+    "change_metadata,error,match",
+    [
+        pytest.param(
+            _set_modality, ValueError, "trained for radiation mode 'VHEE'", id="modality"
+        ),
+        pytest.param(_drop_dose_calc, ValueError, "no 'metadata.dose_calc'", id="no-dose-calc"),
+        pytest.param(
+            _quantities_without_dose_first, ValueError, "start with 'physical_dose'", id="order"
+        ),
+        pytest.param(
+            _require_missing_package, ImportError, "no_such_package_for_pyradplan", id="package"
+        ),
+    ],
+)
+def test_model_config_is_checked_before_model_code_runs(
+    test_data_protons, model_variant, change_metadata, error, match
+):
+    """What model_config.json tells is judged before the model's code is imported.
+
+    The engine is built from a plan dict, which carries the radiation mode as a key.
+    """
+    pln, ct, cst, stf, _dij, _result = test_data_protons
+    model, sentinel = model_variant(change_metadata)
+    pln_dict = {
+        "radiation_mode": "protons",
+        "machine": "Generic",
+        "prop_dose_calc": {"engine": "AIBeamlet", "model": model},
+    }
+
+    with pytest.raises(error, match=match):
+        AIBeamletEngine(pln_dict).calc_dose_influence(ct, cst, stf)
+    assert not sentinel.exists()
+
+
+def _engine_ready(test_data_protons):
+    pln, ct, cst, stf, dij, _result = test_data_protons
+    engine = AIBeamletEngine(_ai_pln(pln, dij))
+    engine._init_dose_calc(ct, cst, stf)
+    xp = engine.xp
+    depth = engine.grid_information["depth_range"].shape[0]
+    lateral = engine.grid_information["lateral_range"].shape[0]
+    ct_cuboid = xp.zeros((depth, lateral, lateral), dtype=xp.float32)
+    energies = xp.asarray([100.0, 120.0])
+    return engine, ct_cuboid, energies
+
+
+def test_prediction_must_hold_every_declared_quantity(test_data_protons):
+    """A prediction lacking a declared quantity, or no dict at all, is refused clearly."""
+    engine, ct_cuboid, energies = _engine_ready(test_data_protons)
+    predict = engine.preprocessor.predict
+
+    def without_let(model, model_input):
+        result = predict(model, model_input)
+        del result["let_dose"]
+        return result
+
+    engine.preprocessor.predict = without_let
+    with pytest.raises(ValueError, match=r"lacks \['let_dose'\]"):
+        engine._predict(ct_cuboid, energies)
+
+    engine.preprocessor.predict = lambda model, model_input: predict(model, model_input)[
+        "physical_dose"
+    ]
+    with pytest.raises(ValueError, match="must return a dict"):
+        engine._predict(ct_cuboid, energies)
+
+
+def test_prediction_must_match_the_sampling_grid(test_data_protons):
+    """A cuboid batch in another shape than the sampling grid's is refused clearly."""
+    engine, ct_cuboid, energies = _engine_ready(test_data_protons)
+    predict = engine.preprocessor.predict
+
+    def transposed(model, model_input):
+        return {q: v.transpose(1, 2) for q, v in predict(model, model_input).items()}
+
+    engine.preprocessor.predict = transposed
+    with pytest.raises(ValueError, match="predicted 'physical_dose' with shape"):
+        engine._predict(ct_cuboid, energies)
+
+
 # --- remote code -----------------------------------------------------------
 
 
