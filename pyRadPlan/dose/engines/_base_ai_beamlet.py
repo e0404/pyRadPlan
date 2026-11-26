@@ -16,7 +16,12 @@ from pyRadPlan.scenarios import Scenario
 from pyRadPlan.core import Grid, PyRadPlanBaseModel
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import array_meshgrid
-from pyRadPlan.core.xp_utils import ArrayBackendGridInterpolator, device_string, to_namespace
+from pyRadPlan.core.xp_utils import (
+    ArrayBackendGridInterpolator,
+    device_string,
+    to_namespace,
+    to_numpy,
+)
 from pyRadPlan.geometry import get_beam_rotation_matrix
 from pyRadPlan.ai.modelhub import (
     ModelTask,
@@ -74,6 +79,13 @@ def _interpolate_or_fill(
     values = interpolator(xi)
     inside = xp.reshape(inside, inside.shape + (1,) * (values.ndim - 1))
     return xp.where(inside, values, fill_value)
+
+
+def _host_vector(value: Any) -> np.ndarray:
+    """Return a point of the steering information as a float64 NumPy vector of length 3."""
+    if array_api_compat.is_array_api_obj(value):
+        value = to_numpy(value)
+    return np.reshape(np.asarray(value, dtype=np.float64), (3,))
 
 
 class AIBeamletEngine(PencilBeamEngineAbstract):
@@ -481,94 +493,43 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
             - `R_world_to_BEV`, `R_BEV_to_beamlet` (Array[3,3]): transforms between frames,
             - `iso_center`, `source_point_bev` (Array[3]): translation references.
         """
-        rot_mat = ray["rotation_mat"]
+        source = ray["source_point_bev"]
+        a = -source / np.linalg.norm(source)
+        b = ray["target_point_bev"] - source
+        b = b / np.linalg.norm(b)
 
-        rot_coords_bev = beam_info["bev_coords"]
-        source_point_bev = ray["source_point_bev"]
-        target_point_bev = ray["target_point_bev"]
-        # sad = ray["sad"]
-
-        rot_coords_bev = to_namespace(self.xp, rot_coords_bev, device=self.device)
-        source_point_bev = to_namespace(self.xp, source_point_bev, device=self.device)
-        target_point_bev = to_namespace(self.xp, target_point_bev, device=self.device)
-        xp = self.xp
-
-        if hasattr(xp, "linalg"):
-            norm = xp.linalg.vector_norm
-            cross = xp.linalg.cross
-        else:
-
-            def norm(arr: Array) -> Array:
-                return xp.sqrt(xp.sum(arr**2, axis=-1))
-
-            def cross(x: Array, y: Array) -> Array:
-                return xp.stack(
-                    [
-                        x[..., 1] * y[..., 2] - x[..., 2] * y[..., 1],
-                        x[..., 2] * y[..., 0] - x[..., 0] * y[..., 2],
-                        x[..., 0] * y[..., 1] - x[..., 1] * y[..., 0],
-                    ],
-                    axis=-1,
-                )
-
-        # Make sure that the source-point is a 2D array
-        source_point_bev = xp.reshape(source_point_bev, (3,))
-        target_point_bev = xp.reshape(target_point_bev, (3,))
-
-        # Put [0 0 0] position in the source point for beamlet who passes through isocenter
-        a = -source_point_bev
-
-        # Normalize the vector
-        a /= norm(a)
-
-        # Put [0 0 0] position in the source point for a single beamlet
-        b = target_point_bev - source_point_bev
-
-        # Normalize the vector
-        b /= norm(b)
-
-        # Define rotation matrix
-        if not xp.all(a == b):
-            # Cross product
-            cross_ab = cross(a, b)
-
-            if self._eps_ijk is None:
-                self._eps_ijk = xp.asarray(
-                    [
-                        [[0, 0, 0], [0, 0, -1], [0, 1, 0]],
-                        [[0, 0, 1], [0, 0, 0], [-1, 0, 0]],
-                        [[0, -1, 0], [1, 0, 0], [0, 0, 0]],
-                    ],
-                    dtype=cross_ab.dtype,
-                    device=self.device,
-                )
-
-            ssc_matrix = xp.tensordot(cross_ab, self._eps_ijk, axes=1)
-
+        if not np.all(a == b):
+            cross_ab = np.cross(a, b)
+            ssc_matrix = np.array(
+                [
+                    [0.0, -cross_ab[2], cross_ab[1]],
+                    [cross_ab[2], 0.0, -cross_ab[0]],
+                    [-cross_ab[1], cross_ab[0], 0.0],
+                ]
+            )
             derived_rot_mat = (
-                xp.eye(3, dtype=a.dtype, device=self.device)
+                np.eye(3)
                 + ssc_matrix
-                + ssc_matrix @ ssc_matrix * (1 - xp.vecdot(a, b)) / (norm(cross_ab) ** 2)
+                + ssc_matrix @ ssc_matrix * (1 - a @ b) / (np.linalg.norm(cross_ab) ** 2)
             )
         else:
-            derived_rot_mat = xp.eye(3, dtype=a.dtype, device=self.device)
+            derived_rot_mat = np.eye(3)
 
-        # Compose local-beamlet -> BEV -> world transform so that (x=0,z=0) lies on the ray
-        R_beamlet_to_BEV = (derived_rot_mat).T
-        # inverse of BEV->beamlet
-        R_BEV_to_world = (rot_mat).T
-        # translation terms
-        iso_center = to_namespace(self.xp, ray["iso_center"], device=self.device)
-        # 1) local (beamlet) -> BEV (relative to iso) via rotation
-        grid_bev_rel_to_src = (self.grid - source_point_bev) @ R_beamlet_to_BEV
-        # 2) shift from source-relative to BEV absolute by adding source_point_bev
-        grid_bev = grid_bev_rel_to_src + source_point_bev
-        # 3) BEV -> world, then add iso_center
-        grid_rotated = grid_bev @ R_BEV_to_world + iso_center
+        # Both rotations and the source offset compose into one affine map, so no point is
+        # shifted by the source position (10 m away) and back, which would cost float32
+        # precision: local = (world - iso) @ world_to_local + offset
+        world_to_local = ray["rotation_mat"] @ derived_rot_mat
+        offset = source - source @ derived_rot_mat
 
-        # Transform corners to world
-        corners_bev_rel = (self.corners_local - source_point_bev) @ R_beamlet_to_BEV
-        corners_world = (corners_bev_rel + source_point_bev) @ R_BEV_to_world + iso_center
+        xp = self.xp
+        dtype = self.coords_all.dtype
+        iso_center = xp.asarray(ray["iso_center"], dtype=dtype, device=self.device)
+        offset = xp.asarray(offset, dtype=dtype, device=self.device)
+        world_to_local = xp.asarray(world_to_local, dtype=dtype, device=self.device)
+        local_to_world = world_to_local.T
+
+        grid_rotated = (self.grid - offset) @ local_to_world + iso_center
+        corners_world = (self.corners_local - offset) @ local_to_world + iso_center
 
         min_world = xp.min(corners_world, axis=0)
         max_world = xp.max(corners_world, axis=0)
@@ -587,9 +548,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         candidate_points = xp.take(self.coords_all, candidate_indices, axis=0)
 
         # Use candidate points for precise transformation
-        local_points = (
-            (candidate_points - iso_center) @ rot_mat - source_point_bev
-        ) @ derived_rot_mat + source_point_bev
+        local_points = (candidate_points - iso_center) @ world_to_local + offset
 
         # Store transforms and masked local points in grid information for downstream use
         self.grid_information.update(
@@ -669,45 +628,18 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         # ... the ray_tracing to handle this as the model
         beam_info = {"beam": stf.beams[i].model_dump(), "beam_index": i}
 
-        xp = array_api_compat.array_namespace(self._vox_world_coords)
-
-        for key in [
-            "iso_center",
-            "source_point_bev",
-            "source_point",
-            "num_of_bixels_per_ray",
-            "gantry_angle",
-            "couch_angle",
-        ]:
-            if array_api_compat.is_array_api_obj(beam_info["beam"][key]):
-                beam_info["beam"][key] = to_namespace(
-                    xp, beam_info["beam"][key], device=self.device
-                )
-            else:
-                beam_info["beam"][key] = xp.asarray(
-                    beam_info["beam"][key], dtype=xp.float32, device=self.device
-                )
+        # The geometry stays in float64 on the host, where each ray's transform is composed.
+        for key in ["iso_center", "source_point_bev", "source_point"]:
+            beam_info["beam"][key] = _host_vector(beam_info["beam"][key])
         for ray in beam_info["beam"]["rays"]:
             for key in ["ray_pos", "ray_pos_bev", "target_point", "target_point_bev"]:
-                if ray[key] is None:
-                    continue
-                if array_api_compat.is_array_api_obj(ray[key]):
-                    ray[key] = to_namespace(xp, ray[key], device=self.device)
-                else:
-                    ray[key] = xp.asarray(ray[key], dtype=xp.float32, device=self.device)
+                if ray[key] is not None:
+                    ray[key] = _host_vector(ray[key])
 
-        # Get Rotation Matrix
         rot_mat = get_beam_rotation_matrix(
             beam_info["beam"]["gantry_angle"], beam_info["beam"]["couch_angle"]
         )
-        beam_info["rot_mat_system_T"] = xp.asarray(rot_mat, dtype=xp.float64, device=self.device)
-
-        iso_center = xp.asarray(
-            beam_info["beam"]["iso_center"], dtype=xp.float32, device=self.device
-        )
-        coords_vdose_grid = self._vox_world_coords_dose_grid - iso_center
-        rot_coords_vdose_grid = xp.matmul(coords_vdose_grid, beam_info["rot_mat_system_T"])
-        beam_info["bev_coords"] = rot_coords_vdose_grid
+        beam_info["rot_mat_system_T"] = np.asarray(to_numpy(rot_mat), dtype=np.float64)
 
         # Check existence of target_points
         if any(r["target_point"] is None for r in beam_info["beam"]["rays"]):

@@ -459,20 +459,13 @@ def test_beamlet_batches_do_not_change_the_dose(geometry_model, monkeypatch):
 
 
 @pytest.mark.parametrize("cpu_backend", _OTHER_CPU_BACKENDS)
-def test_dose_near_the_cuboid_edge_is_the_same_on_every_backend(request, monkeypatch, cpu_backend):
+def test_dose_near_the_cuboid_edge_is_the_same_on_every_backend(monkeypatch, cpu_backend):
     """Dose-grid voxels just outside a beamlet's cuboid get no dose on any backend.
 
     Unlike the matRad test data, the oblique TG119 beam puts voxels of the cuboid's
     bounding box outside the sampled cuboid, where the predicted dose must not be
-    extrapolated or blended towards zero.
+    extrapolated or blended towards zero. JAX runs in float32 here, as by default.
     """
-    if cpu_backend == "jax":
-        # In float32 (JAX's default) the transform around the source, 10 m away, resolves
-        # positions to about 1 um only, so a voxel this close to a cuboid face may cross it.
-        jax = importlib.import_module("jax")
-        x64 = jax.config.jax_enable_x64
-        jax.config.update("jax_enable_x64", True)
-        request.addfinalizer(lambda: jax.config.update("jax_enable_x64", x64))
     pln, ct, cst, stf = _geometry_case(DUMMY_MODEL)
 
     _use_backend(monkeypatch, "numpy", None)
