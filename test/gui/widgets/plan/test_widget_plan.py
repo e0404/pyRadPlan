@@ -1322,6 +1322,28 @@ def test_engine_config_dialog_round_trip(qapp):
     assert dialog.values() == {"random_seed": 3, "enable_dij_sampling": False}
 
 
+def test_ai_engine_config_dialog_exposes_model(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    dialog = ConfigFormDialog(
+        AIBeamletEngine.config_model(),
+        initial={"model": "org/my_model"},
+        choices={"model": ["org/my_model", "org/another_model"]},
+    )
+    combo = dialog.form._editors["model"]
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "",
+        "org/my_model",
+        "org/another_model",
+    ]
+    assert combo.currentText() == "org/my_model"
+
+    # a model outside the list can still be typed
+    combo.setCurrentText("other_org/other_model")
+    assert dialog.values()["model"] == "other_org/other_model"
+
+
 def test_invalid_gantry_does_not_crash(qapp):
     widget, ws = _make_widget()
     failures = []
@@ -3228,3 +3250,68 @@ def test_explicit_scenario_entry_leaves_with_its_plan(qapp):
     assert widget._cmb_scenario.currentData() == "nomScen"
     assert widget._cmb_scenario.findData("explicit") < 0
     assert _form_plan(widget).scenarios.short_name == "nomScen"
+
+
+def test_engine_dialog_does_not_wait_for_the_engine_suggestions(qapp, monkeypatch):
+    """``config_choices`` may go online: it runs off the GUI thread, the dialog opens at once."""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.dose.engines import AIBeamletEngine
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    release = threading.Event()
+    calls = []
+
+    class _SlowEngine(AIBeamletEngine):
+        @classmethod
+        def config_choices(cls, radiation_mode=None):
+            calls.append((threading.current_thread(), radiation_mode))
+            release.wait(10)
+            return {"model": ["org/a", "org/b"]}
+
+    def pump(predicate, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        return predicate()
+
+    widget, _ = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    select_identifier(widget._cmb_engine, "AIBeamlet")
+    widget._engines["AIBeamlet"] = _SlowEngine
+    shown = []
+
+    def first_exec(self):
+        model = self.form._editors["model"]
+        shown.append(type(model).__name__)
+        assert pump(lambda: bool(calls))
+        assert calls[0][0] is not threading.main_thread()
+        assert calls[0][1] == "protons"
+        release.set()
+        assert pump(lambda: self.form._editors["model"].property("suggestions") is True)
+        self.form._editors["model"].setCurrentText("org/b")
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", first_exec)
+    widget._on_engine_config()
+    assert shown == ["QLineEdit"]
+    assert widget._engine_props["AIBeamlet"] == {"model": "org/b"}
+
+    # reopened, the dialog shows the suggestions found before, while it looks up new ones
+    release.clear()
+
+    def second_exec(self):
+        combo = self.form._editors["model"]
+        items = [combo.itemText(i) for i in range(combo.count())]
+        shown.append((items, combo.currentText()))
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", second_exec)
+    widget._on_engine_config()
+    release.set()
+    assert shown[1] == (["", "org/a", "org/b"], "org/b")
+    assert pump(lambda: len(calls) == 2)

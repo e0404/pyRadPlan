@@ -9,12 +9,15 @@ is kept.
 from __future__ import annotations
 
 import json
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
 from ._forms import FormValidationError, build_form, comparison_key, jsonable, validate_values
 from ._plan import DEFAULT_PLAN, plan_summary
+
+logger = logging.getLogger(__name__)
 
 #: Engine fields the plan sets elsewhere (scenario model, biological model, dose grid);
 #: the Qt engine form shows them by accident (see ``web/docs/parity.md``).
@@ -1042,36 +1045,75 @@ def solver_defaults(
 _solver_defaults = solver_defaults
 
 
-def form_model(kind: str, name: str, mode: str) -> tuple[type, str, frozenset, dict]:
-    """Model class, title, excluded fields and display defaults of an algorithm form."""
+def _form_class(kind: str, name: str, mode: str) -> type:
+    """Class an algorithm form configures (a scenario model class for ``"scenario"``)."""
     if kind == "engine":
-        cls = _engine_class(mode, name)
-        return cls.config_model(), f"Configure {cls.name}", ENGINE_FORM_EXCLUDE, {}
+        return _engine_class(mode, name)
     if kind == "bio_model":
-        from pyRadPlan.biology._editing import SELECTION_PARAMETERS  # noqa: PLC0415
-
-        cls = _bio_class(name, mode)
-        title = f"Configure {getattr(cls, 'name', None) or cls.model}"
-        return cls.config_model(), title, frozenset(SELECTION_PARAMETERS), {}
+        return _bio_class(name, mode)
     if kind == "scenario":
         from pyRadPlan.scenarios import get_scenario_model_class  # noqa: PLC0415
 
-        cls = get_scenario_model_class(name)
-        return cls, f"Configure {cls.name}", frozenset({"model"}), {}
+        return get_scenario_model_class(name)
     if kind == "problem":
         cls = _problems(mode).get(name)
         if cls is None:
             raise ValueError(f"No planning problem {name!r} for {mode}")
-        exclude = PROBLEM_FORM_EXCLUDE | frozenset(getattr(cls, "solver_properties", ()))
-        return cls.config_model(), f"Configure {cls.name}", exclude, {}
+        return cls
     if kind == "solver":
         from pyRadPlan.optimization.solvers import get_available_solvers  # noqa: PLC0415
 
         cls = get_available_solvers().get(name)
         if cls is None:
             raise ValueError(f"Solver {name!r} is not available")
-        return cls.config_model(), f"Configure {cls.name}", frozenset(), _solver_defaults(cls)
+        return cls
     raise ValueError(f"Unknown form kind {kind!r}")
+
+
+def form_model(kind: str, name: str, mode: str) -> tuple[type, str, frozenset, dict]:
+    """Model class, title, excluded fields and display defaults of an algorithm form."""
+    cls = _form_class(kind, name, mode)
+    if kind == "engine":
+        return cls.config_model(), f"Configure {cls.name}", ENGINE_FORM_EXCLUDE, {}
+    if kind == "bio_model":
+        from pyRadPlan.biology._editing import SELECTION_PARAMETERS  # noqa: PLC0415
+
+        title = f"Configure {getattr(cls, 'name', None) or cls.model}"
+        return cls.config_model(), title, frozenset(SELECTION_PARAMETERS), {}
+    if kind == "scenario":
+        return cls, f"Configure {cls.name}", frozenset({"model"}), {}
+    if kind == "problem":
+        exclude = PROBLEM_FORM_EXCLUDE | frozenset(getattr(cls, "solver_properties", ()))
+        return cls.config_model(), f"Configure {cls.name}", exclude, {}
+    return cls.config_model(), f"Configure {cls.name}", frozenset(), _solver_defaults(cls)
+
+
+def form_choices(kind: str, name: str, radiation_mode: Optional[str] = None) -> dict[str, Any]:
+    """Suggested values per field of an algorithm form (``plan.form_choices``).
+
+    The suggestions come from the class's ``config_choices(radiation_mode)`` where it
+    defines one, as the Qt dialogs fill their editable combo boxes from it (the AI engine
+    lists the models it could run). They are not part of :func:`plan_form` because the
+    lookup may go online: a frontend opens the form first and adds the suggestions when
+    they arrive; any other value can still be entered. A lookup that fails gives none,
+    as do fields the form does not show.
+    """
+    mode = radiation_mode or "photons"
+    model, _, exclude, _ = form_model(kind, name, mode)
+    lookup = getattr(_form_class(kind, name, mode), "config_choices", None)
+    found: Any = {}
+    if callable(lookup):
+        try:
+            found = lookup(mode)
+        except Exception as exc:  # noqa: BLE001 - suggestions are optional
+            logger.debug("Could not look up the suggestions of %s %r: %s", kind, name, exc)
+    choices = {}
+    for field_name, values in (found if isinstance(found, Mapping) else {}).items():
+        if field_name in exclude or field_name not in model.model_fields:
+            continue
+        labels = list(dict.fromkeys(str(v) for v in values))
+        choices[field_name] = [{"value": v, "label": v} for v in labels]
+    return {"id": f"{kind}:{name}", "choices": choices}
 
 
 def plan_form(

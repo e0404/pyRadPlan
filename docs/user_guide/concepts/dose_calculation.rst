@@ -176,11 +176,197 @@ one line:
      - `FRED <https://www.fred-mc.org>`_ Monte Carlo engine (requires FRED installation).
        Validated for protons only; ion calculations warn that their doses do not yet
        reproduce the reference.
+   * - ``"AIBeamlet"``
+     - AI beamlet engine: a trained model predicts each beamlet's dose (see
+       :ref:`concept_ai_dose_calculation`). Research feature.
 
 .. code-block:: python
 
     pln.prop_dose_calc = {"engine": "HongPB"}
     dij = calc_dose_influence(ct, cst, stf, pln)
+
+.. _concept_ai_dose_calculation:
+
+AI-based dose calculation
+-------------------------
+
+The ``"AIBeamlet"`` engine replaces the analytical kernel with a trained model: for every
+beamlet it samples the CT on a beamlet-local grid, lets the model predict the dose cuboid and
+interpolates that cuboid onto the dose grid. Everything around it -- steering, the ``Dij``, the
+optimization -- is unchanged, so switching engines is one line plus the model to use:
+
+.. code-block:: python
+
+    pln.prop_dose_calc = {
+        "engine": "AIBeamlet",
+        "model": "DKFZ-RadOpt/pyRadPlan-dosecalc-Det-proton-lung",
+    }
+    dij = calc_dose_influence(ct, cst, stf, pln)
+
+.. warning::
+
+   AI dose calculation is a **research feature and not intended for clinical use**. A model is
+   valid only for the anatomy, radiation mode and machine it was trained on; used outside that
+   domain it may be confidently wrong, and pyRadPlan cannot detect this for you. Verify
+   predicted dose against an established engine before drawing conclusions from it.
+
+Models and how they are found
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Models are addressed as ``"<org>/<model>"`` and resolved by
+:ref:`concept_ai_modelhub`: a copy under ``settings.ai.modelhub_local_models_dir`` (or in the
+HuggingFace cache) is used, otherwise the model is downloaded on first use. A model folder you
+placed there yourself is used as it is and never refreshed from the Hub. A downloaded one is
+refreshed from the Hub when the Hub is reachable and no ``revision`` pins it, and used as it is
+offline. :func:`~pyRadPlan.ai.modelhub.list_local_models` reports what is already available
+offline.
+
+Loading a model runs the Python code shipped with it, so the engine applies the same rule as
+:func:`~pyRadPlan.ai.modelhub.load_model`, described under :ref:`modelhub_trust`: a folder you
+placed yourself runs as it is, while downloaded code runs only once you trust it -- with
+``pyRadPlan.ai.modelhub.trust_model("<org>/<model>")``, which records a hash of the code, or for
+every download with ``settings.ai.modelhub_trust_remote_code = True`` (environment variable
+``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``). Changed code is refused until you trust it again.
+A plan cannot grant trust by itself.
+
+The engine reads the repository's ``model_config.json`` and adapts to what it declares, so
+pyRadPlan carries no per-model code. All fields are optional except ``grid_parameters``; how a
+model author fills them in is described under :ref:`model_repository_contract`:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Declaration
+     - Effect
+   * - ``metadata.dose_calc.grid_parameters`` (``spacing``, ``lateral_range``,
+       ``depth_offset_start``, ``depth_range``, all in mm)
+     - Required. The sampling grid of every beamlet, see below. A missing or invalid entry makes
+       the calculation fail with a validation error.
+   * - ``metadata.dose_calc.quantities``
+     - The quantities the model predicts, e.g. ``physical_dose``, ``physical_dose_var``,
+       ``let_dose``; each gets its own influence matrix in the ``Dij``. Defaults to
+       ``["physical_dose"]``. List ``physical_dose`` first: it decides which voxels a beamlet
+       stores.
+   * - ``metadata.training.modality`` (older models: ``metadata.dose_calc.radiation_mode``)
+     - The radiation mode the model was trained for. A plan using another mode is reported by
+       ``AIBeamletEngine.is_available`` and makes the calculation
+       raise a ``ValueError``.
+   * - ``metadata.dose_calc.energy_range_mev``
+     - ``[min, max]`` in MeV. Energies of the steering information outside it log a warning; the
+       calculation runs.
+   * - ``metadata.dose_calc.trained_machine``
+     - Name of the machine the model was trained on. Another machine in the plan logs a
+       warning; the calculation runs.
+   * - ``metadata.requirements``
+     - Packages the model's code needs (``torch``, ``onnxruntime``, ...). If one is not
+       installed, ``AIBeamletEngine.is_available`` reports the engine
+       unavailable for a plan naming this model. The engine itself requires no particular ML
+       framework.
+   * - ``metadata.task``
+     - ``"dose_calc"``. Only used to filter model lists, e.g. for the suggestions of the GUI's
+       engine configuration dialog; a model that declares a ``metadata.dose_calc`` section is
+       suggested as well.
+
+The sampling grid
+^^^^^^^^^^^^^^^^^
+
+For every ray, the engine builds a regular grid of cell centers in the beamlet's own frame: a
+cuboid aligned with the beamlet, whose depth axis follows the ray from the source through the
+beamlet's target point and whose lateral axes are the beam's lateral axes (the BEV ``x`` and
+``z`` axes, rotated about the source point with the ray). All beamlets of a ray share it.
+
+* ``spacing`` is the isotropic cell size along all three axes.
+* ``lateral_range`` is the total width of the cuboid along each of the two lateral axes. It is
+  centered on the ray, so the lateral extent is ``±lateral_range / 2``.
+* ``depth_offset_start`` and ``depth_range`` place the cuboid along the ray. Depth is measured
+  relative to the isocenter plane (the plane through the isocenter perpendicular to the beam
+  axis; the source-to-point distance along the ray minus the SAD), positive away from the
+  source. The cuboid starts at ``depth_offset_start`` (negative values start upstream of the
+  isocenter plane) and ends at ``depth_offset_start + depth_range``.
+* The cuboid has ``ceil(depth_range / spacing)`` samples along the depth axis and
+  ``ceil(lateral_range / spacing)`` along each lateral axis.
+
+The engine samples the CT at these points by linear interpolation (``-1000`` HU outside the
+CT) and hands the model the cuboid with the axis order ``(depth, lateral, lateral)``. The model
+returns each quantity for the same grid, as an array of shape ``(batch, depth, lateral,
+lateral)`` with one entry per beamlet energy. The engine interpolates these cuboids linearly
+onto the dose grid voxels selected for the calculation; voxels outside the cuboid receive
+nothing, and values at or below the ``dose_threshold`` parameter (see below) are not stored.
+
+Engine parameters
+^^^^^^^^^^^^^^^^^
+
+Besides the usual dose engine parameters, ``pln.prop_dose_calc`` accepts:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 18 60
+
+   * - Parameter
+     - Default
+     - Meaning
+   * - ``model``
+     - ``None``
+     - The model as ``"<org>/<model>"``. Required; a calculation without one raises a
+       ``ValueError``.
+   * - ``max_batch_size``
+     - ``32``
+     - Maximum number of beamlets (energies) per model call. A ray with more beamlets is split
+       into calls of this size, which bounds the model's memory use; ``None`` predicts a whole
+       ray at once.
+   * - ``ensemble_size``
+     - ``None``
+     - Number of ensemble members per prediction, for models that sample an ensemble. It is
+       passed to the model's preprocessor as ``config["ensemble_size"]``, so it only has an
+       effect on a model whose preprocessor reads it; ``None`` keeps the model's own setting.
+   * - ``dose_threshold``
+     - ``1e-7``
+     - Predicted dose at or below which a voxel is not stored in the influence matrix, in the
+       unit of the model's ``physical_dose`` output. Raising it makes the ``Dij`` sparser.
+
+Scenarios
+^^^^^^^^^
+
+Only setup scenarios are supported: each setup shift is computed as its own beam geometry. The
+model has no input for a range error, and only one CT phase is sampled per calculation, so a
+scenario set that varies the range or the CT phase is refused with a ``ValueError``.
+
+Availability
+~~~~~~~~~~~~
+
+The engine is offered in :func:`~pyRadPlan.dose.engines.get_available_engines` and in the
+GUI's engine list without a model on disk, so a model can be picked at all. It reports itself
+unavailable when the plan names a model that is already on disk and cannot be used -- trained
+for another modality, or its declared packages are not installed -- or names a model that is
+not an ``"<org>/<model>"`` id. Where nothing could be downloaded because ``huggingface_hub``
+is not installed, as in the web version, it is offered only with a usable model on disk. The
+reason is part of the answer:
+
+.. code-block:: python
+
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    available, reason = AIBeamletEngine.is_available(pln, machine=None)
+    # e.g. (False, "Model '<org>/<model>' was trained for 'VHEE', but the plan uses 'protons'.")
+
+This check only consults the file system and never contacts the hub. A model that is not on
+disk is resolved -- and downloaded, unless ``PYRADPLAN_AI_MODELHUB_OFFLINE=1`` -- only when a
+calculation runs; if it cannot be found, that calculation fails with an error naming the model.
+The suggestions in the GUI's engine configuration dialog do list the models of the configured
+hub organization.
+
+Devices and backends
+~~~~~~~~~~~~~~~~~~~~
+
+The engine's arrays follow ``settings.xp`` like every other engine, and the model is loaded onto
+the device those arrays live on, so no data crosses devices per beamlet. Choosing the array
+backend the model's framework uses (``settings.xp.preferred_gpu_array_backend = "torch"`` for a
+torch model) additionally avoids a conversion per ray. Without a device of its own -- NumPy, for
+instance -- the model is placed on ``PYRADPLAN_AI_MODELHUB_DEVICE`` (default ``cpu``).
+
+A runnable end-to-end plan is in the
+:doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>`.
 
 Backend-agnostic computation
 -----------------------------

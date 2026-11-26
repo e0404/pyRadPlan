@@ -10,6 +10,12 @@ and offline support.  A model repository is self-contained: it carries its netwo
 definition, its preprocessor and a declarative ``model_config.json`` that drives
 instantiation, so pyRadPlan needs no per-model code.
 
+.. seealso::
+
+   The module is the model source of the ``"AIBeamlet"`` dose engine; how a dose-calculation
+   model is selected, checked and used is described under
+   :ref:`concept_ai_dose_calculation`.
+
 .. note::
 
    The Hub client (``huggingface_hub``, ``safetensors``) is installed with pyRadPlan;
@@ -27,21 +33,22 @@ Quick start
 
 .. code-block:: python
 
-    from pyRadPlan.ai.modelhub import load_model, list_local_models
+    from pyRadPlan.ai.modelhub import list_local_models, load_model, trust_model
 
-    # From a local directory (works fully offline):
+    # From a local directory you placed yourself (works fully offline):
     model, preprocessor = load_model(local_dir="path/to/model_folder")
 
-    # By bare name on HuggingFace (resolves to <hf_org>/<name>):
-    model, preprocessor = load_model(
-        "outcome-ORPDenseNet-tg119", revision="v1.0.0", trust_remote_code=True
-    )
+    # From HuggingFace by bare name (resolves to <hf_org>/<name>). The model's code is
+    # downloaded but runs only once you trust it (see "Which model code runs"):
+    trust_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
+    model, preprocessor = load_model("outcome-ORPDenseNet-tg119", revision="v1.0.0")
 
     # By full id -- e.g. a fork -- used as-is:
-    model, preprocessor = load_model("my-org/my-repo", trust_remote_code=True)
+    trust_model("my-org/my-repo")
+    model, preprocessor = load_model("my-org/my-repo")
 
     # Same thing, explicitly:
-    model, preprocessor = load_model(repo_id="my-org/my-repo", trust_remote_code=True)
+    model, preprocessor = load_model(repo_id="my-org/my-repo")
 
     print(list_local_models())  # models available on disk (no network)
 
@@ -60,15 +67,59 @@ What ``raw_inputs`` and ``result`` are is defined by the model repository, not b
 pyRadPlan -- record it in the model's ``metadata`` (see
 :ref:`model_repository_contract`).
 
+.. _modelhub_trust:
+
+Which model code runs
+---------------------
+
 .. warning::
 
-   :func:`~pyRadPlan.ai.modelhub.load_model` executes the ``model.py`` and
-   ``preprocessor.py`` shipped inside the model repository.  For anything fetched from
-   the Hub this is gated behind an explicit ``trust_remote_code=True`` (or
-   ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``), which defaults to ``False``.  Enable it
-   only for sources you trust, and prefer pinning a ``revision`` so you know which code
-   you are running.  A directory you pass yourself as ``local_dir`` is exempt -- that
-   code is already under your control.
+   :func:`~pyRadPlan.ai.modelhub.load_model` (and the ``"AIBeamlet"`` dose engine)
+   executes the ``model.py`` and ``preprocessor.py`` shipped inside the model
+   repository -- arbitrary Python with your permissions.
+
+Whether a model's code may run depends on where it came from, not on how you name it:
+
+* **A model folder you placed yourself** runs as-is, whether you pass it as
+  ``local_dir`` or load it by id from ``<local_models_dir>/<org>/<repo>``.  pyRadPlan
+  never refreshes such a folder from the Hub, not even for an unpinned load.
+* **A model pyRadPlan downloaded** -- into ``<local_models_dir>/<org>/<repo>``, into a
+  ``local_dir`` or into the HuggingFace cache -- runs only once you trust it, also when
+  you later pass its folder as ``local_dir``.  pyRadPlan tells the two apart by the
+  ``.pyradplan_model.json`` marker it writes into a folder *before* downloading into
+  it, and by the HuggingFace cache layout; it downloads only into an empty folder or
+  one carrying the marker.  A folder holding neither a complete model nor the marker
+  is refused rather than downloaded over.
+
+Downloaded code is trusted in one of two ways:
+
+* :func:`~pyRadPlan.ai.modelhub.trust_model` downloads the model if needed, without
+  running anything, and records a SHA-256 hash of its code (every file but the
+  ``*.safetensors`` weights, which hold tensors only).  Inspect the code in the
+  returned directory first:
+
+  .. code-block:: python
+
+      from pyRadPlan.ai.modelhub import trust_model
+
+      model_dir, code_hash = trust_model("DKFZ-RadOpt/dosecalc-x", revision="v1.0.0")
+
+* The setting ``pyRadPlan.settings.ai.modelhub_trust_remote_code = True`` (environment
+  variable ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``), or
+  ``load_model(..., trust_remote_code=True)``, trusts whatever is downloaded.  The code
+  loaded this way is recorded too, so it keeps running after the setting is switched
+  off.
+
+The records live in ``<data_dir>/ai_trusted_models.json`` (``~/.pyradplan`` by default),
+keyed by repository id -- never inside the model folder, so nothing a repository ships
+can make it trusted.  :func:`~pyRadPlan.ai.modelhub.is_trusted` tells whether a model on
+disk runs without the setting, and :func:`~pyRadPlan.ai.modelhub.untrust_model` forgets a
+model's records.
+
+**When the code changes upstream**, e.g. an unpinned load pulls an update, its hash no
+longer matches and loading is refused until you inspect the new code and call
+:func:`~pyRadPlan.ai.modelhub.trust_model` again (or enable the setting).  Pin a
+``revision`` so the code you trusted is the code you keep running.
 
 Discovering local models
 ------------------------
@@ -135,7 +186,7 @@ directory or the per-user ``~/.pyradplan/.env``); the model-hub-related fields a
    * - ``modelhub_trust_remote_code``
      - ``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE``
      - ``False``
-     - Allow executing the code shipped with a model fetched from the Hub
+     - Trust the code of every downloaded model (see :ref:`modelhub_trust`)
    * - ``modelhub_device``
      - ``PYRADPLAN_AI_MODELHUB_DEVICE``
      - ``cpu``
@@ -158,10 +209,12 @@ The data root (``<data_dir>``) defaults to ``~/.pyradplan`` and can be relocated
 Versions and updates
 --------------------
 
-Pin a ``revision`` (tag, branch or commit) for reproducible loads: a local copy recorded
-as that revision is used directly, without touching the network.  Without a pinned
-revision the Hub is asked whether the local copy is still current, and a stale one is
-refreshed; if the Hub cannot be reached the local copy is used anyway, with a warning.
+Pin a ``revision`` (tag, branch or commit) for reproducible loads: a downloaded copy
+recorded as that revision is used directly, without touching the network.  Without a
+pinned revision the Hub is asked whether the downloaded copy is still current, and a
+stale one is refreshed -- a refresh that changes the model's code needs your trust
+again (see :ref:`modelhub_trust`); if the Hub cannot be reached the local copy is used
+anyway, with a warning.  A model folder you placed yourself is never refreshed.
 
 .. _model_repository_contract:
 
@@ -189,9 +242,16 @@ keys; everything else is free-form metadata the loader ignores:
   constructed with ``model_preprocessing``, which configures **both** ``preprocess()``
   and ``postprocess()``.  If ``preprocessor.py`` defines more than one subclass, set
   ``preprocessor_name`` in ``model_config.json`` to disambiguate.
-* ``metadata`` is otherwise free-form and not read by the loader; use it to record how
-  the model was trained and any assumptions it makes.  Only ``metadata.task`` is
-  interpreted, by :func:`~pyRadPlan.ai.modelhub.list_local_models`.
+* ``metadata`` is otherwise free-form: use it to record how the model was trained and any
+  assumptions it makes. The loader itself ignores it. Other parts of pyRadPlan read these
+  entries:
+
+  * ``metadata.task`` -- by :func:`~pyRadPlan.ai.modelhub.list_local_models` (and the model
+    suggestions of the GUI) to filter models by what they do;
+  * ``metadata.training.modality`` and ``metadata.requirements`` -- by the ``"AIBeamlet"`` dose
+    engine (via :func:`~pyRadPlan.ai.modelhub.model_facts`) to check the radiation mode and
+    the installed packages of a model before offering it;
+  * ``metadata.dose_calc`` -- by the ``"AIBeamlet"`` dose engine, see below.
 
 .. code-block:: json
 
@@ -211,9 +271,101 @@ unique to the folder, so several models can be loaded side by side and the class
 define stay picklable.  Import sibling files relatively
 (``from .preprocessor import …``).
 
-A working reference implementation lives in ``test/data/ai_models/dummy_model/`` and is
-exercised by the test suite.  The annotated config template is
+Working reference implementations live in the test data and are exercised by the test suite:
+``test/data/ai_models/dummy_model/`` is an outcome model, and
+``test/data/ai_models/DKFZ-RadOpt/dummy_dosecalc_model/`` a dose-calculation model for the
+``"AIBeamlet"`` engine.  The annotated config template is
 ``pyRadPlan/data/ai_models/model_config.template.json``.
+
+Using a model for dose calculation
+----------------------------------
+
+Dose-calculation models (``metadata.task = "dose_calc"``) are consumed by the ``"AIBeamlet"``
+engine rather than loaded by hand:
+
+.. code-block:: python
+
+    pln.prop_dose_calc = {"engine": "AIBeamlet", "model": "<org>/<model>"}
+    dij = calc_dose_influence(ct, cst, stf, pln)
+
+The engine loads the model like :func:`~pyRadPlan.ai.modelhub.load_model` does (including the
+rule of :ref:`modelhub_trust`) and additionally reads the ``metadata`` entries listed in
+:ref:`concept_ai_dose_calculation`: the sampling grid and predicted quantities under
+``metadata.dose_calc`` (the grid is required), the training assumptions it checks against the
+plan, ``metadata.training.modality`` and ``metadata.requirements``.
+
+.. _dose_calc_preprocessor_contract:
+
+Preprocessor contract of a dose-calculation model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+What ``raw_inputs`` and ``result`` of the generic quick start are is fixed for dose
+calculation: for every ray the engine samples the CT on the model's grid and calls the
+preprocessor of the model in two steps. A dose-calculation preprocessor therefore implements
+``preprocess`` and ``predict(model, model_input)``, and usually ``postprocess``, which
+``predict`` calls:
+
+.. code-block:: python
+
+    model_input = preprocessor.preprocess({"ct_cuboid": ct_cuboid, "energy": energy})
+    outputs = preprocessor.predict(model, model_input)   # {quantity: array}
+
+``ct_cuboid``
+    The CT sampled on the model's grid (``metadata.dose_calc.grid_parameters``): Hounsfield
+    units as a floating-point array of shape ``(depth, lateral, lateral)``, with ``-1000`` for
+    points outside the CT. There is no batch axis: all beamlets of the ray, which differ only in
+    their energy, share the cuboid.
+
+``energy``
+    The nominal energies in MeV of the beamlets to predict, a one-dimensional floating-point
+    array of shape ``(batch,)``. Its length is at most the engine's ``max_batch_size`` (a ray
+    is split into several calls beyond it) and may be 1.
+
+Both arrive in the engine's array namespace and on its device, i.e. NumPy, CuPy, PyTorch or
+JAX arrays depending on ``pyRadPlan.settings.xp``. A preprocessor therefore converts them to
+the framework of its model first, e.g. with ``pyRadPlan.core.xp_utils.to_namespace("torch",
+array)`` or with ``array_api_compat.array_namespace`` for plain array operations.
+
+``preprocess`` turns them into whatever ``model_input`` the model needs (for example a
+``(batch, channels, depth, lateral, lateral)`` tensor); ``model_input`` is passed on untouched.
+``predict`` receives the loaded model, already in eval mode and on its device, and runs the
+forward pass(es) -- a single one, or several for an ensemble, as the model's author sees fit --
+and the scaling to physical units, typically by calling ``postprocess``. It must return a
+dictionary mapping each quantity name to an array of shape ``(batch, depth, lateral, lateral)``
+on the grid of the ``ct_cuboid``, with an entry for every quantity declared under
+``metadata.dose_calc.quantities`` (``["physical_dose"]`` if none are declared, and
+``physical_dose`` must be among them, listed first); a declared quantity that is missing makes
+the calculation fail. The arrays may be returned in the model's own framework (and on its
+device): the engine converts them to its array namespace. ``physical_dose`` decides which voxels a beamlet stores, and its unit becomes the
+unit of the influence matrix.
+
+A sketch of such a preprocessor; the dose-calculation reference model is a complete one:
+
+.. code-block:: python
+
+    import torch
+
+    from pyRadPlan.ai.modelhub import BasePreprocessor
+    from pyRadPlan.core.xp_utils import to_namespace
+
+
+    class MyDoseCalcPreprocessor(BasePreprocessor):
+        def preprocess(self, inputs: dict) -> torch.Tensor:
+            ct = to_namespace("torch", inputs["ct_cuboid"]).float()
+            energy = to_namespace("torch", inputs["energy"]).float().reshape(-1)
+            ...  # normalize and stack to (batch, channels, depth, lateral, lateral)
+
+        def postprocess(self, outputs: torch.Tensor) -> dict:
+            return {"physical_dose": outputs[:, 0] * self.config["max_dose"]}
+
+        def predict(self, model, model_input):
+            with torch.inference_mode():
+                return self.postprocess(model(model_input.to(next(model.parameters()).device)))
+
+See :ref:`concept_ai_dose_calculation` for the geometry of the grid, the engine parameters and
+device handling, and the :doc:`AI dose calculation tutorial </tutorials/examples/ai_dosecalc>`
+for a runnable example. AI dose calculation is a research feature and not intended for clinical
+use.
 
 API reference
 -------------

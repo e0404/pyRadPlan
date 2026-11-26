@@ -6,7 +6,8 @@ to a :class:`~pyRadPlan.gui.workspace.WorkspaceManager` and is notified through
 their UI in ``__init__`` and override :meth:`_do_update`.
 
 The module also hosts small widgets/helpers shared across the GUI package:
-:class:`Worker` (run a callable in a ``QThread``), :class:`AdaptiveDoubleSpinBox`
+:class:`Worker` (run a callable in a ``QThread``), :func:`run_in_background` (a lookup
+in a plain thread), :class:`AdaptiveDoubleSpinBox`
 and the number-list parse/format helpers used by free-text angle/level fields.
 """
 
@@ -14,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import math
+import queue
+import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
@@ -97,6 +100,31 @@ class Worker(QObject):
             # Release the callable (and anything captured in its closure, e.g.
             # large pipeline objects) as soon as the run is over.
             self._fn = self._args = self._kwargs = None
+
+
+def run_in_background(fn: Callable, *args: Any) -> queue.SimpleQueue:
+    """Run ``fn(*args)`` in a daemon thread, for a lookup whose result may be dropped.
+
+    Meant for short read-only jobs such as listing suggestions, not for computations
+    (those run in a ``QThread`` that the owner stops). The thread needs no teardown:
+    neither closing its owner nor quitting the application waits for it.
+
+    The result, or ``None`` if *fn* raised, is put into the returned queue, which the
+    caller polls from the GUI thread. The thread must not touch Qt: a ``QObject`` whose
+    last reference a foreign thread drops is destroyed there, which corrupts PySide's
+    bookkeeping and crashes later, typically in an unrelated widget or at exit.
+    """
+    box: queue.SimpleQueue = queue.SimpleQueue()
+
+    def job() -> None:
+        try:
+            box.put(fn(*args))
+        except Exception as exc:  # noqa: BLE001 - the result is optional
+            logger.debug("Background lookup failed: %s", exc)
+            box.put(None)
+
+    threading.Thread(target=job, name="pyRadPlan-gui-lookup", daemon=True).start()
+    return box
 
 
 class AdaptiveDoubleSpinBox(QDoubleSpinBox):
