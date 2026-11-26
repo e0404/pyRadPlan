@@ -12,6 +12,7 @@ import { BackendError } from "../api/backend";
 import type {
   AppInfo,
   BackendEvent,
+  Choice,
   FeatureId,
   FeatureStatus,
   FormSchema,
@@ -225,6 +226,21 @@ export function planForm(kind: FormKind, name: string, radiation_mode: string, v
   const params: ParamsOf<"plan.form"> = { kind, name, radiation_mode };
   if (values) params.values = values;
   return request("plan.form", params);
+}
+
+/**
+ * Suggested values of a form's fields (`plan.form_choices`), requested after the form so a slow
+ * lookup never holds it up (Qt `ConfigFormDialog.load_choices`). Empty when the backend does not
+ * serve them or the lookup fails: suggestions are optional.
+ */
+export async function planFormChoices(kind: FormKind, name: string, radiation_mode: string): Promise<Record<string, Choice[]>> {
+  if (!hasMethod("plan.form_choices")) return {};
+  try {
+    return (await request("plan.form_choices", { kind, name, radiation_mode })).choices ?? {};
+  } catch (err) {
+    console.debug("plan.form_choices failed", err);
+    return {};
+  }
 }
 
 export async function tissueCheck(draft: ParamsOf<"plan.tissue_check">["draft"]): Promise<TissueCheckResult | null> {

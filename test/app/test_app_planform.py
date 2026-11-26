@@ -354,3 +354,73 @@ def test_plan_set_rejects_a_plain_bio_model_specification():
         session.set_plan(
             {"radiation_mode": "protons", "bio_model": {"model": "constant_rbe", "rbe": 1.2}}
         )
+
+
+def test_form_choices_list_the_engine_suggestions(client, monkeypatch):
+    """``plan.form_choices`` serves an algorithm's ``config_choices`` apart from the form."""
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    calls = []
+
+    def config_choices(radiation_mode=None):
+        calls.append(radiation_mode)
+        return {
+            "model": ["org/a", "org/b", "org/a"],
+            "mult_scen": ["hidden: set elsewhere"],
+            "no_such_field": ["x"],
+        }
+
+    monkeypatch.setattr(AIBeamletEngine, "config_choices", staticmethod(config_choices))
+    params = {"kind": "engine", "name": "AIBeamlet", "radiation_mode": "protons"}
+    form = client.ok("plan.form", params)["result"]
+    assert calls == []  # the form itself never looks suggestions up
+    assert next(f for f in form["fields"] if f["name"] == "model")["type"] == "str"
+
+    result = client.ok("plan.form_choices", params)["result"]
+    assert calls == ["protons"]
+    assert result == {
+        "id": "engine:AIBeamlet",
+        "choices": {
+            "model": [{"value": "org/a", "label": "org/a"}, {"value": "org/b", "label": "org/b"}]
+        },
+    }
+
+
+def test_form_choices_are_empty_without_a_lookup_or_when_it_fails(client, monkeypatch):
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    svd = client.ok("plan.form_choices", {"kind": "engine", "name": "SVDPB"})["result"]
+    assert svd == {"id": "engine:SVDPB", "choices": {}}
+
+    def broken(radiation_mode=None):
+        raise ConnectionError("hub down")
+
+    monkeypatch.setattr(AIBeamletEngine, "config_choices", staticmethod(broken))
+    params = {"kind": "engine", "name": "AIBeamlet", "radiation_mode": "protons"}
+    assert client.ok("plan.form_choices", params)["result"]["choices"] == {}
+
+    unknown = client.call("plan.form_choices", {"kind": "solver", "name": "nope"})
+    assert not unknown["ok"]
+
+
+def test_form_choices_without_a_hub_client_offer_the_local_models_only(
+    client, monkeypatch, tmp_path
+):
+    """As in Pyodide: no ``huggingface_hub``, so nothing is fetched and nothing fails."""
+    import sys
+
+    from pyRadPlan._settings import get_settings
+    from pyRadPlan.ai.modelhub import _load_model
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    monkeypatch.setattr(get_settings().ai, "modelhub_offline", False)
+    monkeypatch.setattr(get_settings().ai, "modelhub_local_models_dir", tmp_path)
+    _load_model.list_hub_models.cache_clear()
+    _load_model.hub_config_dir.cache_clear()
+    try:
+        params = {"kind": "engine", "name": "AIBeamlet", "radiation_mode": "protons"}
+        result = client.ok("plan.form_choices", params)["result"]
+    finally:
+        _load_model.list_hub_models.cache_clear()
+        _load_model.hub_config_dir.cache_clear()
+    assert result["choices"] == {"model": []}

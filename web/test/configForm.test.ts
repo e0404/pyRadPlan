@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { FieldDescriptor, FormSchema } from "../src/api/protocol";
+import { ConfigForm } from "../src/components/forms/ConfigForm";
 import {
   checkValue,
   editText,
@@ -10,6 +13,7 @@ import {
   initFields,
   parseText,
   stepValue,
+  suggestionsOf,
 } from "../src/components/forms/formModel";
 
 const fd = (name: string, type: FieldDescriptor["type"], extra: Partial<FieldDescriptor> = {}): FieldDescriptor => ({ name, label: name, type, ...extra });
@@ -114,5 +118,42 @@ describe("config form model", () => {
     expect(stepValue(field("seed"), 0, -1)).toBe(0);
     expect(stepValue(field("seed"), 3, 1)).toBe(4);
     expect(stepValue(fd("x", "float", { max: 1, step: 0.1 }), 0.95, 1)).toBe(1);
+  });
+});
+
+describe("suggested values (plan.form_choices)", () => {
+  const model = fd("model", "str", { default: null, nullable: true });
+  const aiSchema: FormSchema = { id: "engine:AIBeamlet", title: "Configure AI Beamlet Engine", fields: [model], values: { model: "org/mine" }, explicit: ["model"] };
+  const suggestions = {
+    model: [
+      { value: "org/a", label: "org/a" },
+      { value: "org/b", label: "org/b" },
+      { value: "org/a", label: "org/a" },
+    ],
+  };
+  const render = (s?: Record<string, { value: string; label: string }[]>) =>
+    renderToStaticMarkup(createElement(ConfigForm, { schema: aiSchema, suggestions: s, testId: "f" }));
+
+  it("are deduplicated and leave out the field's own choices", () => {
+    expect(suggestionsOf(model, suggestions).map((c) => c.label)).toEqual(["org/a", "org/b"]);
+    expect(suggestionsOf(field("method"), { method: [{ value: "SLSQP", label: "SLSQP" }, { value: "COBYLA", label: "COBYLA" }] }).map((c) => c.label)).toEqual(["COBYLA"]);
+    expect(suggestionsOf(model, undefined)).toEqual([]);
+  });
+
+  it("render a text input with a datalist that keeps free text", () => {
+    const html = render(suggestions);
+    const list = /<input[^>]*list="([^"]+)"[^>]*>/.exec(html);
+    expect(list).not.toBeNull();
+    expect(html).toContain('value="org/mine"');
+    expect(html).toContain(`<datalist id="${list![1]}" data-testid="f-model-suggestions"><option value="org/a"></option><option value="org/b"></option></datalist>`);
+    // free text is still parsed as the string field it is
+    expect(parseText(model, "other/model")).toEqual({ value: "other/model" });
+  });
+
+  it("render the plain text input while there are none", () => {
+    const html = render({});
+    expect(html).not.toContain("datalist");
+    expect(html).not.toMatch(/<input[^>]*list=/);
+    expect(render(undefined)).toBe(html);
   });
 });

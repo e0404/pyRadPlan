@@ -173,6 +173,14 @@ class SessionEditorsMixin:
         """``plan.form``."""
         return _planform.plan_form(self.workspace.pln, kind, name, **params)
 
+    def plan_form_choices(
+        self, kind: str, name: str, radiation_mode: Optional[str] = None
+    ) -> dict[str, Any]:
+        """``plan.form_choices``: suggested values of an algorithm form's fields."""
+        pln = self.workspace.pln
+        mode = radiation_mode or (pln.radiation_mode if pln is not None else None)
+        return _planform.form_choices(kind, name, mode)
+
     def plan_tissue_check(self, draft: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         """``plan.tissue_check``."""
         return _planform.tissue_check(self.workspace.pln, self.workspace.cst, draft)
