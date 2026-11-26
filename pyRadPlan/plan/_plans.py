@@ -20,7 +20,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel, to_snake
-from pyRadPlan.core import PyRadPlanBaseModel
+from pyRadPlan.core import PyRadPlanBaseModel, decode_input
 from pyRadPlan.scenarios import ScenarioModel, create_scenario_model, validate_scenario_model
 from pyRadPlan.biology.models import BiologicalModel, create_bio_model, bio_model_spec_from_matrad
 from pyRadPlan.machines import Machine, validate_machine
@@ -396,7 +396,7 @@ def create_pln(data: Union[Dict[str, Any], Plan, None] = None, **kwargs) -> Plan
     ValueError
         If the radiation mode is unknown or empty.
     """
-    data = deepcopy(data)
+    data = deepcopy(decode_input(data))
     if data:
         # If data is already a Plan object, return it directly
         if isinstance(data, Plan):

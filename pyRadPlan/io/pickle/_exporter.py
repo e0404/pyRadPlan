@@ -9,7 +9,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.result import PlanResult
 
-from ..base import BaseExporter
+from ..base import ANY_OBJECT, BaseExporter
 
 
 class PickleExporter(BaseExporter):
@@ -19,6 +19,7 @@ class PickleExporter(BaseExporter):
     name: ClassVar[str] = "Pickle Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".pkl", ".pickle")
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({ANY_OBJECT})
 
     def save(
         self,

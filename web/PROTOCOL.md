@@ -417,9 +417,9 @@ default is `"total"` (`parity.md`, ambiguity 1); the web profile adopts it once 
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `data.load_file` (extended) | long | `{filename, data, kind?: "auto", name?}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`). A file with a CT replaces all results (a workspace pickle restores all of its results and the active name; older files with `saved_result_tags` are migrated); without a CT a loaded plan result replaces only the active result and a loaded dose is added as a further result (amendment 26). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO; `name?` names the result of a `"dose"` import (default: the file stem) |
+| `data.load_file` (extended) | long | `{filename, data, kind?: "auto", name?}` | `SessionState`. Accepts `.mat`, `.npz`, `.h5`, `.hdf5` (amendment 27), `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`). A file with a CT replaces all results (a workspace pickle restores all of its results and the active name; older files with `saved_result_tags` are migrated); without a CT a loaded plan result replaces only the active result and a loaded dose is added as a further result (amendment 26). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO; `name?` names the result of a `"dose"` import (default: the file stem) |
 | `data.load_dij` | long | `{filename, data}` | `SessionState`; merges `stf` + `dij` from the file (`.pkl` not in the browser); `PreconditionError(code="no_dij")` when it holds none |
-| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg", basename?}` | `FileResult`. `quantities` (component keys of any result) for `object: "result"`, default the full quantities of all results. Workspace pickles store all results and the active name |
+| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg" \| "layers", basename?}` | `FileResult`. `quantities` (component keys of any result) for `object: "result"`, default the full quantities of all results. Workspace files (HDF5, pickle) store all results and the active name |
 
 Pending plan-form edits are resolved by the frontend before calling `export.save` (Qt asks for
 Save Plan and Save Workspace).
@@ -769,3 +769,20 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
       keys, and `{"$result": key}` accepts any component key.
     - `revisions.volumes` is keyed by the same component keys; a snapshot's keys have the
       revisions of the images they share (amendment 14).
+27. 2026-11-23 (export formats): **added** `capabilities.formats` entries; the frontend picks
+    them up from the tables, no new methods.
+    - `format: "hdf5"` for `object: "workspace"` (listed first, the default; `.h5`) and
+      `object: "cst"` (`keeps_objectives: true`, includes the CT), and an `hdf5` import entry
+      (`.h5`, `.hdf5`, all objects). HDF5 files load without running code from the file, also
+      in the browser (h5py is part of the Pyodide build). The workspace pickle labels gain
+      ", pickle".
+    - `structure_format: "layers"` on a second cst `nrrd` entry: a 3D Slicer segmentation
+      (`cst.seg.nrrd`, one layer per set of overlapping structures) in the zip. Without
+      `structure_format`, `nrrd` stays the label map.
+    - **changed** `export.save {object: "result", format: "dcm"}` (amendment 3): the zip holds
+      the CT series and one `RTDOSE_<quantity>.dcm` per physical (`physical_dose`) or
+      RBE-weighted (`rbe_x_dose`) dose of a result; the doses of the active result reference
+      `RTPLAN.dcm`, its RT (Ion) Plan from the steering information and fluence (left out when
+      there is no steering information or it does not fit the fluence). Doses of several
+      results go into one folder per result name. Other quantities are skipped; selecting none of
+      the two doses fails with `PreconditionError(code="no_data")`.

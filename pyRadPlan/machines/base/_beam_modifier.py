@@ -304,7 +304,7 @@ class Jaw(BeamLimitingDevice):
                     "Set device_type to 'JAWX' or 'JAWY' or device_orientation to 'X' or 'Y'"
                 )
         else:
-            expected = f"Jaw{device_orientation}"
+            expected = f"JAW{device_orientation}"
             if not device_type or device_type == "JAW":
                 data["device_type"] = expected
             elif device_type != expected:

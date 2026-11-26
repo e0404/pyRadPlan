@@ -6,8 +6,6 @@ import csv
 import logging
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication, QPixmap, QIcon
 from PySide6.QtWidgets import (
@@ -21,10 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyRadPlan.analysis import format_metric_label
-
 if TYPE_CHECKING:
-    from pyRadPlan.analysis import QI, QICollection
+    from pyRadPlan.analysis import QICollection
 
 logger = logging.getLogger(__name__)
 
@@ -150,19 +146,9 @@ class QITableWidget(QWidget):
             self._set_content([], [])
             return
 
-        headers = [_STRUCTURE_COL] + [
-            format_metric_label(metric, self._first_qi(qis, structures, metric))
-            for metric in metric_keys
-        ]
-
-        rows: list[list[str]] = []
-        colors: list[tuple[int, int, int] | None] = []
-        for name in structures:
-            structure_qis = qis[name]
-            rows.append(
-                [name, *(self._format_value(structure_qis.metrics.get(m)) for m in metric_keys)]
-            )
-            colors.append((voi_colors or {}).get(name))
+        table = qis.to_rows(structures, metrics, structure_header=_STRUCTURE_COL)
+        headers, rows = table[0], table[1:]
+        colors = [(voi_colors or {}).get(name) for name in structures]
 
         self._set_content(headers, rows, colors, metric_keys)
 
@@ -265,21 +251,6 @@ class QITableWidget(QWidget):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _first_qi(qis: QICollection, structures: list[str], metric: str) -> QI | None:
-        """Return any QI carrying *metric*, for its unit in the column label."""
-        for name in structures:
-            if name in qis and metric in qis[name]:
-                return qis[name][metric]
-        return None
-
-    @staticmethod
-    def _format_value(qi: QI | None) -> str:
-        """Format a QI value, matching ``QICollection``'s table rendering."""
-        if qi is None or np.isnan(qi.value):
-            return "-"
-        return f"{qi.value:.2f}"
 
     def _set_content(
         self,

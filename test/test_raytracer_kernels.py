@@ -1,5 +1,7 @@
 """Differential tests for the dispatchable ray tracer kernels."""
 
+import importlib
+
 import numpy as np
 import pytest
 
@@ -171,3 +173,82 @@ def test_jax_jit_matches_generic():
     merged_ref = _kernels.merge_sorted_unique.generic(limits, ax, ay, az)
     merged_out = _kernels.merge_sorted_unique(limits, ax, ay, az)
     np.testing.assert_array_equal(np.asarray(merged_out), np.asarray(merged_ref))
+
+
+@pytest.mark.parametrize("backend", ["numpy", "array_api_strict"])
+@pytest.mark.parametrize("ix_dtype", [np.int32, np.int64])
+def test_merge_repeated_voxel_segments(backend, ix_dtype):
+    """Runs of same-voxel segments fold into their first segment, conserving length."""
+    nan = np.nan
+    lengths = np.array(
+        [
+            [1.0, 0.25, 2.0, 0.5, nan],  # run of two in the middle
+            [3.0, 0.1, 0.2, 1.0, nan],  # run of three at the start
+            [1.0, 2.0, 3.0, nan, nan],  # no repeats, padded
+            [1.0, 1.0, 2.0, 0.5, 0.5],  # two adjacent runs, the second at the row end
+            [1.0, nan, 2.0, 4.0, 8.0],  # a voxel on both sides of an invalid segment
+        ],
+        dtype=np.float32,
+    )
+    ix = np.array(
+        [[4, 7, 7, 9, -1], [5, 5, 5, 6, -1], [1, 2, 3, -1, -1], [3, 3, 8, 8, 8], [6, -1, 6, 2, 6]],
+        dtype=ix_dtype,
+    )
+    rho = [lengths * 0.0 + 1.5, lengths * 0.0 + 0.5]
+    xp = importlib.import_module(
+        "array_api_compat.numpy" if backend == "numpy" else "array_api_strict"
+    )
+
+    # the merge may write into its inputs
+    merged_l, merged_rho, merged_ix = _kernels.merge_repeated_voxel_segments(
+        xp.asarray(lengths, copy=True),
+        [xp.asarray(r, copy=True) for r in rho],
+        xp.asarray(ix, copy=True),
+    )
+    merged_l, merged_ix = np.asarray(merged_l), np.asarray(merged_ix)
+
+    assert merged_ix.dtype == ix_dtype
+    np.testing.assert_array_equal(
+        merged_ix,
+        [
+            [4, 7, -1, 9, -1],
+            [5, -1, -1, 6, -1],
+            [1, 2, 3, -1, -1],
+            [3, -1, 8, -1, -1],
+            [6, -1, 6, 2, 6],
+        ],
+    )
+    np.testing.assert_allclose(
+        merged_l,
+        [
+            [1.0, 2.25, 0.0, 0.5, nan],
+            [3.3, 0.0, 0.0, 1.0, nan],
+            [1.0, 2.0, 3.0, nan, nan],
+            [2.0, 0.0, 3.0, 0.0, 0.0],
+            [1.0, nan, 2.0, 4.0, 8.0],
+        ],
+        rtol=1e-6,
+    )
+    # path length per ray is conserved
+    np.testing.assert_allclose(np.nansum(merged_l, axis=1), np.nansum(lengths, axis=1), rtol=1e-6)
+    for r_in, r_merged in zip(rho, merged_rho):
+        r_out = np.asarray(r_merged)
+        assert np.all(np.isnan(r_out[merged_ix == -1]))
+        np.testing.assert_array_equal(r_out[merged_ix >= 0], r_in[merged_ix >= 0])
+
+
+@pytest.mark.parametrize("backend", ["numpy", "array_api_strict"])
+@pytest.mark.parametrize("shape", [(0, 5), (3, 1), (4, 0)])
+def test_merge_repeated_voxel_segments_without_neighbours(backend, shape):
+    """Traces without rays or without a second segment pass through unchanged."""
+    xp = importlib.import_module(
+        "array_api_compat.numpy" if backend == "numpy" else "array_api_strict"
+    )
+    lengths = xp.ones(shape, dtype=xp.float32)
+    ix = xp.zeros(shape, dtype=xp.int32)
+
+    merged_l, merged_rho, merged_ix = _kernels.merge_repeated_voxel_segments(
+        lengths, [lengths], ix
+    )
+
+    assert merged_l.shape == merged_ix.shape == merged_rho[0].shape == shape

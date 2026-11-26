@@ -1,6 +1,7 @@
 """Import a CT image from a DICOM series."""
 
 import logging
+import os
 import warnings
 from typing import Optional
 
@@ -8,13 +9,16 @@ import pydicom
 import SimpleITK as sitk
 
 from pyRadPlan.core import ProgressReporter
-from pyRadPlan.ct import validate_ct, CT
+from pyRadPlan.ct import validate_ct, CT, DicomInfo
 
 logger = logging.getLogger(__name__)
 
 
 def import_ct(
-    directory: str, ct_files: list[str], reporter: Optional[ProgressReporter] = None
+    directory: str,
+    ct_files: list[str],
+    reporter: Optional[ProgressReporter] = None,
+    headers: Optional[dict[str, pydicom.Dataset]] = None,
 ) -> CT:
     """
     Read a CT DICOM series into a pyRadPlan :class:`CT`.
@@ -31,6 +35,9 @@ def import_ct(
     reporter : ProgressReporter, optional
         Reporter used to publish the slice-reading progress. Defaults to a
         private reporter, which still reaches context-scoped observers.
+    headers : dict[str, pydicom.Dataset], optional
+        Pixel-free headers already read, keyed by file path. Slices missing
+        here are read from disk.
 
     Returns
     -------
@@ -70,4 +77,14 @@ def import_ct(
 
     image = sitk.Cast(image, sitk.sitkFloat32)
 
-    return validate_ct(cube_hu=image)
+    cached = {os.path.normcase(os.path.normpath(p)): ds for p, ds in (headers or {}).items()}
+
+    def _header(path: str) -> pydicom.Dataset:
+        ds = cached.get(os.path.normcase(os.path.normpath(path)))
+        return ds if ds is not None else pydicom.dcmread(path, stop_before_pixels=True)
+
+    slice_headers = [_header(f) for f in file_names]
+    dicom_info = DicomInfo.model_validate(slice_headers[0])
+    dicom_info.sop_instance_uids = [str(ds.SOPInstanceUID) for ds in slice_headers]
+
+    return validate_ct(cube_hu=image, dicom_info=dicom_info)

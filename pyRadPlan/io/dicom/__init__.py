@@ -4,8 +4,9 @@ from .._factory import register_importer, register_exporter
 from ._importer import DicomImporter
 from ._exporter import DicomExporter
 from ._handler import DicomHandler
+from ._helpers import find_dicom_files
 
 register_importer(DicomImporter)
 register_exporter(DicomExporter)
 
-__all__ = ["DicomImporter", "DicomExporter", "DicomHandler"]
+__all__ = ["DicomImporter", "DicomExporter", "DicomHandler", "find_dicom_files"]
