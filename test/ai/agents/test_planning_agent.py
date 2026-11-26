@@ -85,6 +85,10 @@ def test_error_paths_without_dose_calc(state):
         state.set_objectives(voi.name, [])
     with pytest.raises(PlanningError, match="No objectives"):
         state.optimize()
+    with pytest.raises(PlanningError, match="call set_beams first"):
+        state.beam_influence()
+    assert state.num_dij_calcs == 0
+    state.set_beams([0, 180], None)
     state.max_dij_calcs = 0
     with pytest.raises(PlanningError, match="budget"):
         state.beam_influence()

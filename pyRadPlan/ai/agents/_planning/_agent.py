@@ -88,8 +88,8 @@ Work like an experienced planner:
 3. Anatomy: case_overview, structure_geometry, analyze_target_shape and check_feasibility.
    Conflicts (target/OAR overlap with incompatible goals) cannot be optimized away: split
    the target with subtract/intersect helpers and a lower goal in the overlap, or report it.
-4. Beams: set_beams within the beam limits of the budget (case_overview); beam_influence
-   shows beams whose path runs through OARs. Dose influence calculations are expensive
+4. Beams: set_beams within the beam limits of the budget (case_overview), then
+   beam_influence shows which beams run through OARs. Dose influence calculations are expensive
    and limited (every beam change needs one, except among candidate beams in
    case_overview); settle beams before tuning.
 5. Objectives: set_objectives per VOI, optimize, read the goal margins. Tissue outside the

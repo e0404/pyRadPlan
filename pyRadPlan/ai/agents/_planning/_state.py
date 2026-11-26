@@ -224,13 +224,12 @@ class PlanningState:
             logger.exception("Planning listener failed on %s", event)
 
     def _ensure_dij(self) -> Dij:
-        if (
-            self.dij is None
-            and self.beam_pool is not None
-            and not self.current_beams()["gantry_angles"]
-        ):
+        if self.dij is None and not self.current_beams()["gantry_angles"]:
             raise PlanningError(
                 "No beams set yet: pick candidate beams with set_beams (case_overview)."
+                if self.beam_pool is not None
+                else "No beams set yet: call set_beams first; the next beam_influence or "
+                "optimize uses a dose influence calculation for those beams."
             )
         if self.dij is None:
             if self.num_dij_calcs >= self.max_dij_calcs:
@@ -1258,9 +1257,11 @@ class PlanningState:
         """Per beam, the unit-fluence mean dose of each VOI relative to the target.
 
         From the actual beam path incl. scatter; < 1 means the beam spares that VOI.
-        With candidate beams (case_overview), every candidate is reported, the current
-        ones marked. Per OAR also the share of the beam's beamlets that pass through it
-        (in front of or behind the target, as in the beam's eye view).
+        Without candidate beams, it reports the beams set with set_beams and computes their
+        dose influence if needed (one of dij_calcs_left). With candidate beams
+        (case_overview), every candidate is reported, the current ones marked. Per OAR also
+        the share of the beam's beamlets that pass through it (in front of or behind the
+        target, as in the beam's eye view).
         """
         if self.beam_pool is not None:
             pool = self.beam_pool
