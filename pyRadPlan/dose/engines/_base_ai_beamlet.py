@@ -16,7 +16,7 @@ from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.stf import SteeringInformation
 from pyRadPlan.scenarios import Scenario
-from pyRadPlan.core import Grid, PyRadPlanBaseModel
+from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core.np2sitk import linear_indices_to_grid_coordinates
 from pyRadPlan.core.xp_utils.compat import array_meshgrid
 from pyRadPlan.core.xp_utils import (
@@ -520,8 +520,8 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         """Place the sampling grid on a ray and find the dose-grid voxels it covers.
 
         The local frame has its depth axis along the ray, through the source. Updates
-        ``self.grid_information`` with ``grid_rotated``, the sampling grid in world
-        coordinates, ``ix_mask``, the linear dose-grid indices of the voxels within the
+        ``self.grid_information`` with ``grid_ct``, the sampling grid in the CT's
+        image-aligned frame (see ``_init_dose_calc``), ``ix_mask``, the linear dose-grid indices of the voxels within the
         cuboid's bounding box, and ``local_points_masked``, their local coordinates.
 
         Parameters
@@ -540,13 +540,20 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         world_to_local = ray["rotation_mat"] @ derived_rot_mat
         offset = source - source @ derived_rot_mat
 
+        # The CT is sampled in its own frame, which differs from the world frame by the
+        # image origin and direction: ct = (world - origin) @ direction
+        local_to_ct = world_to_local.T @ self._ct_direction
+        iso_in_ct = (ray["iso_center"] - self._ct_origin) @ self._ct_direction
+
         xp = self.xp
         iso_center = xp.asarray(ray["iso_center"], dtype=xp.float32, device=self.device)
         offset = xp.asarray(offset, dtype=xp.float32, device=self.device)
         world_to_local = xp.asarray(world_to_local, dtype=xp.float32, device=self.device)
         local_to_world = world_to_local.T
+        local_to_ct = xp.asarray(local_to_ct, dtype=xp.float32, device=self.device)
+        iso_in_ct = xp.asarray(iso_in_ct, dtype=xp.float32, device=self.device)
 
-        grid_rotated = (self.grid - offset) @ local_to_world + iso_center
+        grid_ct = (self.grid - offset) @ local_to_ct + iso_in_ct
         corners_world = (self.corners_local - offset) @ local_to_world + iso_center
 
         min_world = xp.min(corners_world, axis=0)
@@ -564,19 +571,19 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         self.grid_information.update(
             {
-                "grid_rotated": grid_rotated,
+                "grid_ct": grid_ct,
                 "local_points_masked": (candidate_points - iso_center) @ world_to_local + offset,
                 "ix_mask": candidate_indices,
             }
         )
 
     def _extract_sitk_grid_and_interpolate(self, grid_information: dict) -> Array:
-        """Interpolate the CT at the world positions of the sampling grid.
+        """Interpolate the CT at the positions of the sampling grid.
 
         Parameters
         ----------
         grid_information : dict
-            ``self.grid_information``, with ``grid_rotated``, ``lateral_range`` and
+            ``self.grid_information``, with ``grid_ct``, ``lateral_range`` and
             ``depth_range``.
 
         Returns
@@ -592,7 +599,7 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
         values = _interpolate_or_fill(
             self.ct_interpolator,
             self.ct_grid_dimensions,
-            grid_information["grid_rotated"],
+            grid_information["grid_ct"],
             fill_value=-1000.0,
         )
         return xp.reshape(
@@ -860,10 +867,17 @@ class AIBeamletEngine(PencilBeamEngineAbstract):
 
         # Positions and the CT are float32 throughout, on every backend (also JAX without
         # x64): the per-ray transforms keep float32 positions accurate to about 10 nm.
-        sitk_grid = Grid.from_sitk_image(self.ct_cube_hu)
+        #
+        # The CT is interpolated in its image-aligned frame: millimetres along the image
+        # axes from the first voxel. World positions are mapped into it with the image
+        # origin and direction, so flipped and oblique images are sampled where they are.
+        self._ct_origin = np.asarray(self.ct_cube_hu.GetOrigin(), dtype=np.float64)
+        self._ct_direction = np.asarray(self.ct_cube_hu.GetDirection(), dtype=np.float64).reshape(
+            3, 3
+        )
         self.ct_grid_dimensions = tuple(
-            xp.asarray(axis, dtype=xp.float32, device=self.device)
-            for axis in (sitk_grid.x, sitk_grid.y, sitk_grid.z)
+            xp.asarray(np.arange(size) * spacing, dtype=xp.float32, device=self.device)
+            for size, spacing in zip(self.ct_cube_hu.GetSize(), self.ct_cube_hu.GetSpacing())
         )
         ct_values = xp.asarray(
             np.transpose(sitk.GetArrayFromImage(self.ct_cube_hu), (2, 1, 0)),

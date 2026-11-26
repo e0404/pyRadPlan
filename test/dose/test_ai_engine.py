@@ -453,6 +453,47 @@ def test_dose_near_the_cuboid_edge_is_the_same_on_every_backend(monkeypatch, cpu
     _assert_sparse_close(other, reference, rtol=1e-4, atol=1e-8)
 
 
+def _sampled_ct_cuboids(pln, ct, cst, stf):
+    engine = AIBeamletEngine(pln)
+    cuboids = []
+    extract = engine._extract_ct_cuboid
+
+    def spy(ray):
+        extract(ray)
+        cuboids.append(np.array(to_numpy(ray["ct_cuboid"])))
+
+    engine._extract_ct_cuboid = spy
+    engine.calc_dose_influence(ct, cst, stf)
+    return cuboids
+
+
+@pytest.mark.parametrize(
+    "reorient",
+    [
+        pytest.param(lambda image: sitk.Flip(image, [True, True, False]), id="flipped"),
+        pytest.param(lambda image: sitk.PermuteAxes(image, [1, 0, 2]), id="permuted"),
+    ],
+)
+def test_ct_is_sampled_where_it_lies_whatever_the_image_direction(monkeypatch, reorient):
+    """The model sees the same CT cuboids when the image is stored flipped or permuted.
+
+    Both keep every voxel at its world position and only change the image's origin and
+    direction matrix.
+    """
+    _use_backend(monkeypatch, "numpy", None)
+    pln, ct, cst, stf = _geometry_case(DUMMY_MODEL)
+    reoriented = ct.model_copy(update={"cube_hu": reorient(ct.cube_hu)})
+    assert not np.allclose(reoriented.cube_hu.GetDirection(), ct.cube_hu.GetDirection())
+
+    reference = _sampled_ct_cuboids(pln, ct, cst, stf)
+    sampled = _sampled_ct_cuboids(pln, reoriented, cst, stf)
+
+    assert len(reference) == len(sampled) > 0
+    assert np.ptp(reference[0]) > 1.0
+    for expected, actual in zip(reference, sampled):
+        assert np.allclose(actual, expected, rtol=0.0, atol=0.05)
+
+
 # --- scenarios -------------------------------------------------------------
 
 
