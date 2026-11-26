@@ -3,6 +3,8 @@ import pytest
 pytest.importorskip("PySide6")
 
 import dataclasses
+import threading
+import time
 from typing import Annotated, Callable, Literal, Optional, Union
 
 from pydantic import Field
@@ -303,3 +305,155 @@ def test_mapping_option_of_a_nested_option_can_be_edited(qapp):
     form._set_nested("options", ("extra",), {"y": 2})
     assert form.config().options.extra == {"y": 2}
     assert form.values()["options"]["extra"] == {"y": 2}
+
+
+# ---------------------------------------------------------------------------
+# Suggestions looked up after the dialog opened (ConfigFormDialog.load_choices)
+# ---------------------------------------------------------------------------
+
+
+class _SuggestingAlgorithm(ConfigurableAlgorithm):
+    model: Optional[str] = None
+    label: str = "demo"
+    iterations: int = 10
+
+
+class _SlowLookup:
+    """``config_choices`` stand-in that blocks until released and records its thread."""
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.release = threading.Event()
+        self.done = threading.Event()
+        self.threads = []
+
+    def __call__(self, radiation_mode):
+        self.threads.append(threading.current_thread())
+        try:
+            if not self.release.wait(10):
+                raise TimeoutError("never released")
+            if self.error is not None:
+                raise self.error
+            return self.result
+        finally:
+            self.done.set()
+
+
+def _pump(qapp, predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    return predicate()
+
+
+def _items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_dialog_opens_before_the_suggestions_arrive(qapp):
+    lookup = _SlowLookup({"model": ["org/a", "org/b"]})
+    dialog = ConfigFormDialog(_SuggestingAlgorithm.config_model())
+    loaded = []
+    dialog.choices_loaded.connect(loaded.append)
+
+    dialog.load_choices(lookup, "protons")
+    assert not lookup.done.is_set()  # returned while the lookup still blocks
+    assert _pump(qapp, lambda: bool(lookup.threads))
+    assert lookup.threads[0] is not threading.main_thread()
+    assert isinstance(dialog.form._editors["model"], QLineEdit)
+
+    lookup.release.set()
+    assert _pump(qapp, lambda: bool(loaded))
+    combo = dialog.form._editors["model"]
+    assert isinstance(combo, QComboBox) and combo.isEditable()
+    assert _items(combo) == ["", "org/a", "org/b"]
+    assert combo.currentText() == ""
+    assert loaded == [{"model": ["org/a", "org/b"]}]
+    assert dialog.values() == {}
+
+
+def test_late_suggestions_keep_what_the_user_typed(qapp):
+    lookup = _SlowLookup({"model": ["org/a", "org/b"], "label": ["x"], "iterations": [1]})
+    dialog = ConfigFormDialog(_SuggestingAlgorithm.config_model())
+    loaded = []
+    dialog.choices_loaded.connect(loaded.append)
+    dialog.load_choices(lookup, None)
+    dialog.form._editors["model"].setText("org/mine")  # typed, editing not finished
+
+    lookup.release.set()
+    assert _pump(qapp, lambda: bool(loaded))
+    form = dialog.form
+    assert form._editors["model"].currentText() == "org/mine"
+    assert form._editors["label"].currentText() == "demo"
+    assert isinstance(form._editors["iterations"], QSpinBox)  # not a text field
+    assert loaded == [{"model": ["org/a", "org/b"], "label": ["x"]}]
+    assert dialog.values() == {"model": "org/mine"}
+
+    # merging into a field that already has suggestions adds only the new ones
+    assert form.set_choices("model", ["org/b", "org/c", "org/c"])
+    assert _items(form._editors["model"]) == ["", "org/a", "org/b", "org/c"]
+    assert form._editors["model"].currentText() == "org/mine"
+    assert dialog.values() == {"model": "org/mine"}
+    form._editors["model"].setCurrentText("org/c")
+    assert dialog.values() == {"model": "org/c"}
+
+
+def test_suggestions_given_upfront_are_merged_too(qapp):
+    dialog = ConfigFormDialog(
+        _SuggestingAlgorithm.config_model(),
+        initial={"model": "org/b"},
+        choices={"model": ["org/a", "org/b"]},
+    )
+    form = dialog.form
+    assert form.set_choices("model", ["org/c", "org/a"])
+    assert _items(form._editors["model"]) == ["", "org/a", "org/b", "org/c"]
+    assert form._editors["model"].currentText() == "org/b"
+    assert not form.set_choices("unknown", ["x"])
+    assert dialog.values() == {"model": "org/b"}
+
+
+def test_closing_the_dialog_before_the_suggestions_arrive_drops_them(qapp):
+    lookup = _SlowLookup({"model": ["org/a"]})
+    dialog = ConfigFormDialog(_SuggestingAlgorithm.config_model())
+    loaded = []
+    dialog.choices_loaded.connect(loaded.append)
+    dialog.load_choices(lookup, None)
+    dialog.reject()
+
+    lookup.release.set()
+    assert lookup.done.wait(5)
+    _pump(qapp, lambda: False, timeout=0.2)
+    assert loaded == []
+    assert isinstance(dialog.form._editors["model"], QLineEdit)
+
+
+def test_deleting_the_dialog_before_the_suggestions_arrive_is_safe(qapp):
+    lookup = _SlowLookup({"model": ["org/a"]})
+    dialog = ConfigFormDialog(_SuggestingAlgorithm.config_model())
+    dialog.load_choices(lookup, None)
+    dialog.deleteLater()
+    _pump(qapp, lambda: False, timeout=0.1)
+    del dialog
+
+    lookup.release.set()
+    assert lookup.done.wait(5)
+    _pump(qapp, lambda: False, timeout=0.2)
+
+
+def test_a_failing_lookup_leaves_the_form_as_it_is(qapp):
+    lookup = _SlowLookup(error=RuntimeError("hub down"))
+    dialog = ConfigFormDialog(_SuggestingAlgorithm.config_model())
+    loaded = []
+    dialog.choices_loaded.connect(loaded.append)
+    dialog.load_choices(lookup, None)
+    dialog.form._editors["model"].setText("org/mine")
+
+    lookup.release.set()
+    assert lookup.done.wait(5)
+    _pump(qapp, lambda: False, timeout=0.2)
+    assert loaded == []
+    editor = dialog.form._editors["model"]
+    assert isinstance(editor, QLineEdit) and editor.text() == "org/mine"

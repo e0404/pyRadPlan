@@ -270,12 +270,15 @@ class PencilBeamEngineAbstract(DoseEngineBase):
                             bixel_counter += curr_ray["num_of_bixels"]
 
                         # Free GPU memory from curr_beam
-                        del curr_beam["bev_coords"]
-                        del curr_beam["rad_depths"]
-                        del curr_beam["geo_depths"]
-                        del curr_beam["valid_coords"]
-                        del curr_beam["valid_coords_all"]
-                        del curr_beam["rot_mat_system_T"]
+                        for _key in (
+                            "bev_coords",
+                            "rad_depths",
+                            "geo_depths",
+                            "valid_coords",
+                            "valid_coords_all",
+                            "rot_mat_system_T",
+                        ):
+                            curr_beam.pop(_key, None)
                         curr_beam = None
 
                         # Force GPU memory cleanup

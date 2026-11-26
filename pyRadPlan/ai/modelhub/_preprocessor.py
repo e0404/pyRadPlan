@@ -16,6 +16,13 @@ class BasePreprocessor(ABC):
     ``model_preprocessing`` section of ``model_config.json``. Implementations
     must override :meth:`preprocess`.
 
+    How the model is then run is up to the code using it, so a task can require more.
+    A dose-calculation preprocessor (``AIBeamletEngine``) must also define
+    ``predict(model, model_input)``, which runs the model on the output of
+    :meth:`preprocess` and returns ``{quantity: array}``. The base class has no
+    default for it, since running a model is framework-specific (e.g. torch's
+    ``inference_mode``).
+
     Parameters
     ----------
     config : dict, optional

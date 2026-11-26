@@ -10,10 +10,11 @@ configuration and the model-repository contract (``model.py``,
 
 .. note::
 
-   Loading a model fetched from the Hub executes Python shipped inside the
-   repository and therefore requires an explicit ``trust_remote_code=True``
-   (or ``PYRADPLAN_AI_TRUST_REMOTE_CODE=1``). A directory passed as
-   ``local_dir`` is exempt.
+   Loading a model executes Python shipped inside the repository. A model
+   folder you placed yourself runs as-is; downloaded code runs only once
+   trusted, with :func:`trust_model` or the setting
+   ``pyRadPlan.settings.ai.modelhub_trust_remote_code = True``
+   (``PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1``). See :ref:`modelhub_trust`.
 
 .. autosummary::
    :toctree: generated/ai/modelhub/
@@ -28,11 +29,25 @@ Loading
    :toctree: generated/ai/modelhub/
 
    load_model
+   load_model_with_dir
    BasePreprocessor
    OutcomePreprocessor
    load_pyanno4rt_model
    OutcomeModelSpec
    OutcomeFeature
+
+
+Trust
+-----
+
+.. autosummary::
+   :toctree: generated/ai/modelhub/
+
+   trust_model
+   untrust_model
+   is_trusted
+   TrustedModel
+   UntrustedModelError
 
 
 Discovery
@@ -45,6 +60,18 @@ Discovery
    ModelTask
    task_from_dir
    task_from_name
+
+
+Inspection
+----------
+
+.. autosummary::
+   :toctree: generated/ai/modelhub/
+
+   model_facts
+   local_model_dir
+   hub_config_dir
+   list_hub_models
 
 
 Hub resolution

@@ -10,6 +10,7 @@ dose.engines
     ParticleHongPencilBeamEngine
     ParticleFredMCEngine
     ParticleTOPASMCEngine
+    AIBeamletEngine
 
 
 Base Classes

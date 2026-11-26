@@ -668,6 +668,11 @@ export const planHandlers: MockHandlers = {
     return planForm(ctx.session(), p);
   },
 
+  // As in the browser: no model on disk and no hub client, so nothing to suggest.
+  "plan.form_choices"(p) {
+    return { id: `${String(p.kind)}:${String(p.name)}`, choices: {} };
+  },
+
   "plan.set"(p, ctx) {
     return planSet(ctx, ctx.session(), p as PlanSetParams);
   },

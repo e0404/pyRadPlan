@@ -277,6 +277,21 @@ export function comboChoices(f: FieldDescriptor, value: unknown): Choice[] {
   return [...list, { value: value as Choice["value"], label: value === null ? "None" : String(value) }];
 }
 
+/**
+ * Suggested values of a field (`plan.form_choices`) not already among its choices, by label and
+ * without duplicates. Suggestions never restrict what can be typed.
+ */
+export function suggestionsOf(f: FieldDescriptor, suggestions?: Record<string, Choice[]>): Choice[] {
+  const seen = new Set((f.choices ?? []).map((c) => c.label));
+  const out: Choice[] = [];
+  for (const c of suggestions?.[f.name] ?? []) {
+    if (seen.has(c.label)) continue;
+    seen.add(c.label);
+    out.push(c);
+  }
+  return out;
+}
+
 /** Spin step of a numeric field. */
 export function stepOf(f: FieldDescriptor): number {
   if (f.step !== undefined) return f.step;

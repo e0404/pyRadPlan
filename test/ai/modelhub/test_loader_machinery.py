@@ -2,16 +2,23 @@
 
 The end-to-end load of a real model lives in ``test_load_model.py`` and is
 skipped without torch/safetensors. Everything the loader does *around* the
-weights -- importing a repository's code, reading its config, gating remote
-code -- is exercised here against a synthetic model folder, so it stays covered
-in an environment without the ``ai`` extra installed.
+weights -- importing a repository's code, reading its config -- is exercised
+here against a synthetic model folder, so it stays covered in an environment
+without the ``ai`` extra installed. Which code may run at all is covered in
+``test_trust.py``.
 """
 
 import sys
 
 import pytest
 
-from pyRadPlan.ai.modelhub import BasePreprocessor, _load_model, load_model
+from pyRadPlan.ai.modelhub import (
+    BasePreprocessor,
+    _load_model,
+    _resolve,
+    load_model,
+    load_model_with_dir,
+)
 
 MODEL_PY = """
 class FakeNet:
@@ -124,58 +131,56 @@ def test_explicit_local_dir_needs_no_trust_opt_in(fake_model_dir):
     assert model is not None
 
 
-def test_trust_remote_code_disabled_raises(fake_model_dir):
-    with pytest.raises(ValueError, match="trust_remote_code"):
-        load_model(local_dir=str(fake_model_dir), trust_remote_code=False)
-
-
-def test_hub_load_requires_trust_opt_in(monkeypatch):
-    """A repo_id means code from the hub, which must not run -- or download -- unasked."""
-
-    def _boom(**kwargs):
-        raise AssertionError("untrusted code must not even be downloaded")
-
-    monkeypatch.setattr(_load_model, "resolve_model_dir", _boom)
-
-    with pytest.raises(ValueError, match="trust_remote_code"):
-        load_model("dosecalc-x")
-    with pytest.raises(ValueError, match="trust_remote_code"):
-        load_model(repo_id="org/dosecalc-x")
-
-
-def test_hub_load_honours_settings_opt_in(fake_model_dir, monkeypatch, isolated_model_settings):
-    monkeypatch.setattr(isolated_model_settings, "modelhub_trust_remote_code", True)
-    monkeypatch.setattr(_load_model, "resolve_model_dir", lambda **kw: fake_model_dir)
-
-    model, _ = load_model("dosecalc-x")
+def test_trust_remote_code_false_still_runs_a_folder_the_user_placed(fake_model_dir):
+    """The argument is about downloaded code; a user's own folder is always theirs to run."""
+    model, _ = load_model(local_dir=str(fake_model_dir), trust_remote_code=False)
     assert model is not None
 
 
-def test_name_resolves_to_hf_org_repo_id(fake_model_dir, monkeypatch):
+def test_user_placed_folder_by_id_needs_no_trust_opt_in(
+    tmp_path, monkeypatch, isolated_model_settings
+):
+    _make_fake_model(tmp_path / "base" / "org" / "dosecalc-x")
+    monkeypatch.setattr(isolated_model_settings, "modelhub_local_models_dir", tmp_path / "base")
+
+    model, _, model_dir = load_model_with_dir(repo_id="org/dosecalc-x")
+    assert model is not None
+    assert model_dir == tmp_path / "base" / "org" / "dosecalc-x"
+
+
+def _capture_resolve(monkeypatch, model_dir):
     captured = {}
 
     def fake_resolve(**kwargs):
         captured.update(kwargs)
-        return fake_model_dir
+        return _resolve.ResolvedModel(model_dir, downloaded=False, repo_id=kwargs["repo_id"])
 
-    monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
+    monkeypatch.setattr(_load_model, "_resolve_model", fake_resolve)
+    return captured
 
-    load_model("dosecalc-x", trust_remote_code=True)
+
+def test_load_model_with_dir_reports_the_resolved_directory(fake_model_dir, monkeypatch):
+    """Callers reading the repository's metadata get the directory the load resolved."""
+    _capture_resolve(monkeypatch, fake_model_dir)
+
+    model, preprocessor, model_dir = load_model_with_dir(repo_id="org/dosecalc-x")
+    assert model is not None and preprocessor is not None
+    assert model_dir == fake_model_dir
+
+
+def test_name_resolves_to_hf_org_repo_id(fake_model_dir, monkeypatch):
+    captured = _capture_resolve(monkeypatch, fake_model_dir)
+
+    load_model("dosecalc-x")
     hf_org = _load_model.get_settings().ai.modelhub_hf_org
     assert captured["repo_id"] == f"{hf_org}/dosecalc-x"
 
 
 def test_full_id_as_name_is_used_verbatim(fake_model_dir, monkeypatch):
     """list_local_models() returns org/repo, so it must feed straight back in."""
-    captured = {}
+    captured = _capture_resolve(monkeypatch, fake_model_dir)
 
-    def fake_resolve(**kwargs):
-        captured.update(kwargs)
-        return fake_model_dir
-
-    monkeypatch.setattr(_load_model, "resolve_model_dir", fake_resolve)
-
-    load_model("myfork/dosecalc-x", trust_remote_code=True)
+    load_model("myfork/dosecalc-x")
     assert captured["repo_id"] == "myfork/dosecalc-x"
 
 
