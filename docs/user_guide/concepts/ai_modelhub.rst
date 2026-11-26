@@ -277,6 +277,57 @@ Working reference implementations live in the test data and are exercised by the
 ``"AIBeamlet"`` engine.  The annotated config template is
 ``pyRadPlan/data/ai_models/model_config.template.json``.
 
+Using a model as an optimization objective
+------------------------------------------
+
+Outcome models (``metadata.task = "outcome"``) predict a probability from the dose, e.g. an
+NTCP, and are used through the
+:class:`~pyRadPlan.optimization.objectives.OutcomeModel` objective, which loads the model like
+:func:`~pyRadPlan.ai.modelhub.load_model` does (including the rule of :ref:`modelhub_trust`);
+see :ref:`concept_outcome_objectives`. The preprocessor of such a model implements
+:class:`~pyRadPlan.ai.modelhub.OutcomePreprocessor`:
+
+``configure(ct, cst, cst_masks=None, device=None)``
+    Called before the optimization with the planning CT and structure set, the VOI names given
+    to the objective and the device of the model, to prepare the static inputs.
+``set_dose_grid(dose_grid)``
+    Called with the grid of the optimization dose.
+``preprocess(dose)``
+    Receives the dose as a flat float32 torch tensor on the device of the model, with one
+    value per voxel of the dose grid in the order of the flattened ``(z, y, x)`` array (x
+    runs fastest), and returns the tuple of model inputs. The objective differentiates
+    ``postprocess(model(*preprocess(dose)))`` with respect to the dose, so both methods must
+    use differentiable torch operations and ``postprocess`` must return a scalar probability.
+
+.. _modelhub_pyanno4rt:
+
+pyanno4rt outcome models
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Outcome models trained with `pyanno4rt <https://github.com/pyanno4rt/pyanno4rt>`_ are
+scikit-learn estimators on dose and geometry features, not model repositories, and are loaded
+from a local folder with :func:`~pyRadPlan.ai.modelhub.load_pyanno4rt_model`. It returns the
+estimator and its features (:class:`~pyRadPlan.ai.modelhub.OutcomeModelSpec`) for the
+:class:`~pyRadPlan.optimization.objectives.OutcomeLR` and
+:class:`~pyRadPlan.optimization.objectives.OutcomeSklearn` objectives, which call it when given
+the folder:
+
+.. code-block:: python
+
+    from pyRadPlan.ai.modelhub import load_pyanno4rt_model
+
+    estimator, spec = load_pyanno4rt_model("path/to/pyanno4rt/snapshot")
+
+* The folder holds pyanno4rt's ``input.json`` and the model in ``<label>/model.sav`` (as in the
+  public pyanno4rt snapshots) or ``<label>/predictor.*``.
+* The feature order is taken from ``feature_names`` in the ``configuration.json`` of the model
+  folder when present, else from the estimator (``feature_names_in_``), else from the header of
+  the training table.
+* Models trained with a feature preprocessing other than identity are refused.
+* ``scikit-learn`` is needed and not installed with pyRadPlan: ``pip install scikit-learn``.
+* The model file is a pickle, and unpickling runs code from the file. The trust records of the
+  hub do not apply to it, so only load models from a source you trust.
+
 Using a model for dose calculation
 ----------------------------------
 
@@ -375,6 +426,8 @@ The full API for the ``ai.modelhub`` module is documented in the
 
 * :func:`~pyRadPlan.ai.modelhub.load_model`
 * :class:`~pyRadPlan.ai.modelhub.BasePreprocessor`
+* :class:`~pyRadPlan.ai.modelhub.OutcomePreprocessor`
+* :func:`~pyRadPlan.ai.modelhub.load_pyanno4rt_model`
 * :func:`~pyRadPlan.ai.modelhub.list_local_models`
 * :class:`~pyRadPlan.ai.modelhub.ModelTask`
 * :class:`~pyRadPlan.ai.modelhub.AiSettings`
