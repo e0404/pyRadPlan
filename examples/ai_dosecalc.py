@@ -14,12 +14,18 @@
 # no guarantee of accuracy, and no model uncertainty is validated here. Verify predicted dose
 # against an established engine before drawing conclusions from it.
 
+# The TG119 phantom below is used only to demonstrate the workflow. It is not the anatomy the
+# model was trained on, so the resulting dose is out of the model's domain and should not be
+# trusted. To see how far it is off, calculate the same plan with the analytical engine
+# (`"engine": "HongPB"`) and compare the two.
+
 # To display this script in a Jupyter Notebook, you need to install jupytext via pip and run the following command.
 # This will create a .ipynb file in the same directory:
 
 # ```bash
 # pip install jupytext
 # jupytext --to notebook path/to/this/file/ai_dosecalc.py
+# ```
 
 # %% [markdown]
 # ## Prerequisites
@@ -48,6 +54,7 @@ from pyRadPlan import (
     load_tg119,
     plot_slice,
     settings,
+    xp_utils,
 )
 from pyRadPlan.ai.modelhub import trust_model
 from pyRadPlan.gui import launch_viewer, GUI_AVAILABLE
@@ -55,9 +62,14 @@ from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosin
 
 logging.basicConfig(level=logging.INFO)
 
-# The engine's arrays and the model share a device, so torch avoids conversions per beamlet.
-settings.xp.prefer_gpu = True
-settings.xp.preferred_gpu_array_backend = "torch"
+# The model runs in PyTorch. With a CUDA GPU, the engine's arrays can live on the same device
+# as the model, which avoids a conversion per beamlet. Without one, everything runs on the CPU
+# (with the model on the device of `PYRADPLAN_AI_MODELHUB_DEVICE`, "cpu" by default).
+if xp_utils.pytorch_gpu_available():
+    settings.xp.prefer_gpu = True
+    settings.xp.preferred_gpu_array_backend = "torch"
+else:
+    settings.xp.prefer_gpu = False
 
 # %%
 # Load TG119 (provided within pyRadPlan)
@@ -66,7 +78,8 @@ ct, cst = load_tg119()
 # %% [markdown]
 # In this section, we create a proton therapy plan with two opposing beams. The AI engine is
 # selected like any other, with the model id as an additional parameter; the model must match
-# the radiation mode and the anatomy it was trained on, and is downloaded on first use.
+# the radiation mode and the anatomy it was trained on (which TG119 is not, see above), and is
+# downloaded on first use.
 # %%
 # Create a plan object
 pln = IonPlan(radiation_mode="protons", machine="Generic")
