@@ -672,9 +672,9 @@ class StructureSet(PyRadPlanBaseModel):
         lower overlap priority number. VOIs without objectives neither take voxels from
         other VOIs nor lose any, so they keep their full masks.
 
-        A VOI's ``apply_overlap`` flag refines this: with ``False`` the VOI keeps its
+        A VOI's ``overlap_handling`` refines this: with ``"keep"`` the VOI keeps its
         voxels but still takes voxels from VOIs with higher priority numbers, with
-        ``None`` it is ignored by the overlap handling like a VOI without objectives.
+        ``"ignore"`` it is left out of the overlap handling like a VOI without objectives.
 
         Returns
         -------
@@ -705,13 +705,13 @@ class StructureSet(PyRadPlanBaseModel):
                 group_priority = curr_voi.overlap_priority
 
             new_vois[ix_voi] = curr_voi
-            if not curr_voi.objectives or curr_voi.apply_overlap is None:
+            if not curr_voi.objectives or curr_voi.overlap_handling == "ignore":
                 continue
 
             orig_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
             group_mask = group_mask | orig_mask
 
-            if curr_voi.apply_overlap is not False and carving_mask.any():
+            if curr_voi.overlap_handling == "cut" and carving_mask.any():
                 curr_mask = orig_mask & ~carving_mask
                 curr_voi.mask = curr_mask.astype(np.uint8)
                 if orig_mask.any() and not curr_mask.any():
@@ -893,11 +893,13 @@ class StructureSet(PyRadPlanBaseModel):
         :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
         the result is the same with and without overlap priorities applied.
 
-        VOIs with ``apply_overlap=None`` are ignored by the overlap handling and are left
-        out, so they never take voxels' tissue data from the other VOIs.
+        VOIs with ``overlap_handling="ignore"`` are left out of the overlap handling and of
+        this list, so they never take voxels' tissue data from the other VOIs.
         """
         labeled = [
-            (label, voi) for label, voi in enumerate(self.vois, 1) if voi.apply_overlap is not None
+            (label, voi)
+            for label, voi in enumerate(self.vois, 1)
+            if voi.overlap_handling != "ignore"
         ]
         return sorted(labeled, key=lambda item: -item[1].overlap_priority)
 

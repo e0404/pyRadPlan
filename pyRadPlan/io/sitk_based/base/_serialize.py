@@ -214,6 +214,7 @@ def build_sidecar(cst: StructureSet, encoding: str = "labelmap") -> dict:
             "beta_x": voi.tissue_properties.beta_x,
             "tissue_properties": voi.tissue_properties.model_dump(),
             "overlap_priority": voi.overlap_priority,
+            "overlap_handling": voi.overlap_handling,
             "visible": voi.visible,
             "color": list(voi.color),
         }
@@ -548,7 +549,14 @@ def segments_to_vois(per_phase: list[list[Segment]], ct) -> list[VOI]:
         }
         # Files written before tissue properties were stored only carry alpha/beta.
         lq_fields = () if meta.get("tissue_properties") is not None else ("alpha_x", "beta_x")
-        for field in ("tissue_properties", *lq_fields, "overlap_priority", "visible", "color"):
+        for field in (
+            "tissue_properties",
+            *lq_fields,
+            "overlap_priority",
+            "overlap_handling",
+            "visible",
+            "color",
+        ):
             if field in meta and meta[field] is not None:
                 kwargs[field] = meta[field]
         # Sidecars written before the color field was renamed use the former key.

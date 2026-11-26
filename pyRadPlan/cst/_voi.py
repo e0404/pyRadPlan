@@ -1,7 +1,7 @@
 from abc import ABC
 from collections.abc import Mapping
 import math
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 from typing_extensions import Annotated, Self
 import warnings
 from pydantic import (
@@ -126,6 +126,12 @@ class VOI(PyRadPlanBaseModel, ABC):
         `alpha_x` / `beta_x`.
     overlap_priority : int
         The overlap priority of the VOI. Lowest number is overlapping higher numbers.
+    overlap_handling : {"cut", "keep", "ignore"}
+        How :meth:`~pyRadPlan.cst.StructureSet.apply_overlap_priorities` treats the VOI:
+        ``"cut"`` (default) removes its voxels that belong to a VOI with higher priority,
+        ``"keep"`` leaves its voxels alone while it still takes voxels from VOIs with lower
+        priority, and ``"ignore"`` leaves it out of the overlap handling, like a VOI without
+        objectives. matRad has no equivalent, so the value is not exported to matRad.
     """
 
     name: str
@@ -142,11 +148,12 @@ class VOI(PyRadPlanBaseModel, ABC):
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
-    apply_overlap: Union[bool, None] = Field(
-        default=True,
+    overlap_handling: Literal["cut", "keep", "ignore"] = Field(
+        default="cut",
         description=(
-            "True: cut by higher priorities. False: keeps its voxels but still cuts lower "
-            "priorities. None: ignored by overlap handling."
+            "'cut': loses voxels to VOIs with higher priority. 'keep': keeps its voxels but "
+            "still cuts VOIs with lower priority. 'ignore': left out of the overlap handling. "
+            "Not exported to matRad, which has no equivalent."
         ),
     )
 

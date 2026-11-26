@@ -81,6 +81,8 @@ class NpzImporter(BaseImporter):
             color = vmeta.get("color", vmeta.get("visible_color"))
             if color is not None:
                 kwargs["color"] = color
+            if "overlap_handling" in vmeta:
+                kwargs["overlap_handling"] = vmeta["overlap_handling"]
             vois.append(validate_voi(**kwargs))
         return validate_cst(vois, ct)
 

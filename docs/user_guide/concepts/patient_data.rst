@@ -121,6 +121,11 @@ Each :class:`~pyRadPlan.cst.VOI` carries:
        ``tissue_properties.beta_x``.
    * - ``overlap_priority``
      - Determines which VOI "wins" in overlapping regions (lower = higher priority).
+   * - ``overlap_handling``
+     - How the VOI takes part in that: ``"cut"`` (default) removes its voxels that a VOI of
+       higher priority covers, ``"keep"`` keeps them while the VOI still cuts VOIs of lower
+       priority, and ``"ignore"`` leaves the VOI out of the overlap handling (e.g. a helper VOI
+       for an :ref:`outcome objective <concept_outcome_objectives>`).
    * - ``objectives``
      - List of optimization objectives attached to this structure
        (see :ref:`concept_optimization`).
