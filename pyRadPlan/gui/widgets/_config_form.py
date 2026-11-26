@@ -14,6 +14,7 @@ overrides, see :func:`~pyRadPlan.core.replace_nested`.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import types
@@ -255,7 +256,7 @@ class ConfigFormWidget(QWidget):
             editor = self._make_nested_editor(name, value, self._label_for(name, info), hidden)
         else:
             annotation, optional = _unwrap_optional(info.annotation)
-            commit = lambda v, name=name: self._set_value(name, v)
+            commit = functools.partial(self._set_value, name)
             if self._choices.get(name):
                 editor = self._make_suggestion_editor(value, self._choices[name], optional, commit)
             else:
