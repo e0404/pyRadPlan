@@ -368,7 +368,7 @@ def test_topas_input_lists_the_physics_modules_without_a_stray_quote(test_data_p
     pln, ct, cst, stf, _dij, _result = test_data_protons
     calc_dose_forward(ct, cst, stf, _topas_plan(pln, "constant_rbe", simu_dir=tmp_path))
 
-    modules = ParticleTOPASMCEngine(pln).physics_modules["default"]
+    modules = ParticleTOPASMCEngine(pln).physics_modules
     expected = f"sv:Ph/PhysicsList/Modules = {len(modules)} " + " ".join(f'"{m}"' for m in modules)
     lines = [
         line for line in _beam_setup_text(tmp_path).splitlines() if "PhysicsList/Modules" in line
