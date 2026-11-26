@@ -1,6 +1,7 @@
 """Compare the SimpleITK shim against real SimpleITK."""
 
 import itertools
+import zlib
 
 import numpy as np
 import pytest
@@ -318,7 +319,8 @@ GEOMETRIES = {
 @pytest.mark.parametrize("nn", [False, True])
 def test_resample(sitk, shim, name, interpolator, dtype, nn):
     (in_size, in_sp, in_or, in_dir), (out_size, out_sp, out_or, out_dir) = GEOMETRIES[name]
-    rng = np.random.default_rng(abs(hash((name, interpolator))) % 2**32)
+    # hash() of a str changes with every interpreter, so the data would differ per run
+    rng = np.random.default_rng(zlib.crc32(f"{name}/{interpolator}".encode()))
     shape = tuple(reversed(in_size))
     if np.issubdtype(dtype, np.integer):
         arr = rng.integers(0, 3 if dtype == np.uint8 else 1000, size=shape).astype(dtype)
@@ -341,6 +343,9 @@ def test_resample(sitk, shim, name, interpolator, dtype, nn):
         x, y = sitk.GetArrayFromImage(ra), shim.GetArrayFromImage(rb)
         assert np.mean(x != y) < 1e-3
         assert np.max(np.abs(x.astype(int) - y.astype(int))) <= 1
+    elif interpolator == "linear" and dtype == np.float32:
+        # ITK and the shim can round an interpolated value to neighbouring float32 values
+        assert_same(sitk, shim, ra, rb, rtol=2 * float(np.finfo(np.float32).eps))
     else:
         assert_same(sitk, shim, ra, rb, rtol=1e-12, atol=1e-12)
 

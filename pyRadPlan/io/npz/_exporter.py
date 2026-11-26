@@ -21,6 +21,7 @@ class NpzExporter(BaseExporter):
     name: ClassVar[str] = "NumPy Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".npz",)
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({"ct", "cst", "dose"})
 
     def save(
         self,

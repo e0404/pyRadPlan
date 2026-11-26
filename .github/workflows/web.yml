@@ -111,6 +111,7 @@ jobs:
             npm run e2e:viewer
             npm run e2e:plan
             npm run e2e:menus
+            npm run e2e:responsive
 
         - name: Upload the screenshots
           if: failure()

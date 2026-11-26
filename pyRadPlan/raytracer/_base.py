@@ -89,6 +89,11 @@ class RayTracerBase(ABC):
 
         Notes
         -----
+        Segments outside the cube have index -1 and NaN density. A ray tracer may fold
+        consecutive segments in the same voxel into the first one, which then carries their
+        summed length; the others get index -1, NaN density and length 0. ``alphas`` keeps all
+        segment boundaries, so only the sum of ``lengths`` over such a run matches them.
+
         The default implementation loops over the trace_ray function. The separate implementation is
         here to enable more performant implementations for specific ray tracers, e.g. through
         vectorization.
