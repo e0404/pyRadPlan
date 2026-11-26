@@ -97,6 +97,9 @@ class Objective(PyRadPlanBaseModel):
         Whether the objective evaluates all scenarios at once: ``compute_objective`` /
         ``compute_gradient`` then receive the values stacked over the scenarios, shape
         ``(S, n)``, and the scenario ``weights``, and the gradient has the same shape.
+    selectable : ClassVar[bool]
+        False for objectives that need configuration an objective editor or a generated
+        schema cannot provide; they are created in code.
     priority : float
         Weight/Priority assigned to the objective function.
     quantity : str
@@ -111,6 +114,7 @@ class Objective(PyRadPlanBaseModel):
     name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
     scenario_aware: ClassVar[bool] = False
+    selectable: ClassVar[bool] = True
     priority: float = Field(
         default=1.0,
         ge=0.0,

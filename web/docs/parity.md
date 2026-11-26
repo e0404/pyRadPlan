@@ -323,6 +323,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | "N objective(s)" | `:160,253-257` | verified on Pyodide | frontend | `cst.get` |
 | Table columns VOI / Objective / Penalty / Quantity / Robustness / Parameters / Remove | `:164-182` | verified on Pyodide | impl | `cst.get`, `objectives.catalog` |
 | Objective type combo (type change keeps priority and allowed robustness, resets quantity and parameters) | `:284-290,572-588` | verified on Pyodide | impl | `objectives.change_type` |
+| Objective created in code (not selectable, e.g. an outcome objective): not offered as a type; its row shows its own name with the type combo disabled, the other editors work | `_insert_row` | not run (unit test only) | impl | `objectives.catalog` (not listed), `objectives.change_type` (rejected) |
 | Penalty spin 0..1e9 | `:292-298,590-602` | verified on Pyodide | impl | `objectives.update` |
 | Quantity combo (RTQuantity names, identifiers) | `:300-312,604-618` | done (mock e2e) | impl | `objectives.update` |
 | Robustness combo (per class `available_robustness`) | `:314-333,620-634` | done (mock e2e) | impl | `objectives.catalog`, `objectives.update` |
