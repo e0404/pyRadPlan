@@ -1,8 +1,10 @@
 """Geometry helpers for the planning agent.
 
-Pure functions on SimpleITK masks (CT grid). Distances are always computed in physical
-millimetres via signed distance maps, so margins and rings are exact on anisotropic
-grids. Everything returns small, JSON-friendly dicts meant for an LLM.
+Pure functions on SimpleITK masks (CT grid). Distances are computed in physical
+millimetres between voxel centres via signed distance maps, so margins and rings respect
+anisotropic spacing but are resolved to the voxel grid: along each axis they round down
+to whole voxels (see :func:`expand`). Everything returns small, JSON-friendly dicts
+meant for an LLM.
 """
 
 from typing import Literal, Optional
@@ -56,10 +58,20 @@ def signed_distance_mm(mask: sitk.Image) -> np.ndarray:
 
 
 def expand(mask: sitk.Image, margin_mm: float) -> np.ndarray:
-    """Isotropic margin in mm (negative values shrink)."""
-    if margin_mm == 0:
-        return as_bool(mask).copy()
-    return signed_distance_mm(mask) <= margin_mm
+    """Isotropic margin in mm (negative values shrink), resolved to the voxel grid.
+
+    Growing adds the voxels whose centre is within *margin_mm* of the centre of a mask
+    voxel; shrinking removes the mask voxels whose centre is within the margin of the
+    centre of a voxel outside the mask. Along each axis a margin therefore rounds down to
+    whole voxels for both signs: 1 mm on 5 mm slices changes nothing across the slices,
+    5 mm changes one slice.
+    """
+    arr = as_bool(mask)
+    if margin_mm > 0:
+        return signed_distance_mm(mask) <= margin_mm
+    if margin_mm == 0 or arr.all():
+        return arr.copy()
+    return signed_distance_mm(to_mask(~arr, mask)) > -margin_mm
 
 
 def centroid_mm(arr: np.ndarray, reference: sitk.Image) -> Optional[np.ndarray]:

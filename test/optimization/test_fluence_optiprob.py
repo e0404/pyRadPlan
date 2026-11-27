@@ -385,6 +385,11 @@ def test_initial_fluence_is_checked_and_clipped(small_proton_case, monkeypatch):
         fluence_optimization(ct, cst, stf, dij, pln, initial_fluence=np.ones(3))
 
     prob = NonLinearFluencePlanningProblem(pln)
+    for bad in (np.nan, np.inf, -np.inf):
+        x0 = np.ones(dij.total_num_of_bixels)
+        x0[0] = bad
+        with pytest.raises(ValueError, match="finite"):
+            prob.solve(ct, cst, stf, dij, x0=x0)
     prob.solve(ct, cst, stf, dij, x0=-np.ones(dij.total_num_of_bixels))
     assert np.all(prob._initial_point() == 0)
     prob.solve(ct, cst, stf, dij)

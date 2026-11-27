@@ -1,5 +1,6 @@
 """Evaluation of plans against a protocol, plan scores and the plans a run keeps."""
 
+import math
 from typing import Any, Mapping, Optional
 
 import numpy as np
@@ -27,17 +28,26 @@ def evaluate_protocol(
     :class:`~pyRadPlan.analysis.QICollection`). *aliases* maps protocol structure
     names to VOI names. Goals whose structure cannot be found are not evaluated and do
     not count in the score; they are listed under ``unresolved_goals`` (their structures
-    under ``unresolved_structures``).
+    under ``unresolved_structures``). The same holds for goals whose metric has no finite
+    value because the structure has no voxels; their structures are listed under
+    ``empty_structures``, which is only present if there are any.
     """
     aliases = aliases or {}
     rows = []
     unresolved = []
+    missing = set()
+    empty = set()
     for g in protocol.goals:
         voi = aliases.get(g.voi, g.voi)
         if voi not in qis:
             unresolved.append(g)
+            missing.add(g.voi)
             continue
         value = float(qis[voi][qi_key(g.metric)].value)
+        if not math.isfinite(value):
+            unresolved.append(g)
+            empty.add(g.voi)
+            continue
         margin = value - g.value if g.op == ">=" else g.value - value
         rows.append(
             {
@@ -49,14 +59,17 @@ def evaluate_protocol(
                 "passed": margin >= 0,
             }
         )
-    return {
+    report = {
         "all_hard_passed": all(r["passed"] for r in rows if r["hard"]),
         "num_failed": sum(not r["passed"] for r in rows),
         "score": plan_score(rows),
-        "unresolved_structures": sorted({g.voi for g in unresolved}),
+        "unresolved_structures": sorted(missing),
         "unresolved_goals": [g.label for g in unresolved],
         "goals": rows,
     }
+    if empty:
+        report["empty_structures"] = sorted(empty)
+    return report
 
 
 def voxel_metric(voxels: np.ndarray, key: str) -> float:
@@ -78,13 +91,15 @@ def plan_score(goal_rows: list[dict]) -> float:
     """Score a plan from its evaluated goals: higher is better, >= 0 when all goals pass.
 
     Weighted mean of the relative goal margins (margin / goal value), each clipped to
-    [-100 %, +20 %], in percent; hard goals weigh three times as much as soft ones.
+    [-100 %, +20 %], in percent; hard goals weigh three times as much as soft ones. A
+    margin that is not finite counts as -100 %, so the score is always finite.
     """
     lo, hi = _SCORE_CLIP
     num = den = 0.0
     for r in goal_rows:
         w = _HARD_WEIGHT if r["hard"] else 1.0
-        num += w * min(max(r["rel_margin"], lo), hi)
+        rel = r["rel_margin"]
+        num += w * (min(max(rel, lo), hi) if math.isfinite(rel) else lo)
         den += w
     return round(100 * num / den, 2) if den else 0.0
 
@@ -126,16 +141,18 @@ def select_distinct_plans(
 ) -> list[PlanRecord]:
     """Pick up to *n* good plans that are each good in a different way.
 
-    Plans are ranked by (all hard goals passed, score) and the best one is picked first.
+    Plans are ranked by (all hard goals passed, score) and the best one is picked first;
+    equally ranked plans keep their order, a score that is not finite ranks last.
     Each further plan must beat every plan picked so far by at least *min_gain* (relative
     margin, 0.05 = 5 % of the goal value) on at least one goal. Returns fewer than *n*
     plans if there are no such alternatives, none if *plans* is empty.
     """
-    ranked = sorted(
-        plans,
-        key=lambda p: (p.evaluation["all_hard_passed"], p.evaluation["score"]),
-        reverse=True,
-    )
+
+    def rank(p: PlanRecord) -> tuple[bool, float]:
+        score = p.evaluation["score"]
+        return p.evaluation["all_hard_passed"], score if math.isfinite(score) else -math.inf
+
+    ranked = sorted(plans, key=rank, reverse=True)
     picks: list[PlanRecord] = []
     for p in ranked:
         if len(picks) == n:

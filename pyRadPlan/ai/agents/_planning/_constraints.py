@@ -2,8 +2,9 @@
 
 Constraint tables (JSON, see :class:`ConstraintTable`) are looked up and converted to
 the plan's fractionation by deterministic code, so the numbers an agent works with come
-from a table entry, never from LLM memory. The bundled ``demo`` table holds dummy values
-only; give the agent your own validated table as a file.
+from a table entry, never from LLM memory. The bundled ``demo`` table holds simplified
+QUANTEC/RTOG-style values for demonstration only (not validated, not for clinical use);
+give the agent your own validated table as a file.
 """
 
 import json
@@ -11,9 +12,10 @@ import math
 import re
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # --------------------------------------------------------------------------------------
 # Goals
@@ -23,7 +25,25 @@ D_RE = re.compile(r"^D(\d+(?:\.\d+)?)$")
 V_RE = re.compile(r"^V(\d+(?:\.\d+)?)Gy$")
 
 
-class Goal(BaseModel):
+def _check_metric(metric: str) -> str:
+    if m := D_RE.match(metric):
+        if float(m.group(1)) > 100:
+            raise ValueError(f"Metric '{metric}': the volume must be within 0 to 100 %.")
+    elif metric not in ("mean", "max", "min") and not V_RE.match(metric):
+        raise ValueError(f"Unsupported metric '{metric}'.")
+    return metric
+
+
+def _check_volume(metric: str, value: float) -> None:
+    if V_RE.match(metric) and value > 100:
+        raise ValueError(f"{metric}: the volume must be within 0 to 100 %, got {value:g}.")
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Goal(_Strict):
     """One clinical goal, e.g. ``PTV D95 >= 1.9`` or ``SpinalCord max <= 1.5``.
 
     Dose values use the plan's ``dose_convention`` (per fraction by default),
@@ -35,16 +55,16 @@ class Goal(BaseModel):
         description="'mean', 'max', 'min', 'D<vol%>' (e.g. 'D95') or 'V<dose>Gy' (e.g. 'V20Gy')."
     )
     op: Literal["<=", ">="]
-    value: float
+    value: float = Field(ge=0, allow_inf_nan=False)
     hard: bool = Field(True, description="Hard constraint (must pass) or soft goal.")
     source: Optional[str] = Field(None, description="Where the goal comes from.")
 
-    def model_post_init(self, _ctx: Any) -> None:
-        """Validate the metric string."""
-        if self.metric not in ("mean", "max", "min") and not (
-            D_RE.match(self.metric) or V_RE.match(self.metric)
-        ):
-            raise ValueError(f"Unsupported metric '{self.metric}'.")
+    _metric_is_supported = field_validator("metric")(_check_metric)
+
+    @model_validator(mode="after")
+    def _volume_in_percent(self) -> "Goal":
+        _check_volume(self.metric, self.value)
+        return self
 
     @property
     def label(self) -> str:
@@ -57,7 +77,7 @@ class Goal(BaseModel):
         return f"{self.label} ({'hard' if self.hard else 'soft'})"
 
 
-class Protocol(BaseModel):
+class Protocol(_Strict):
     """A set of clinical goals the plan is evaluated against.
 
     ``locked`` protocols (given by a human) cannot be replaced by the agent; it can
@@ -81,7 +101,7 @@ class Protocol(BaseModel):
 DoseConvention = Literal["total", "per_fraction"]
 
 
-class GoalFile(BaseModel):
+class GoalFile(_Strict):
     """A JSON file of goals (see :func:`save_goals` and :func:`load_goals`)."""
 
     format: Literal["pyRadPlan-goals"] = "pyRadPlan-goals"
@@ -113,27 +133,38 @@ def load_goals(
 ) -> tuple[list[Goal], list[str]]:
     """Read a goal file and convert its doses to the plan's *dose* convention.
 
-    Total and per-fraction doses are converted with the plan's number of *fractions*.
-    A different fractionation in the file is reported in the returned notes, not
-    converted (that would need an EQD2 conversion with an alpha/beta per structure).
+    Total and per-fraction doses are converted with the file's own ``fractions``, the
+    fractionation its doses were written for (the plan's *fractions* if the file states
+    none): 1.9 Gy per fraction for 30 fractions are 57 Gy in total, whatever the plan's
+    number of fractions. A fractionation differing from the plan's is reported in the
+    returned notes; the doses are not adapted to it (that would need an EQD2 conversion
+    with an alpha/beta per structure).
     """
     data = GoalFile.model_validate_json(Path(path).read_text(encoding="utf-8"))
+    file_fractions = fractions if data.fractions is None else data.fractions
     notes = []
-    if data.fractions is not None and data.fractions != fractions:
+    if file_fractions != fractions:
+        how = (
+            "used as written"
+            if data.dose == dose
+            else f"converted between per-fraction and total with the file's {file_fractions} "
+            "fractions"
+        )
         notes.append(
-            f"The goals are for {data.fractions} fractions, the plan has {fractions}; "
-            "the doses are not converted to the plan's fractionation."
+            f"The goals are for {file_fractions} fractions, the plan has {fractions}: the "
+            f"doses are {how} and are not adapted to the plan's fractionation (no EQD2 "
+            "conversion)."
         )
     if data.dose == dose:
         return data.goals, notes
-    factor = 1.0 / fractions if dose == "per_fraction" else float(fractions)
+    factor = 1.0 / file_fractions if dose == "per_fraction" else float(file_fractions)
     return [_scale_goal(g, factor) for g in data.goals], notes
 
 
 def _scale_goal(goal: Goal, factor: float) -> Goal:
     """Multiply the doses of *goal* by *factor* (the dose in ``V<dose>Gy`` included)."""
     if m := V_RE.match(goal.metric):
-        return goal.model_copy(update={"metric": f"V{_round(float(m.group(1)) * factor):g}Gy"})
+        return goal.model_copy(update={"metric": _v_metric(float(m.group(1)) * factor)})
     return goal.model_copy(update={"value": _round(goal.value * factor)})
 
 
@@ -184,39 +215,52 @@ def convert_fractionation(
 # --------------------------------------------------------------------------------------
 
 
-class TableConstraint(BaseModel):
+class TableConstraint(_Strict):
     metric: str
     op: Literal["<=", ">="]
-    value: float
+    value: float = Field(ge=0, allow_inf_nan=False)
     hard: bool = True
     unit: Optional[Literal["Gy", "%", "%Rx"]] = None
     endpoint: Optional[str] = None
     note: Optional[str] = None
 
+    _metric_is_supported = field_validator("metric")(_check_metric)
 
-class TableStructure(BaseModel):
-    alpha_beta: Optional[float] = None
+    @model_validator(mode="after")
+    def _unit_fits_metric(self) -> "TableConstraint":
+        allowed = ("%",) if V_RE.match(self.metric) else ("Gy", "%Rx")
+        if self.unit is not None and self.unit not in allowed:
+            raise ValueError(
+                f"{self.metric}: unit '{self.unit}' is not supported, use "
+                f"{' or '.join(repr(u) for u in allowed)}."
+            )
+        _check_volume(self.metric, self.value)
+        return self
+
+
+class TableStructure(_Strict):
+    alpha_beta: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
     constraints: list[TableConstraint]
 
 
-class Prescription(BaseModel):
-    total_dose_gy: float
-    num_fractions: int
+class Prescription(_Strict):
+    total_dose_gy: float = Field(gt=0, allow_inf_nan=False)
+    num_fractions: int = Field(ge=1)
 
 
-class TableSite(BaseModel):
+class TableSite(_Strict):
     description: str = ""
     prescription: Optional[Prescription] = None
     targets: dict[str, TableStructure] = Field(default_factory=dict)
     structures: dict[str, TableStructure] = Field(default_factory=dict)
 
 
-class DoseReference(BaseModel):
+class DoseReference(_Strict):
     type: Literal["EQD2", "fractionation"]
     note: str = ""
 
 
-class ConstraintTable(BaseModel):
+class ConstraintTable(_Strict):
     """A table of organ and target constraints per treatment site.
 
     ``dose_reference.type`` is ``"EQD2"`` (dose values are EQD2, converted to the plan's
@@ -225,8 +269,9 @@ class ConstraintTable(BaseModel):
     ``sites.<site>.structures`` and ``sites.<site>.targets`` map structure names to an
     ``alpha_beta`` and their constraints: ``metric`` (``mean``, ``max``, ``min``,
     ``D<vol%>``, ``V<dose>Gy``), ``op``, ``value`` (Gy for dose metrics, % for V metrics),
-    ``hard`` and an optional ``unit`` (``"%Rx"``: percent of the plan's prescription, not
-    converted).
+    ``hard`` and an optional ``unit``: ``"Gy"`` (default) or ``"%Rx"`` (percent of the
+    plan's prescription, not converted) for dose metrics, ``"%"`` for V metrics. Unknown
+    keys are rejected.
     """
 
     id: str
@@ -247,7 +292,7 @@ def available_constraint_tables() -> dict[str, str]:
     out = {}
     for f in _table_dir().iterdir():
         if f.name.endswith(".json"):
-            t = ConstraintTable.model_validate_json(f.read_text())
+            t = ConstraintTable.model_validate_json(f.read_text(encoding="utf-8"))
             out[t.id] = t.name
     return out
 
@@ -256,17 +301,22 @@ def load_constraint_table(table: Union[str, Path]) -> ConstraintTable:
     """Load a bundled table by id (e.g. ``"demo"``) or a JSON file path."""
     p = Path(table)
     if p.suffix == ".json" and p.exists():
-        return ConstraintTable.model_validate_json(p.read_text())
+        return ConstraintTable.model_validate_json(p.read_text(encoding="utf-8"))
     f = _table_dir() / f"{table}.json"
     if not f.is_file():
         raise ValueError(
             f"Unknown constraint table '{table}'. Available: {list(available_constraint_tables())}"
         )
-    return ConstraintTable.model_validate_json(f.read_text())
+    return ConstraintTable.model_validate_json(f.read_text(encoding="utf-8"))
 
 
 def _round(x: float, digits: int = 6) -> float:
     return float(f"{x:.{digits}g}")
+
+
+def _v_metric(dose: float, digits: int = 6) -> str:
+    """``V<dose>Gy`` without an exponent, which the metric pattern does not accept."""
+    return f"V{np.format_float_positional(_round(dose, digits), trim='-')}Gy"
 
 
 def site_goals(
@@ -290,6 +340,8 @@ def site_goals(
     """
     if site not in table.sites:
         raise ValueError(f"Site '{site}' not in table '{table.id}'. Sites: {list(table.sites)}")
+    if not default_alpha_beta > 0:
+        raise ValueError(f"default_alpha_beta must be positive, got {default_alpha_beta}.")
     s = table.sites[site]
     notes: list[str] = []
     if table.disclaimer:
@@ -331,7 +383,9 @@ def site_goals(
         (n, st, False) for n, st in s.structures.items()
     ]
     for name, st, is_target in groups:
-        ab = st.alpha_beta or (10.0 if is_target else default_alpha_beta)
+        ab = st.alpha_beta
+        if ab is None:
+            ab = 10.0 if is_target else default_alpha_beta
         for c in st.constraints:
             src = f"{table.id} v{table.version} / {site} / {name} {c.metric}"
             if c.endpoint:
@@ -343,9 +397,8 @@ def site_goals(
                     continue
                 value = rx * c.value / 100.0 * scale  # relative to the plan Rx, no conversion
             elif m := V_RE.match(c.metric):
-                thr = to_plan_dose(float(m.group(1)), ab)
-                metric = f"V{_round(thr, 4):g}Gy"
-            elif c.unit != "%":  # dose metric in Gy
+                metric = _v_metric(to_plan_dose(float(m.group(1)), ab), 4)
+            else:
                 value = to_plan_dose(c.value, ab)
                 unconverted = c.value * scale
                 if c.metric == "mean" and not math.isclose(value, unconverted, rel_tol=1e-3):

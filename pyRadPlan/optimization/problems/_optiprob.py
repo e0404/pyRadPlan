@@ -631,7 +631,8 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             The Dij object or compatible dictionary.
         x0 : Optional[Array], optional
             Starting point, one value per bixel of the dij (e.g. the fluence of an earlier
-            solve). Negative values are clipped to 0. Default: all zeros.
+            solve). Negative values are clipped to 0, NaN or infinite values raise a
+            ValueError. Default: all zeros.
 
         Returns
         -------
@@ -645,13 +646,15 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._dij = validate_dij(dij)
         self._x0 = None
         if x0 is not None:
-            x0 = np.clip(np.asarray(xp_utils.to_numpy(x0), dtype=np.float64).ravel(), 0.0, None)
+            x0 = np.asarray(xp_utils.to_numpy(x0), dtype=np.float64).ravel()
             if x0.size != self._dij.total_num_of_bixels:
                 raise ValueError(
                     f"x0 has {x0.size} values, but the dij has "
                     f"{self._dij.total_num_of_bixels} bixels."
                 )
-            self._x0 = x0
+            if not np.isfinite(x0).all():
+                raise ValueError("x0 must be finite, but contains NaN or infinite values.")
+            self._x0 = np.clip(x0, 0.0, None)
 
         if self.obj_history is not None:
             # Cleared in place rather than replaced, so a caller holding the list still sees
