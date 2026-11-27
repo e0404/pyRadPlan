@@ -56,9 +56,19 @@ def test_every_export_format_is_listed_and_available_natively(client):
     dicom = [e for e in exports if e["object"] == "cst" and e["format"] == "dcm"]
     assert {e["structure_format"] for e in dicom} == {"rtstruct", "seg"}
     cst_formats = {e["format"]: e.get("keeps_objectives") for e in exports if e["object"] == "cst"}
-    assert cst_formats["mat"] and cst_formats["pickle"] and not cst_formats["npz"]
+    assert cst_formats["mat"] and cst_formats["pickle"] and cst_formats["hdf5"]
+    assert not cst_formats["npz"]
+    nrrd = [
+        e.get("structure_format")
+        for e in exports
+        if e["object"] == "cst" and e["format"] == "nrrd"
+    ]
+    assert nrrd == [None, "layers"]
+    workspace = [e["format"] for e in exports if e["object"] == "workspace"]
+    assert workspace == ["hdf5", "pickle"]
     imports = {e["format"]: e for e in info["capabilities"]["formats"]["import"]}
     assert imports["mat"]["available"] and ".pkl" in imports["pickle"]["extensions"]
+    assert imports["hdf5"]["available"] and imports["hdf5"]["extensions"] == [".h5", ".hdf5"]
 
 
 @pytest.mark.parametrize("fmt", ["mat", "pickle"])
@@ -99,7 +109,7 @@ def _names(cst):
     return sorted(voi.name for voi in cst.vois)
 
 
-@pytest.mark.parametrize("fmt", ["pickle", "npz"])
+@pytest.mark.parametrize("fmt", ["pickle", "npz", "hdf5"])
 def test_structure_set_round_trip(pipeline, client, fmt):
     source_client, source = pipeline
     result, data = _save(source_client, {"object": "cst", "format": fmt})
@@ -215,18 +225,59 @@ def test_result_mat_holds_a_dose_of_another_grid_on_the_ct_grid(tmp_path):
     np.testing.assert_allclose(gui["physicalDose_imported"][2:6, 2:8, 2:4], 2.0)
 
 
-def test_result_dicom_zip_holds_one_rtdose_per_quantity(pipeline, tmp_path):
+def test_result_dicom_zip_holds_ct_doses_and_the_plan(pipeline, tmp_path):
     import pydicom
 
     source_client, source = pipeline
-    single, data = _save(source_client, {"object": "result", "format": "dcm"})
-    assert _unzip(data, tmp_path / "one") == ["RTDOSE.dcm"]
-    ds = pydicom.dcmread(tmp_path / "one" / "RTDOSE.dcm")
+    with pytest.warns(UserWarning):  # a photon plan of bixels is not deliverable
+        single, data = _save(source_client, {"object": "result", "format": "dcm"})
+    assert single["filename"] == "result_dicom.zip"
+    members = _unzip(data, tmp_path / "one")
+    assert {"RTDOSE_physical_dose.dcm", "RTPLAN.dcm"} <= set(members)
+    assert any(name.startswith("CT_") for name in members)
+    ds = pydicom.dcmread(tmp_path / "one" / "RTDOSE_physical_dose.dcm")
+    plan = pydicom.dcmread(tmp_path / "one" / "RTPLAN.dcm")
+    assert ds.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID == plan.SOPInstanceUID
     dose = ds.pixel_array * float(ds.DoseGridScaling)
     np.testing.assert_allclose(dose.max(), _dose_array(source).max(), rtol=1e-6)
-    keys = ["physical_dose", "physical_dose_beam 1"]
-    several, data = _save(source_client, {"object": "result", "format": "dcm", "quantities": keys})
-    assert several["files"] == ["physical_dose/RTDOSE.dcm", "physical_dose_beam_1/RTDOSE.dcm"]
+
+
+def test_result_dicom_of_several_results_writes_a_folder_per_result(pipeline, tmp_path):
+    import pydicom
+
+    source_client, source = pipeline
+    ws = source.workspace
+    ws.add_result("measured", {"physical_dose": ws.result.physical_dose.values})
+    try:
+        keys = ["physical_dose", "measured/physical_dose"]
+        with pytest.warns(UserWarning):
+            several, data = _save(
+                source_client, {"object": "result", "format": "dcm", "quantities": keys}
+            )
+    finally:
+        ws.remove_result("measured")
+    members = _unzip(data, tmp_path)
+    active = ws.active_result
+    assert {f"{active}/RTPLAN.dcm", f"{active}/RTDOSE_physical_dose.dcm"} <= set(members)
+    assert "measured/RTDOSE_physical_dose.dcm" in members
+    assert not any(name.startswith("measured/RTPLAN") for name in members)
+    measured = pydicom.dcmread(tmp_path / "measured" / "RTDOSE_physical_dose.dcm")
+    assert "ReferencedRTPlanSequence" not in measured
+
+
+def test_result_dicom_needs_a_dose_quantity(pipeline):
+    from pyRadPlan.app import PreconditionError
+
+    _, source = pipeline
+    with pytest.raises(PreconditionError, match="physical and RBE-weighted") as err:
+        source.prepare(
+            "save_path",
+            object="result",
+            format="dcm",
+            path="x",
+            quantities=["physical_dose_beam 0"],
+        )
+    assert err.value.code == "no_data"
 
 
 @pytest.mark.parametrize("fmt", ["nifti", "nrrd", "meta"])
@@ -243,7 +294,10 @@ def test_result_image_files(pipeline, tmp_path, fmt):
     assert several["filename"] == "result.zip" and len(several["files"]) == 2
 
 
-def test_workspace_pickle_round_trip_restores_every_result(client):
+@pytest.mark.parametrize(
+    ("fmt", "filename"), [("pickle", "workspace.pkl"), ("hdf5", "workspace.h5")]
+)
+def test_workspace_round_trip_restores_every_result(client, fmt, filename):
     session = _patient_client(client)
     dose = sitk.Image(session.workspace.ct.cube_hu)
     coarse = sitk.Image([4, 4, 4], sitk.sitkFloat32)
@@ -256,8 +310,8 @@ def test_workspace_pickle_round_trip_restores_every_result(client):
         },
         active_result="plan2",
     )
-    result, data = _save(client, {"object": "workspace", "format": "pickle"})
-    assert result["filename"] == "workspace.pkl"
+    result, data = _save(client, {"object": "workspace", "format": fmt})
+    assert result["filename"] == filename
 
     other = type(client)()
     other.session = other.ok("session.create", session=False)["result"]["session"]
@@ -324,14 +378,24 @@ def _save_path(session, **params):
     return session.execute(session.prepare("save_path", **params))
 
 
-@pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
-def test_workspace_saved_to_a_path_loads_back(pipeline, tmp_path, suffix):
+@pytest.mark.parametrize(
+    ("fmt", "suffix", "default"),
+    [
+        ("pickle", ".pkl", ".pkl"),
+        ("pickle", ".pickle", ".pkl"),
+        ("pickle", "", ".pkl"),
+        ("hdf5", ".h5", ".h5"),
+        ("hdf5", ".hdf5", ".h5"),
+        ("hdf5", "", ".h5"),
+    ],
+)
+def test_workspace_saved_to_a_path_loads_back(pipeline, tmp_path, fmt, suffix, default):
     from pyRadPlan.app import Session
 
     _, source = pipeline
     path = tmp_path / f"ws{suffix}"
-    written = _save_path(source, object="workspace", format="pickle", path=path)
-    assert written == [str(path) if suffix else str(path) + ".pkl"]
+    written = _save_path(source, object="workspace", format=fmt, path=path)
+    assert written == [str(path) if suffix else str(path) + default]
     restored = Session(auto_plan=False)
     restored.load_path(written[0])
     assert restored.workspace.present() == source.workspace.present()
@@ -346,6 +410,46 @@ def test_a_path_with_another_ending_is_refused(pipeline, tmp_path, name):
     ):
         source.prepare("save_path", object="workspace", format="pickle", path=tmp_path / name)
     assert not (tmp_path / name).exists()
+
+
+def test_hdf5_workspace_keeps_the_objectives_and_the_result(pipeline, tmp_path):
+    from pyRadPlan.app import Session
+
+    _, source = pipeline
+    written = _save_path(source, object="workspace", format="hdf5", path=tmp_path / "ws.h5")
+    restored = Session(auto_plan=False)
+    restored.load_path(written[0])
+    for voi in source.workspace.cst.vois:
+        loaded = next(v for v in restored.workspace.cst.vois if v.name == voi.name)
+        assert [type(o) for o in loaded.objectives] == [type(o) for o in voi.objectives]
+    assert restored.workspace.pln == source.workspace.pln
+    np.testing.assert_array_equal(
+        restored.workspace.result.fluence, source.workspace.result.fluence
+    )
+
+
+def test_dicom_save_into_a_dicom_folder_asks_for_overwrite(pipeline, tmp_path):
+    from pyRadPlan.app import PreconditionError
+
+    _, source = pipeline
+    target = tmp_path / "dicom"
+    _save_path(source, object="cst", format="dcm", path=target, structure_format="rtstruct")
+    with pytest.raises(PreconditionError, match="already contains") as err:
+        source.prepare("save_path", object="cst", format="dcm", path=target)
+    assert err.value.code == "exists"
+    assert _save_path(source, object="cst", format="dcm", path=target, overwrite=True) == [
+        str(target)
+    ]
+
+
+def test_slicer_segmentation_is_written_to_a_folder(pipeline, tmp_path):
+    from pyRadPlan.io import load_data
+
+    _, source = pipeline
+    target = tmp_path / "slicer"
+    _save_path(source, object="cst", format="nrrd", structure_format="layers", path=target)
+    assert (target / "cst.seg.nrrd").exists()
+    assert _names(load_data(target)["cst"]) == _names(source.workspace.cst)
 
 
 def test_label_maps_are_written_to_a_folder(pipeline, tmp_path):
@@ -392,7 +496,9 @@ def test_dialog_filters_come_from_the_format_tables():
     assert load[-1] == "All files (*)"
     assert "MATLAB / matRad (*.mat *.MAT)" in load
     assert not any(entry.startswith("DICOM") for entry in load)
-    assert export_filter(export_entries("workspace")) == "pyRadPlan workspace (*.pkl *.pickle)"
+    assert export_filter(export_entries("workspace")) == (
+        "pyRadPlan workspace, HDF5 (*.h5 *.hdf5);;pyRadPlan workspace, pickle (*.pkl *.pickle)"
+    )
     images = export_entries("result", ("nifti", "nrrd", "meta"))
     text = export_filter(images)
     assert text == "NIfTI (*.nii.gz *.nii);;NRRD (*.nrrd);;MetaImage (*.mha *.mhd)"

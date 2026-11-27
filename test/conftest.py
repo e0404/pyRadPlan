@@ -16,6 +16,8 @@ from pyRadPlan.dose.engines._fredmc import read_sparse_dij_bin_v21
 from pyRadPlan import settings
 
 settings.xp.preferred_gpu_array_backend = "array_api_strict"
+# Hermetic by default: tests that exercise the hub mock it and switch this off themselves.
+settings.ai.modelhub_offline = True
 
 
 collect_ignore_glob = [] if importlib.util.find_spec("PySide6") is not None else ["gui/**/*.py"]

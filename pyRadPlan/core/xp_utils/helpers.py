@@ -264,6 +264,35 @@ def is_host_device(device: Any) -> bool:
     return dlpack_device is None or dlpack_device[0] == DLPACK_CPU
 
 
+def device_string(device: Any) -> Optional[str]:
+    """Backend-neutral ``"cpu"`` / ``"cuda:<n>"`` name of a device.
+
+    The backends name their devices differently (``str(cupy.cuda.Device(0))`` is
+    ``"<CUDA Device 0>"``), so a device object cannot simply be stringified for a
+    consumer outside its own backend, such as the ML framework a model is loaded into.
+
+    Parameters
+    ----------
+    device : Any
+        A backend device object, a device string, a DLPack tuple, or ``None``.
+
+    Returns
+    -------
+    str or None
+        ``"cpu"`` or ``"cuda:<index>"``; ``None`` for ``None`` and for devices with no
+        DLPack equivalent (namespaces without a device concept), leaving the choice to
+        the caller.
+    """
+    try:
+        dlpack_device = _parse_device_to_dlpack(device)  # None only for device=None
+    except ValueError:
+        logger.debug("Device %r has no DLPack equivalent.", device)
+        return None
+    if dlpack_device is None:
+        return None
+    return "cpu" if dlpack_device[0] == DLPACK_CPU else f"cuda:{dlpack_device[1]}"
+
+
 def device_cache_key(arr: Any) -> Any:
     """
     Hashable identity of the device an array lives on, usable as a dict key.
@@ -491,7 +520,7 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     Free unused GPU memory for the given array namespace.
 
     This function releases cached GPU memory back to the system. For CuPy,
-    it frees all blocks in the default memory pool. For PyTorch, it empties
+    it frees the default and pinned memory pools. For PyTorch, it empties
     the CUDA cache.
 
     Parameters
@@ -508,6 +537,7 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp) and cp is not None:
         cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
     elif array_api_compat.is_torch_namespace(xp) and torch is not None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

@@ -47,19 +47,29 @@ def register_objective(obj_cls: Type[Objective]) -> None:
         OBJECTIVES[obj_name] = obj_cls
 
 
-def get_available_objectives() -> dict[str, Type[Objective]]:
+def get_available_objectives(selectable_only: bool = False) -> dict[str, Type[Objective]]:
     """
-    Get a list of available objectives.
+    Get the available objectives.
+
+    Parameters
+    ----------
+    selectable_only : bool, optional
+        Leave out the objectives an objective editor cannot create (see
+        :attr:`Objective.selectable`). By default all registered objectives are returned.
 
     Returns
     -------
-    list
-        A list of available objectives.
+    dict
+        The objective classes by their names.
     """
+    if selectable_only:
+        return {name: obj_cls for name, obj_cls in OBJECTIVES.items() if obj_cls.selectable}
     return OBJECTIVES
 
 
-def get_objectives_union(exclude_image_references: bool = False) -> Any:
+def get_objectives_union(
+    exclude_image_references: bool = False, selectable_only: bool = False
+) -> Any:
     """
     Build a discriminated union type of all registered objectives.
 
@@ -72,6 +82,9 @@ def get_objectives_union(exclude_image_references: bool = False) -> Any:
     exclude_image_references : bool, optional
         Exclude objectives with image-reference parameters (e.g. a reference
         dose image), which cannot be represented in a JSON schema.
+    selectable_only : bool, optional
+        Exclude the objectives that are created in code (see :attr:`Objective.selectable`),
+        e.g. for a schema whose instances come from an untrusted source.
 
     Returns
     -------
@@ -80,7 +93,7 @@ def get_objectives_union(exclude_image_references: bool = False) -> Any:
     """
     obj_classes = [
         obj_cls
-        for obj_cls in OBJECTIVES.values()
+        for obj_cls in get_available_objectives(selectable_only).values()
         if not (exclude_image_references and "image_reference" in obj_cls._parameter_types())
     ]
     if len(obj_classes) == 1:

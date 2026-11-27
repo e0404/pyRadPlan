@@ -132,6 +132,13 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
   { v: 1, method: "plan.get", params: { detail: true } },
   { v: 1, method: "plan.options" },
   { v: 1, method: "plan.form", params: { kind: "solver", name: "scipy" } },
+  {
+    v: 1,
+    method: "plan.form_choices",
+    params: { kind: "engine", name: "AIBeamlet", radiation_mode: "protons" },
+    note: "no hub client in the browser: no models, and no error",
+    expect: (r) => (r.id === "engine:AIBeamlet" && !(r.choices.model ?? []).length) || JSON.stringify(r),
+  },
   { v: 1, method: "plan.tissue_check" },
   { v: 1, method: "base_data.list", params: { kind: "machines" }, expect: (r) => has(r, "rows") },
   {
@@ -151,7 +158,7 @@ data = load_data("/tmp/smoke/tg119_native.pkl")
   { v: 1, method: "analysis.dvh", params: { range: "shared" } },
   { v: 1, method: "analysis.qi", params: { quantity: "physical_dose" } },
   { v: 1, method: "analysis.compare_units", params: { a: "physical_dose", b: "physical_dose" } },
-  // Sequencing (amendments 27 and 28): settings, the run on the active result, its sequence view.
+  // Sequencing (amendments 29 and 30): settings, the run on the active result, its sequence view.
   { v: 1, method: "plan.form", params: { kind: "sequencer", name: "xia" }, expect: (r) => has(r, "fields", "values") },
   {
     v: 1,

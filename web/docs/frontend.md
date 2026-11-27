@@ -126,14 +126,14 @@ production host must send the same headers (or use a service-worker shim such as
   Calc. Dose Influence generates the stf again every time (v1 amendment 20), so its dot turns
   green for both `stf` and `dij`; a structure edit leaves the stf "done" (as in Qt) and the next
   calculation still places the beams at the new automatic isocenter.
-- Run Sequencing (amendment 27) is enabled by `state.sequencing.available`, not by
+- Run Sequencing (amendment 29) is enabled by `state.sequencing.available`, not by
   `state.actions`; while disabled its tooltip is `state.sequencing.reason`. It runs
   `workflow.sequence` like the other steps (busy bar, Stop, unapplied plan edits offered first)
   and the views refetch by revision: the active result gains the `"<identifier>_sequenced"`
   quantities, which `results/resultGroups.ts` names "<name> (sequenced)" for backends without
   `state.results`. A backend without `state.sequencing` or `workflow.sequence` leaves the button
   disabled.
-- Show Sequence (amendment 28; Qt `SequenceWindow` with `ApertureViewerWidget`) is enabled by
+- Show Sequence (amendment 30; Qt `SequenceWindow` with `ApertureViewerWidget`) is enabled by
   `state.sequencing.sequenced` (and `view.sequence` among `app.info.methods`).
   `components/sequence/SequenceWindow.tsx` is a non-modal window like the analysis window
   (`sequenceOpen` in the viewer slice). `showSequence()` (`store/appStore.ts`) opens it on the

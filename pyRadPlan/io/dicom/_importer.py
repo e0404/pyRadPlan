@@ -10,17 +10,18 @@ import pydicom
 import SimpleITK as sitk
 
 from pyRadPlan.core.resample import resample_image
-from pyRadPlan.ct import CT
+from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import validate_cst, StructureSet
 
 from ..base import BaseImporter
 from ._import_ct import import_ct
 from ._import_cst import import_rtstruct, import_seg
 from ._import_dose import import_dose, _dose_descriptor
+from ._import_plan import import_ion_plan, plan_summary
 
 logger = logging.getLogger(__name__)
 
-_MODALITIES = ("CT", "RTSTRUCT", "SEG", "RTDOSE")
+_MODALITIES = ("CT", "RTSTRUCT", "SEG", "RTDOSE", "RTPLAN")
 
 
 def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
@@ -32,6 +33,8 @@ def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
     computed.
     """
     reference = ct.cube_hu
+    if reference.GetDimension() == 4:
+        reference = reference[:, :, :, 0]
     if (
         dose.GetSize() == reference.GetSize()
         and np.allclose(dose.GetSpacing(), reference.GetSpacing())
@@ -52,8 +55,43 @@ def _resample_dose_to_ct(dose: sitk.Image, ct: CT) -> sitk.Image:
     )
 
 
+def _first_phase(ct: CT) -> CT:
+    """Return the CT itself, or its first phase as a 3D CT for a 4D CT."""
+    if ct.cube_hu.GetDimension() != 4:
+        return ct
+    return validate_ct(cube_hu=ct.cube_hu[:, :, :, 0], dicom_info=ct.dicom_info)
+
+
+def _same_geometry(a: sitk.Image, b: sitk.Image) -> bool:
+    return (
+        a.GetSize() == b.GetSize()
+        and np.allclose(a.GetSpacing(), b.GetSpacing())
+        and np.allclose(a.GetOrigin(), b.GetOrigin())
+        and np.allclose(a.GetDirection(), b.GetDirection())
+    )
+
+
+def _join_phases(images: list[sitk.Image]) -> sitk.Image:
+    """Stack 3D phases along a fourth axis, keeping the 3D geometry of the first."""
+    joined = sitk.JoinSeries(images)
+    direction = np.eye(4)
+    direction[:3, :3] = np.reshape(images[0].GetDirection(), (3, 3))
+    joined.SetOrigin((*images[0].GetOrigin(), 0.0))
+    joined.SetSpacing((*images[0].GetSpacing(), 1.0))
+    joined.SetDirection(direction.ravel().tolist())
+    return joined
+
+
 class DicomImporter(BaseImporter):
-    """Importer for a folder (or single file) of DICOM data."""
+    """Importer for a folder (or single file) of DICOM data.
+
+    CT series that form a 4D CT (one series per phase, sharing the frame of reference and
+    the slice count, each with a distinct Temporal Position Identifier, as written by the
+    DICOM export of a 4D CT) are imported together as a 4D CT with the phases in
+    temporal order. Structure sets and doses refer to the first phase and are imported on
+    its grid; structures are repeated on every phase. If the series do not form a
+    consistent 4D CT, the largest series is imported with a warning.
+    """
 
     format: ClassVar[str] = "dcm"
     name: ClassVar[str] = "DICOM Importer"
@@ -124,7 +162,7 @@ class DicomImporter(BaseImporter):
         logger.info(
             "Found %s.",
             ", ".join(f"{len(paths)}x {modality}" for modality, paths in groups.items() if paths)
-            or "no CT, RTSTRUCT, SEG or RTDOSE data",
+            or "no CT, RTSTRUCT, SEG, RTDOSE or RTPLAN data",
         )
 
         self._classified = (directory, groups)
@@ -194,6 +232,45 @@ class DicomImporter(BaseImporter):
             )
         return result
 
+    def list_plans(self) -> list[dict]:
+        """List the RT plans, one entry per file.
+
+        Each entry has ``path``, ``label``, ``name``, ``sop_class``, ``kind`` (``"ion"`` or
+        ``"photon"``), ``radiation_type``, ``num_beams`` and ``num_fractions``. Only ion
+        plans can be loaded with :meth:`load_plan`.
+        """
+        _, groups = self._classify()
+        return [plan_summary(self._headers[f], f) for f in groups["RTPLAN"]]
+
+    def _phase_series(self, series: list[dict]) -> Optional[list[dict]]:
+        """Order the series by temporal position if they form the phases of a 4D CT."""
+        temporal = []
+        for entry in series:
+            ds = self._headers[entry["files"][0]]
+            position = getattr(ds, "TemporalPositionIdentifier", None)
+            if position is None:
+                return None
+            temporal.append((int(position), str(getattr(ds, "FrameOfReferenceUID", "")), entry))
+        if len({t[0] for t in temporal}) != len(temporal):
+            return None
+        if len({t[1] for t in temporal}) != 1 or len({e["num_slices"] for e in series}) != 1:
+            return None
+        return [t[2] for t in sorted(temporal, key=lambda t: t[0])]
+
+    def _load_phases(self, directory: str, phases: list[dict]) -> Optional[CT]:
+        """Import the phase series as a 4D CT, or None if their geometry differs."""
+        cts = [
+            import_ct(directory, entry["files"], reporter=self, headers=self._headers)
+            for entry in phases
+        ]
+        reference = cts[0].cube_hu
+        if not all(_same_geometry(reference, ct.cube_hu) for ct in cts[1:]):
+            return None
+        logger.info("Importing %d CT phases as a 4D CT.", len(cts))
+        return validate_ct(
+            cube_hu=_join_phases([ct.cube_hu for ct in cts]), dicom_info=cts[0].dicom_info
+        )
+
     def load_ct(self, series_uid: Optional[str] = None) -> CT:
         directory, groups = self._classify()
         if not groups["CT"]:
@@ -205,6 +282,18 @@ class DicomImporter(BaseImporter):
             if match is None:
                 raise ValueError(f"CT series {series_uid!r} not found in {self.path}.")
             files = match["files"]
+        elif len(series) > 1 and (phases := self._phase_series(series)) is not None:
+            ct = self._load_phases(directory, phases)
+            if ct is not None:
+                self._ct = ct
+                return ct
+            warnings.warn(
+                f"The CT series in {self.path} look like the phases of a 4D CT but differ in "
+                "geometry; importing the largest series only.",
+                stacklevel=2,
+            )
+            match = max(series, key=lambda s: s["num_slices"])
+            files = match["files"]
         elif len(series) > 1:
             match = max(series, key=lambda s: s["num_slices"])
             warnings.warn(
@@ -215,7 +304,7 @@ class DicomImporter(BaseImporter):
             files = match["files"]
         else:
             files = groups["CT"]
-        self._ct = import_ct(directory, files, reporter=self)
+        self._ct = import_ct(directory, files, reporter=self, headers=self._headers)
         return self._ct
 
     def load_cst(
@@ -242,16 +331,18 @@ class DicomImporter(BaseImporter):
 
         f = struct_file
         logger.info("Importing structure set %s.", os.path.basename(f))
+        ct_3d = _first_phase(ct)
         if f in groups["RTSTRUCT"]:
-            vois = import_rtstruct(pydicom.dcmread(f), ct, reporter=self)
+            vois = import_rtstruct(pydicom.dcmread(f), ct_3d, reporter=self)
         else:
             ct_datasets = [self._headers[c] for c in groups["CT"]]
-            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct, reporter=self)
+            vois = import_seg(pydicom.dcmread(f), ct_datasets, ct_3d, reporter=self)
 
         if not vois:
             return None
         logger.info("Assembling structure set from %d VOI(s).", len(vois))
-        return validate_cst(vois, ct)
+        cst = validate_cst(vois, ct_3d)
+        return validate_cst(cst, ct=ct) if ct_3d is not ct else cst
 
     def load_dose(
         self, dose_file: Optional[str] = None, ct: Optional[CT] = None
@@ -292,3 +383,94 @@ class DicomImporter(BaseImporter):
         if ct is None:
             ct = self._ct if self._ct is not None else self.load_ct()
         return _resample_dose_to_ct(dose, ct)
+
+    def load_plan(
+        self,
+        plan_file: Optional[str] = None,
+        ct: Optional[CT] = None,
+        machine=None,
+        particles_per_mu=None,
+        energy_tolerance: float = 0.1,
+    ) -> Optional[dict]:
+        """Load an RT Ion Plan as steering information, spot weights and plan.
+
+        Parameters
+        ----------
+        plan_file : str, optional
+            An explicit RTPLAN path. By default the first ion plan found is used.
+        ct : CT, optional
+            Used to check the isocenters against the CT. Defaults to the CT loaded most
+            recently by this importer, if any.
+        machine : str or Machine, optional
+            Machine providing energies and foci; ``"Generic"`` by default. Each nominal beam
+            energy is mapped to the closest machine energy within ``energy_tolerance``.
+        particles_per_mu : float or callable, optional
+            Particles per MU (or a function of the machine energy). Required for plans whose
+            Primary Dosimeter Unit is MU, where it scales the weights; plans in NP (particles)
+            need none.
+        energy_tolerance : float
+            Largest accepted difference to a machine energy in MeV(/u).
+
+        Returns
+        -------
+        dict or None
+            ``stf``, ``pln``, ``weights`` and ``result`` (``{"w": weights}``, as in a matRad
+            result), or ``None`` if the source has no RTPLAN. The weights are matRad-style
+            in units of 1e6 particles per spot, as the dose engines interpret them: particles
+            divided by 1e6, or ``MU * particles_per_mu / 1e6`` for plans in MU.
+
+        Raises
+        ------
+        NotImplementedError
+            For photon RT Plans.
+        """
+        _, groups = self._classify()
+        if not groups["RTPLAN"]:
+            return None
+        if plan_file is not None:
+            if plan_file not in groups["RTPLAN"]:
+                raise ValueError(f"RTPLAN {plan_file!r} not found in {self.path}.")
+        else:
+            plans = self.list_plans()
+            ion = [p["path"] for p in plans if p["kind"] == "ion"]
+            if not ion:
+                plan_file = plans[0]["path"]  # raises the NotImplementedError below
+            else:
+                if len(ion) > 1:
+                    warnings.warn(
+                        f"Multiple RT ion plans found in {self.path}; using the first "
+                        f"({os.path.basename(ion[0])}).",
+                        stacklevel=2,
+                    )
+                plan_file = ion[0]
+
+        logger.info("Importing RT plan %s.", os.path.basename(plan_file))
+        if ct is None:
+            ct = self._ct
+        return import_ion_plan(
+            pydicom.dcmread(plan_file),
+            ct=ct,
+            machine=machine,
+            particles_per_mu=particles_per_mu,
+            energy_tolerance=energy_tolerance,
+        )
+
+    def load_data(self) -> dict:
+        """Load CT, structures, dose and, if present, an ion plan (``stf``, ``pln``, ``result``).
+
+        A plan that cannot be imported (photon plan, missing machine energies, MU without
+        calibration, unsupported geometry) is skipped with a warning.
+        """
+        data = super().load_data()
+        _, groups = self._classify()
+        if any(p["kind"] == "ion" for p in self.list_plans()):
+            try:
+                plan = self.load_plan(ct=data.get("ct"))
+            except Exception as exc:  # noqa: BLE001 - the plan must not break the rest
+                warnings.warn(f"Could not import the RT plan: {exc}", stacklevel=2)
+            else:
+                if plan is not None:
+                    data["stf"] = plan["stf"]
+                    data["pln"] = plan["pln"]
+                    data["result"] = plan["result"]
+        return data

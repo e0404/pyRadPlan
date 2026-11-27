@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlanSummary } from "../src/api/protocol";
 import type { PlanDetail, PlanOptions, TissueOp } from "../src/api/protocol/plan";
-import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity } from "../src/components/objectives/objectivesModel";
+import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity, typeOptions, unlistedRobustness } from "../src/components/objectives/objectivesModel";
 import {
   applyBioSelection,
   applySequencers,
@@ -236,6 +236,17 @@ describe("objectives model", () => {
     expect(robustnessOptions(type, "composite_worst_case").options.map((o) => o.key)).toEqual(["none", "expected_value", "composite_worst_case"]);
     const single = { ...type, robustness: [{ value: "scenario_stack", label: "Over all scenarios" }] };
     expect(robustnessOptions(single, "none")).toMatchObject({ current: "scenario_stack" });
+  });
+
+  it("locks the type of an objective the catalog does not list and keeps its robustness editable", () => {
+    const types = ["Squared Deviation", "Max DVH"].map((name) => ({ name, scenario_aware: false, parameters: [], robustness: [] }));
+    expect(typeOptions(types, "Max DVH")).toEqual({ options: types.map((t) => ({ key: t.name, label: t.name })), locked: false });
+    expect(typeOptions(types, "Outcome LR")).toEqual({ options: [{ key: "Outcome LR", label: "Outcome LR" }], locked: true });
+    const all = ["none", "expected_value", "scenario_stack"].map((value) => ({ value, label: value }));
+    expect(unlistedRobustness(all, "none").map((c) => c.value)).toEqual(["none", "expected_value"]);
+    expect(unlistedRobustness(all, "scenario_stack").map((c) => c.value)).toEqual(["scenario_stack"]);
+    expect(robustnessOptions(undefined, "expected_value", unlistedRobustness(all, "expected_value"))).toMatchObject({ current: "expected_value" });
+    expect(robustnessOptions(undefined, "none").options).toEqual([]);
   });
 
   it("matches image references by result key and keeps custom values", () => {

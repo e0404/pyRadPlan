@@ -7,6 +7,7 @@ Top-level API
 - :func:`load_patient` -- load a CT and StructureSet from a file or DICOM folder.
 - :func:`load_data` -- load everything available (ct, cst, dose, ...) into a dict.
 - :func:`save_data` -- save pyRadPlan objects, format chosen from extension/argument.
+- :class:`ExportBundle` -- typed container of a workspace's objects for saving and loading.
 - :func:`load_tg119` -- load the bundled TG119 phantom.
 - :func:`phantom_path` / :func:`available_phantoms` / :func:`list_phantoms` -- locate the
   phantoms (shipped, the user's and shared ones) by name.
@@ -14,7 +15,7 @@ Top-level API
 Low-level handlers
 ------------------
 Per-format handlers (:class:`MatlabHandler`, :class:`DicomHandler`, :class:`NpzHandler`,
-:class:`PickleHandler`, :class:`NiftiHandler`, :class:`NrrdHandler`,
+:class:`PickleHandler`, :class:`Hdf5Handler`, :class:`NiftiHandler`, :class:`NrrdHandler`,
 :class:`MetaImageHandler`) bundle an importer and exporter and can be used directly::
 
     handler = DicomHandler(path)
@@ -31,6 +32,7 @@ from .matlab import MatlabHandler, validate_matrad_patient
 from .dicom import DicomHandler
 from .npz import NpzHandler
 from .pickle import PickleHandler
+from .hdf5 import Hdf5Handler
 from .sitk_based import (
     NiftiHandler,
     NrrdHandler,
@@ -38,6 +40,8 @@ from .sitk_based import (
     load_binary_patient,
     list_image_files,
 )
+from .mc import TopasExporter, FredExporter
+from ._bundle import ExportBundle
 from ._factory import (
     register_importer,
     register_exporter,
@@ -59,6 +63,7 @@ __all__ = [
     "load_patient",
     "load_data",
     "save_data",
+    "ExportBundle",
     "load_tg119",
     "phantom_path",
     "available_phantoms",
@@ -71,9 +76,12 @@ __all__ = [
     "DicomHandler",
     "NpzHandler",
     "PickleHandler",
+    "Hdf5Handler",
     "NiftiHandler",
     "NrrdHandler",
     "MetaImageHandler",
+    "TopasExporter",
+    "FredExporter",
     "validate_matrad_patient",
     "register_importer",
     "register_exporter",

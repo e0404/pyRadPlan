@@ -1,5 +1,5 @@
 /** Pure helpers of the objectives table (Qt `OptimizationWidget`). */
-import type { FieldDescriptor, ObjectiveData, StructureDetail } from "../../api/protocol";
+import type { Choice, FieldDescriptor, ObjectiveData, StructureDetail } from "../../api/protocol";
 import type { ObjectiveType, ObjectivesCatalog } from "../../api/protocol/plan";
 import type { ComboOption } from "../forms/Combo";
 
@@ -22,11 +22,33 @@ export function sharedQuantity(structures: readonly StructureDetail[]): string |
 }
 
 /**
- * Robustness entries of an objective type; a stored value the type does not list is added
- * while the type offers a choice (a scenario-aware objective has a single fixed option).
+ * Type entries of a row. An objective the catalog does not list was created in code
+ * (`Objective.selectable` is false): its own name is the only entry and the type is locked.
  */
-export function robustnessOptions(type: ObjectiveType | undefined, current: string): { options: ComboOption[]; current: string | null } {
-  const list = type?.robustness ?? [];
+export function typeOptions(types: readonly ObjectiveType[], name: string): { options: ComboOption[]; locked: boolean } {
+  if (!types.some((t) => t.name === name)) return { options: [{ key: name, label: name }], locked: true };
+  return { options: types.map((t) => ({ key: t.name, label: t.name })), locked: false };
+}
+
+/**
+ * Robustness entries of an objective the catalog does not list (`Objective.available_robustness`):
+ * the scenario-aware operator alone where it is in use, every other operator otherwise.
+ */
+export function unlistedRobustness(all: readonly Choice[], current: string): Choice[] {
+  return all.filter((c) => (c.value === "scenario_stack") === (current === "scenario_stack"));
+}
+
+/**
+ * Robustness entries of an objective type (*fallback* for a type the catalog does not list); a
+ * stored value the type does not list is added while the type offers a choice (a scenario-aware
+ * objective has a single fixed option).
+ */
+export function robustnessOptions(
+  type: ObjectiveType | undefined,
+  current: string,
+  fallback: readonly Choice[] = [],
+): { options: ComboOption[]; current: string | null } {
+  const list = type?.robustness ?? fallback;
   const options: ComboOption[] = list.map((c) => ({ key: String(c.value), label: c.label, identifier: c.identifier ?? String(c.value) }));
   if (options.length > 1 && !options.some((o) => o.key === current)) options.push({ key: current, label: current, identifier: current });
   if (options.length <= 1) return { options, current: options[0]?.key ?? null };

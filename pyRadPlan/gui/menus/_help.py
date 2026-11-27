@@ -37,7 +37,9 @@ from pyRadPlan.app._about import (
     DESCRIPTION,
     DISCLAIMER,
     DISCLAIMER_TITLE,
+    IMPRINT_URL,
     LICENSE_NOTE,
+    PRIVACY_URL,
 )
 from pyRadPlan.app._settings import (  # noqa: F401 - re-exported for the GUI
     DistributionInfo,
@@ -178,13 +180,15 @@ class AboutDialog(QDialog):
         description.setWordWrap(True)
         root.addWidget(description)
 
-        links = QLabel(
+        self._lbl_links = QLabel(
             f'<a href="{DOCUMENTATION_URL}">Documentation</a> &nbsp;|&nbsp; '
-            f'<a href="{SOURCE_URL}">Source code</a>'
+            f'<a href="{SOURCE_URL}">Source code</a> &nbsp;|&nbsp; '
+            f'<a href="{IMPRINT_URL}">Imprint</a> &nbsp;|&nbsp; '
+            f'<a href="{PRIVACY_URL}">Privacy policy</a>'
         )
-        links.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        links.setOpenExternalLinks(True)
-        root.addWidget(links)
+        self._lbl_links.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._lbl_links.setOpenExternalLinks(True)
+        root.addWidget(self._lbl_links)
 
         self._lbl_license = QLabel(LICENSE_NOTE)
         self._lbl_license.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -209,7 +213,12 @@ class AboutDialog(QDialog):
 
     def text(self) -> str:
         """Plain text of the dialog's labels, for inspection."""
-        parts = [self._lbl_title.text(), self._lbl_license.text(), self._lbl_disclaimer.text()]
+        parts = [
+            self._lbl_title.text(),
+            self._lbl_links.text(),
+            self._lbl_license.text(),
+            self._lbl_disclaimer.text(),
+        ]
         return "\n".join(parts)
 
     def _show_licenses(self) -> None:

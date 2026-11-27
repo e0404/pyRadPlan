@@ -183,6 +183,7 @@ class RayTracerSiddon(RayTracerBase):
 
         else:
             rho, ix = self._get_rho_and_indices(val_ix, ijk)
+            lengths, rho, ix = _kernels.merge_repeated_voxel_segments(lengths, rho, ix)
 
         if self.debug_core_performance:
             xp_utils.synchronize(xp, s)

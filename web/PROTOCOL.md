@@ -417,9 +417,9 @@ default is `"total"` (`parity.md`, ambiguity 1); the web profile adopts it once 
 
 | Method | Cost | Params | Result |
 |---|---|---|---|
-| `data.load_file` (extended) | long | `{filename, data, kind?: "auto", name?}` | `SessionState`. Accepts `.mat`, `.npz`, `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`). A file with a CT replaces all results (a workspace pickle restores all of its results and the active name; older files with `saved_result_tags` are migrated); without a CT a loaded plan result replaces only the active result and a loaded dose is added as a further result (amendment 26). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO; `name?` names the result of a `"dose"` import (default: the file stem) |
+| `data.load_file` (extended) | long | `{filename, data, kind?: "auto", name?}` | `SessionState`. Accepts `.mat`, `.npz`, `.h5`, `.hdf5` (amendment 27), `.pkl`, `.pickle` (pickles not in the browser: `PreconditionError(code="not_available")`). A file with a CT replaces all results (a workspace pickle restores all of its results and the active name; older files with `saved_result_tags` are migrated); without a CT a loaded plan result replaces only the active result and a loaded dose is added as a further result (amendment 26). The `kind`s `"ct_new"`, `"ct_replace"`, `"structures"`, `"dose"` are reserved for image files and fail with `PreconditionError(code="not_available")` without image IO; `name?` names the result of a `"dose"` import (default: the file stem) |
 | `data.load_dij` | long | `{filename, data}` | `SessionState`; merges `stf` + `dij` from the file (`.pkl` not in the browser); `PreconditionError(code="no_dij")` when it holds none |
-| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg", basename?}` | `FileResult`. `quantities` (component keys of any result) for `object: "result"`, default the full quantities of all results. Workspace pickles store all results and the active name |
+| `export.save` | long | `{object, format, quantities?: string[], structure_format?: "rtstruct" \| "seg" \| "layers", basename?}` | `FileResult`. `quantities` (component keys of any result) for `object: "result"`, default the full quantities of all results. Workspace files (HDF5, pickle) store all results and the active name |
 
 Pending plan-form edits are resolved by the frontend before calling `export.save` (Qt asks for
 Save Plan and Save Workspace).
@@ -438,7 +438,8 @@ Save Plan and Save Workspace).
 |---|---|---|---|
 | `plan.get` (extended) | read | `{detail?: boolean}` | without `detail`: v0 `PlanSummary`; with: `PlanDetail` |
 | `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?, current_bio?}` (default: the plan's, else the default plan's; `current_bio`: amendment 22) | `PlanOptions` (+ `bio_selection`, amendment 22) |
-| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver" \| "sequencer" (amendment 27), name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
+| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver" \| "sequencer" (amendment 29), name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
+| `plan.form_choices` | read | `{kind, name, radiation_mode?}` (as `plan.form`) | `{id, choices: Record<string, Choice[]>}`: suggested values per field (amendment 28); `choices: {}` when the algorithm suggests none or its lookup fails |
 | `plan.set` (extended) | write | partial `PlanSummary` plus the v1 fields below | `SessionState` |
 | `plan.tissue_check` | read, may load base data | `{draft?: {radiation_mode, machine, engine, bio_model}}` (the unapplied form; default: the plan) | `{marker: "error" \| "warning" \| "", issues: Issue[]}` (the ⚠ / ℹ marker) |
 
@@ -476,7 +477,7 @@ type PlanOptions = {
 `bio_model: string | {model, option?, values?}` (the v0 string is still accepted; `option`
 selects the base-data option, `values` the model parameters); `scenarios: {model, values}`;
 `problem: {name, values}`; `solver: string | {name, values}`;
-`sequencing: {run, sequencer, values}` (amendment 27). Semantics follow
+`sequencing: {run, sequencer, values}` (amendment 29). Semantics follow
 `PlanWidget._build_plan` (see `parity.md`): `prop_opt` is rebuilt from problem + solver,
 `prop_seq` and the other `prop_stf` keys survive only within the same radiation mode, an unchanged
 scenario model keeps the plan's instance.
@@ -487,7 +488,7 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 `gantry_angles` and `couch_angles` (`number_list`), `iso_center` (`number_list` length 3,
 `nullable` = Auto), and the disabled Qt fields `optimized_quantity`, `run_dao` and `conformal`
 (`editable: false`, `reason: "not yet implemented"`). Sequencing is set with `sequencing`
-(amendment 27), not with a field.
+(amendment 29), not with a field.
 
 ### Structures, tissues and objectives
 
@@ -498,10 +499,10 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
 | `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, pick: string \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows ; `pick` is the id of the `tissue.schema` pick the row's tissue corresponds to (null if none), see amendment 24 |
 | `tissue.apply` | write | `{rows: [{structure: string \| number, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
-| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref`; `reference_images` are the full quantities of all results by their component keys |
+| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref`; `reference_images` are the full quantities of all results by their component keys; objectives that are created in code (`Objective.selectable` false, e.g. the outcome objectives) are not listed, and a frontend shows such an objective of a structure with its type locked |
 | `objectives.add` | write | `{structure: string \| number}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
 | `objectives.update` | write | `{structure: string \| number, index, changes: {priority?, quantity?, robustness?, parameters?: Record<string, unknown>}}` | `{state, structure}` |
-| `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule) |
+| `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule); a `ValidationError` on `name` if the objective or the new type is created in code |
 | `objectives.remove` | write | `{structure: string \| number, index}` | `{state, structure}` |
 | `objectives.set_quantity_all` | write | `{quantity}` | `{state}` |
 
@@ -532,7 +533,7 @@ type StructureDetail = {
 
 Optimize and Recalculate replace only the active result; every other result (snapshots, imported
 doses) is kept. A recalculation keeps nothing of the previous doses of the active result.
-`workflow.sequence` (amendment 27) adds the sequence and the delivered doses to the active result.
+`workflow.sequence` (amendment 29) adds the sequence and the delivered doses to the active result.
 
 ### Views
 
@@ -541,7 +542,7 @@ doses) is kept. A recalculation keeps nothing of the previous doses of the activ
 | `view.volume` (extended) | read | `{name, phase?, encoding?: "float32" \| "auto"}` | v0 `Volume`; `name` may be any component key; `"auto"` sends the CT as int16 when all values are integral and within int16 (else float32); default `"float32"` (v0) |
 | `view.structure_masks` (extended) | read | `{names?: (string \| number)[], encoding?: "uint8" \| "bits" \| "crops"}` | every mask entry carries `index` (the structure's position). `"uint8"`: v0 plus `index`. `"bits"`: `{grid, encoding: "bits", planes: ArrayRef[], masks: [{name, index, color, plane, bit, num_voxels, bbox}]}`, each plane a `(z, y, x)` uint8 / uint16 / uint32 volume holding up to 32 structures, bit `bit` of plane `plane` set inside the structure. `"crops"`: `{grid, encoding: "crops", masks: [{name, index, color, num_voxels, bbox: [z0, y0, x0, z1, y1, x1] \| null, data: ArrayRef \| null}]}`, the uint8 crop of shape `(z1-z0, y1-y0, x1-x0)` (ends exclusive) |
 | `view.beams` | read | `{draft?: {gantry_angles, couch_angles, iso_center?}}` | `{source: "stf" \| "plan" \| null, iso_centers: Vec3[], beams: [{index, name, label, gantry, couch, iso_center, source_direction, orbit_u?, orbit_w?, orbit_axis?, pending}]}` |
-| `view.sequence` (amendment 28) | read | `{}` | `SequenceView` (below); `PreconditionError(code="no_sequence")` while `sequencing.sequenced` is false |
+| `view.sequence` (amendment 30) | read | `{}` | `SequenceView` (below); `PreconditionError(code="no_sequence")` while `sequencing.sequenced` is false |
 
 `view.beams` mirrors `gui/widgets/_result_widget.py:_beam_geometry` in LPS millimetres instead of
 viewer voxels: `source_direction` is the unit vector isocenter → source; `orbit_u` / `orbit_w` are
@@ -773,7 +774,37 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
       keys, and `{"$result": key}` accepts any component key.
     - `revisions.volumes` is keyed by the same component keys; a snapshot's keys have the
       revisions of the images they share (amendment 14).
-27. 2026-11-20 (sequencing): **added** photon leaf sequencing on the session layer, as the Qt GUI
+27. 2026-11-23 (export formats): **added** `capabilities.formats` entries; the frontend picks
+    them up from the tables, no new methods.
+    - `format: "hdf5"` for `object: "workspace"` (listed first, the default; `.h5`) and
+      `object: "cst"` (`keeps_objectives: true`, includes the CT), and an `hdf5` import entry
+      (`.h5`, `.hdf5`, all objects). HDF5 files load without running code from the file, also
+      in the browser (h5py is part of the Pyodide build). The workspace pickle labels gain
+      ", pickle".
+    - `structure_format: "layers"` on a second cst `nrrd` entry: a 3D Slicer segmentation
+      (`cst.seg.nrrd`, one layer per set of overlapping structures) in the zip. Without
+      `structure_format`, `nrrd` stays the label map.
+    - **changed** `export.save {object: "result", format: "dcm"}` (amendment 3): the zip holds
+      the CT series and one `RTDOSE_<quantity>.dcm` per physical (`physical_dose`) or
+      RBE-weighted (`rbe_x_dose`) dose of a result; the doses of the active result reference
+      `RTPLAN.dcm`, its RT (Ion) Plan from the steering information and fluence (left out when
+      there is no steering information or it does not fit the fluence). Doses of several
+      results go into one folder per result name. Other quantities are skipped; selecting none of
+      the two doses fails with `PreconditionError(code="no_data")`.
+28. 2026-11-26 (plan form, suggested values): **added** `plan.form_choices {kind, name,
+    radiation_mode?}` → `{id, choices}`, the values an algorithm suggests for fields of its
+    `plan.form` (Qt fills its editable combo boxes from the same `config_choices(radiation_mode)`
+    classmethod; any algorithm class may define one, today the AI engine lists the dose models it
+    could run). `id` is the form's `FormSchema.id`; `choices` maps field names to `Choice`s
+    (`value` = `label` = the suggested text), duplicates removed, fields the form does not show
+    left out. A class without `config_choices`, or a lookup that fails, gives `choices: {}`; an
+    unknown form fails as `plan.form` does. It is a separate request because the lookup may go
+    online (natively the AI engine asks the HuggingFace hub): a frontend opens the form from
+    `plan.form` and adds the suggestions when they arrive, without touching what was typed
+    meanwhile. They only suggest: the field keeps its descriptor (the AI engine's `model` stays
+    `type: "str"`) and accepts any text. In the browser there is no hub client, so only models on
+    the (virtual) disk could be listed; the lookup is local and returns at once.
+29. 2026-11-20 (sequencing): **added** photon leaf sequencing on the session layer, as the Qt GUI
     runs it.
     - `plan.set {sequencing: {run: boolean, sequencer: string | null, values?: object}}` writes
       the plan's `prop_seq` (`run_sequencing`, `sequencer` and the sequencer's settings);
@@ -795,7 +826,7 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     - A `plan.set` that changes only `sequencing` outdates no stage.
     - `"<identifier>_sequenced"` groups in `results.groups` carry the `meta_label` and `unit` of
       their quantity, and the label `"<name> (sequenced)"`.
-28. 2026-11-21 (sequence view): **added** the data of the sequence viewer (Qt: Show Sequence).
+30. 2026-11-21 (sequence view): **added** the data of the sequence viewer (Qt: Show Sequence).
     - `SessionState.sequencing` adds `sequenced: boolean`: the active result carries a delivery
       sequence.
     - New method `view.sequence` `{}` -> `SequenceView` (cost: read):

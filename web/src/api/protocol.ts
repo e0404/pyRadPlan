@@ -109,8 +109,8 @@ export interface SessionState {
   results?: ResultsInfo;
   options?: SessionOptions;
   /**
-   * Whether `workflow.sequence` can run on the active result, else why not (amendment 27);
-   * `sequenced`: the active result carries a delivery sequence (amendment 28).
+   * Whether `workflow.sequence` can run on the active result, else why not (amendment 29);
+   * `sequenced`: the active result carries a delivery sequence (amendment 30).
    */
   sequencing?: { available: boolean; reason: string | null; sequenced?: boolean };
 }

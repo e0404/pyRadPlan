@@ -7,6 +7,7 @@ from pydantic import (
     field_validator,
     model_validator,
     SerializerFunctionWrapHandler,
+    SerializeAsAny,
     FieldSerializationInfo,
 )
 import logging
@@ -16,7 +17,7 @@ from scipy.interpolate import RegularGridInterpolator
 from pyRadPlan.stf._rangeshifter import RangeShifter
 from pyRadPlan.core import PyRadPlanBaseModel
 
-from pyRadPlan.machines import BeamLimitingDevice
+from pyRadPlan.machines import BeamLimitingDevice, create_bld
 
 # TODO: We need to figure out how we can do nested validation in pydantic and then differentiate
 # between photon and particle beamlets. For now, we will use the Beamlet class for both.
@@ -327,7 +328,13 @@ class FieldShapeAsBLD(FieldShape):
 
     """
 
-    bld: BeamLimitingDevice
+    bld: SerializeAsAny[BeamLimitingDevice]
+
+    @field_validator("bld", mode="before")
+    @classmethod
+    def _build_device(cls, v: Any) -> Any:
+        """Rebuild the device subclass (MLC, Jaw) from its dump."""
+        return create_bld(v) if isinstance(v, dict) else v
 
     @property
     def mask(self) -> np.ndarray:

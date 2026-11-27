@@ -1,5 +1,5 @@
 /**
- * Mock of `view.sequence` (PROTOCOL.md amendment 28): a delivery sequence derived from the
+ * Mock of `view.sequence` (PROTOCOL.md amendment 30): a delivery sequence derived from the
  * phantom's target and the plan's beams. Per beam the target is projected (parallel) into the
  * beam's eye view, the rays cover it with one bixel margin, a smooth stand-in for the optimized
  * fluence is split into `levels` shapes, and the delivered fluence is what those shapes add up to.

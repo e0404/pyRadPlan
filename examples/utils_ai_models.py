@@ -15,10 +15,10 @@ can be loaded either from a local directory or from the HuggingFace Hub.
    defaults to `~/.pyradplan`, relocatable via `PYRADPLAN_DATA_DIR`). Override
    just the models base with the `PYRADPLAN_AI_MODELHUB_LOCAL_MODELS_DIR`
    environment variable (or a `.env` file).
-3. Loading a model from the Hub runs Python shipped inside the repository, so it
-   needs an explicit opt-in: `trust_remote_code=True`, or
-   `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`. Loading from a directory you point
-   at yourself with `local_dir=` needs no opt-in.
+3. Loading a model runs Python shipped inside the repository. A model folder you
+   placed yourself runs as-is; a downloaded one only once trusted: with
+   `pyRadPlan.ai.modelhub.trust_model("<org>/<model>")`, `trust_remote_code=True`
+   or `PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1`.
 
 ## Setup
 """

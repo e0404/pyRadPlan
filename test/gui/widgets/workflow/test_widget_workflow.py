@@ -353,11 +353,14 @@ def test_cst_export_options_resolve_against_registry(qapp):
     assert all(fmt in available for fmt in keys), keys
     # The container formats that preserve objectives, plus the image and both
     # DICOM structure representations, are all offered.
-    assert {"mat", "pickle", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
+    assert {"mat", "pickle", "hdf5", "npz", "nifti", "nrrd", "meta", "dcm"} <= set(keys)
     dicom_structs = {entry.structure_format for entry in entries if entry.format == "dcm"}
     assert dicom_structs == {"rtstruct", "seg"}
-    # Only mat/pickle advertise objective preservation.
-    assert {entry.format for entry in entries if entry.keeps_objectives} == {"mat", "pickle"}
+    nrrd = [entry.structure_format for entry in entries if entry.format == "nrrd"]
+    assert nrrd == [None, "layers"]
+    # Only mat/pickle/hdf5 advertise objective preservation.
+    keeps = {entry.format for entry in entries if entry.keeps_objectives}
+    assert keeps == {"mat", "pickle", "hdf5"}
     # Label maps and DICOM are written to a folder, named so in the format choice.
     folders = [entry for entry in entries if writes_folder(entry)]
     assert {entry.format for entry in folders} == {"nifti", "nrrd", "meta", "dcm"}
@@ -746,8 +749,10 @@ def test_recalculate_accepts_equivalent_angles(qapp, monkeypatch, couch):
     assert ws.stf is original_stf
 
 
-@pytest.mark.parametrize("suffix", [".pkl", ".pickle", ""])
-def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffix):
+@pytest.mark.parametrize(
+    ("suffix", "written"), [(".pkl", ".pkl"), (".pickle", ".pickle"), (".h5", ".h5"), ("", ".h5")]
+)
+def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffix, written):
     import numpy as np
     import SimpleITK as sitk
     from pyRadPlan.ct import validate_ct
@@ -782,12 +787,13 @@ def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffi
     monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda op, *args: op.compute()))
 
     w._on_save_workspace()
-    data = load_data(path if suffix else path.with_suffix(".pkl"))
+    data = load_data(path.with_suffix(written))
     restored_ws = WorkspaceManager()
     restored = WorkflowWidget(restored_ws)
     restored.session.merge_loaded(data)
 
-    assert "*.pkl" in filters[0] and "*.mat" not in filters[0] and "*.npz" not in filters[0]
+    assert filters[0].index("*.h5") < filters[0].index("*.pkl")
+    assert "*.mat" not in filters[0] and "*.npz" not in filters[0]
     assert restored_ws.pln.prop_opt == {"solver": "scipy"}
     assert restored_ws.stf == ws.stf and restored_ws.dij == ws.dij
     assert restored_ws.result.stored_quantities == ws.result.stored_quantities
@@ -799,8 +805,47 @@ def test_save_workspace_preserves_all_results(qapp, tmp_path, monkeypatch, suffi
     assert restored_dose.GetOrigin() == dose.GetOrigin()
     assert list(restored_ws.results) == ["current", "saved", "measured"]
     assert restored_ws.active_result == "current"
-    # A snapshot still shares its images with the result it was taken from
-    assert restored_ws.results["saved"]["physical_dose"].values is restored_dose
+    if written != ".h5":
+        # A snapshot still shares its images with the result it was taken from
+        assert restored_ws.results["saved"]["physical_dose"].values is restored_dose
+
+
+def test_save_workspace_pickle_filter_writes_a_pickle(qapp, tmp_path, monkeypatch):
+    from pyRadPlan.ct import validate_ct
+    from pyRadPlan.io import load_data
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.ct = validate_ct(cube_hu=sitk.Image([3, 3, 3], sitk.sitkFloat32))
+    path = tmp_path / "workspace"
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName",
+        lambda *args: (str(path), "pyRadPlan workspace, pickle (*.pkl *.pickle)"),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda op, *args: op.compute()))
+
+    w._on_save_workspace()
+
+    assert path.with_suffix(".pkl").exists() and not path.with_suffix(".h5").exists()
+    assert load_data(path.with_suffix(".pkl"))["ct"] == ws.ct
+
+
+def test_save_workspace_h5_fails_instead_of_dropping_objects(qapp, tmp_path, monkeypatch):
+    from pyRadPlan.ct import validate_ct
+
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    ws.set_many(ct=validate_ct(cube_hu=sitk.Image([3, 3, 3], sitk.sitkFloat32)), stf=object())
+    path = tmp_path / "workspace.h5"
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QFileDialog.getSaveFileName",
+        lambda *args: (str(path), ""),
+    )
+    monkeypatch.setattr(WorkflowWidget, "_run_save", staticmethod(lambda op, *args: op.compute()))
+
+    with pytest.raises(TypeError, match="'stf'"):
+        w._on_save_workspace()
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("suffix", [".mat", ".npz"])
@@ -1459,6 +1504,117 @@ def _synchronous(monkeypatch):
     )
 
 
+def _image_files(monkeypatch):
+    """Answer Save Result's question for the kind of export with image files."""
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("Image files", True))
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No"])
+def test_save_cst_dicom_asks_before_replacing_dicom_files(qapp, tmp_path, monkeypatch, answer):
+    from pathlib import Path
+    from unittest.mock import Mock
+
+    from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+    from pyRadPlan.io import load_patient
+
+    ct, cst = load_patient(Path(__file__).parents[3] / "data" / "dicom")
+    ws = WorkspaceManager()
+    ws.set_many(ct=ct, cst=cst)
+    w = WorkflowWidget(ws)
+    (tmp_path / "old.dcm").write_bytes(b"stale")
+    questions = []
+
+    def question(*args):
+        questions.append(args[2])
+        return getattr(QMessageBox.StandardButton, answer)
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("DICOM RTSTRUCT (folder)", True))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(QMessageBox, "information", Mock())
+    _synchronous(monkeypatch)
+
+    w._on_save_cst()
+
+    assert len(questions) == 1 and "1 DICOM file" in questions[0]
+    assert (tmp_path / "RTSTRUCT.dcm").exists() == (answer == "Yes")
+    assert (tmp_path / "old.dcm").exists() == (answer == "No")
+
+    questions.clear()
+    for f in tmp_path.glob("*.dcm"):
+        f.unlink()
+    w._on_save_cst()
+    assert not questions
+    assert (tmp_path / "RTSTRUCT.dcm").exists()
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No"])
+def test_save_result_dicom_writes_ct_and_rtdose(qapp, tmp_path, monkeypatch, answer):
+    from pathlib import Path
+    from unittest.mock import Mock
+
+    import pydicom
+    from PySide6.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox
+
+    from pyRadPlan.gui.widgets.result import _save_result_dialog
+    from pyRadPlan.io import load_patient
+    from pyRadPlan.plan import validate_pln
+
+    ct, cst = load_patient(Path(__file__).parents[3] / "data" / "dicom")
+    dose = sitk.Cast(ct.cube_hu * 0 + 2.0, sitk.sitkFloat64)
+    pln = validate_pln({"radiation_mode": "photons", "dose_convention": "per_fraction"})
+    ws = WorkspaceManager()
+    ws.set_many(ct=ct, cst=cst, pln=pln, result={"physical_dose": dose, "let": dose})
+    w = WorkflowWidget(ws)
+    (tmp_path / "old.dcm").write_bytes(b"stale")
+    questions = []
+
+    def question(*args):
+        questions.append(args[2])
+        return getattr(QMessageBox.StandardButton, answer)
+
+    class _Dialog:
+        def __init__(self, keys, parent=None):
+            self.keys = keys
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selected_quantities(self):
+            return ["physical_dose", "let"]
+
+    kinds = []
+
+    def get_item(parent, title, label, items, *args):
+        kinds.append(items)
+        return items[-1], True
+
+    monkeypatch.setattr(_save_result_dialog, "SaveResultDialog", _Dialog)
+    monkeypatch.setattr(QInputDialog, "getItem", get_item)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(QMessageBox, "information", Mock())
+    _synchronous(monkeypatch)
+
+    with pytest.warns(UserWarning, match="skips the quantities let"):
+        w._on_save_result_to_disk()
+
+    assert kinds == [["Image files", "DICOM RTDOSE (folder)"]]
+    assert len(questions) == 1 and "1 DICOM file" in questions[0]
+    written = tmp_path / "RTDOSE_physical_dose.dcm"
+    assert written.exists() == (answer == "Yes")
+    assert (tmp_path / "old.dcm").exists() == (answer == "No")
+    if answer == "Yes":
+        ds = pydicom.dcmread(written)
+        assert ds.DoseSummationType == "FRACTION" and ds.DoseType == "PHYSICAL"
+        assert ds.FrameOfReferenceUID == ct.dicom_info.frame_of_reference_uid
+        assert list(tmp_path.glob("CT_*.dcm"))
+        assert not (tmp_path / "RTDOSE_let.dcm").exists()
+
+
 @pytest.mark.parametrize(("chosen", "suffix"), [("NRRD (*.nrrd)", ".nrrd"), ("", ".nii.gz")])
 def test_save_result_writes_the_format_of_the_chosen_filter(
     qapp, tmp_path, monkeypatch, chosen, suffix
@@ -1499,6 +1655,7 @@ def test_save_result_writes_the_format_of_the_chosen_filter(
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.information", info
     )
     _synchronous(monkeypatch)
+    _image_files(monkeypatch)
 
     w._on_save_result_to_disk()
 
@@ -1556,6 +1713,7 @@ def test_save_result_offers_the_quantities_of_all_results(qapp, tmp_path, monkey
         "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.information", Mock()
     )
     _synchronous(monkeypatch)
+    _image_files(monkeypatch)
 
     w._on_save_result_to_disk()
 

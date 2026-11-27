@@ -194,7 +194,7 @@ export interface SequenceBeam {
   target: SequenceTarget | null;
 }
 
-/** `view.sequence` (amendment 28): the delivery sequence of the active result. */
+/** `view.sequence` (amendment 30): the delivery sequence of the active result. */
 export interface SequenceView {
   sequencer: string | null;
   num_of_levels: number | null;

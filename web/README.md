@@ -92,6 +92,7 @@ npm run e2e            # Playwright (Edge, SwiftShader WebGL) against ?backend=m
 npm run e2e:viewer     # viewer parity (beams, drag, snapshots, VOIs, analysis window) against the mock, port 5202
 npm run e2e:plan       # plan widget, config forms, tissue dialog, objectives, status window, sequencing + sequence window against the mock
 npm run e2e:menus      # menus, dialogs, saves (downloads), loads, base data, settings, help, log, dark mode (port 5203, screenshots menus-*.png)
+npm run e2e:responsive # desktop / tablet / phone layouts: collapsed panels, no horizontal overflow, menus and dialogs in view (screenshots responsive-*.png)
 npm run e2e:pyodide    # the whole GUI against the real Pyodide backend (~3 min, see below); `-- --preview` uses the production build
 ```
 

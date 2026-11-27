@@ -572,7 +572,7 @@ function planSet(ctx: MockContext, s: MockSession, p: PlanSetParams): SessionSta
   e.solver = solver;
   e.sequencing = sequencing;
   s.plan = next;
-  // A change of the sequencing settings alone outdates no stage (amendment 27).
+  // A change of the sequencing settings alone outdates no stage (amendment 29).
   const sent = Object.keys(p);
   if (!sent.length || sent.some((k) => k !== "sequencing")) ctx.touch(s, "plan");
   ctx.log(s, "info", `Plan updated: ${next.radiation_mode}, ${next.gantry_angles.length} beam(s)`);
@@ -735,6 +735,11 @@ export const planHandlers: MockHandlers = {
 
   "plan.form"(p, ctx) {
     return planForm(ctx.session(), p);
+  },
+
+  // As in the browser: no model on disk and no hub client, so nothing to suggest.
+  "plan.form_choices"(p) {
+    return { id: `${String(p.kind)}:${String(p.name)}`, choices: {} };
   },
 
   "plan.set"(p, ctx) {
