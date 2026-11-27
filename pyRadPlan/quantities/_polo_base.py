@@ -58,10 +58,11 @@ class POLOBase(FluenceDependentQuantity):
     domain.
 
     During optimization, :meth:`check_fit_domain` warns about an objective region that
-    overlaps a GTV or no risk voxel. The remaining conditions of the fit cannot be read from
-    a plan and are the user's responsibility: proton-treated adult and paediatric low-grade
-    glioma patients, voxels inside the brain, a risk structure that is the ventricles with a
-    4 mm margin, and contrast-enhancing lesions as the endpoint ([1]). LET from analytical
+    overlaps a GTV or no risk voxel, and about a plan with another radiation mode than
+    protons. The remaining conditions of the fit cannot be read from a plan and are the
+    user's responsibility: adult and paediatric low-grade glioma patients, voxels inside
+    the brain, a risk structure that is the ventricles with a 4 mm margin, and
+    contrast-enhancing lesions as the endpoint ([1]). LET from analytical
     pencil-beam engines differs from the FLUKA Monte Carlo LETd (all charged particles) the
     model was fitted on; absolute POLO/NTCP values carry a corresponding systematic
     uncertainty.
@@ -105,6 +106,7 @@ class POLOBase(FluenceDependentQuantity):
         scenarios=None,
         *,
         num_of_fractions: int,
+        stf=None,
     ):
         """
         Initialize a POLO-family quantity.
@@ -137,6 +139,9 @@ class POLOBase(FluenceDependentQuantity):
             ``num_of_fractions`` times the per-fraction dose of *dij*. Supplied from the plan
             during optimization; required when constructing the quantity directly, since a
             wrong value moves every voxel along the dose axis of the model.
+        stf : SteeringInformation, optional
+            Steering information of the plan, supplied during optimization. Only its radiation
+            modes are read, for :meth:`check_fit_domain`.
         """
         if num_of_fractions < 1:
             raise ValueError(f"num_of_fractions must be at least 1, got {num_of_fractions}.")
@@ -145,6 +150,9 @@ class POLOBase(FluenceDependentQuantity):
         self.risk_voi_name = risk_voi_name
         self.dose_threshold = dose_threshold
         self._cst = cst
+        self._radiation_modes = sorted(
+            {beam.radiation_mode for beam in getattr(stf, "beams", None) or []}
+        )
         self.binary_risk_mask = self._resolve_risk_mask(binary_risk_mask, cst, risk_voi_name)
 
         # Volume correction factor k = v_new / v_old ([2], Equation 4). Applied by subclasses
@@ -206,10 +214,17 @@ class POLOBase(FluenceDependentQuantity):
         The model was fitted on voxels outside the GTV ([1]); target structures are matched
         by type and a name containing "GTV". A region without a single risk voxel leaves the
         periventricular term inactive, e.g. when overlap handling removed the risk structure
-        from it.
+        from it. The model was fitted on proton plans ([1]); the radiation mode is only known
+        when the planning problem supplied the steering information.
         """
         name = type(self).__name__
         messages = []
+        if regions and any(mode != "protons" for mode in self._radiation_modes):
+            on = ", ".join(f"'{region_name}'" for region_name in regions)
+            messages.append(
+                f"{name} on {on}: the plan's radiation mode is "
+                f"{', '.join(self._radiation_modes)}, but the model was fitted on proton plans."
+            )
         vois = getattr(self._cst, "vois", None) or []
         gtvs = [v for v in vois if v.voi_type == "TARGET" and "GTV" in v.name.upper()]
         gtv_mask = np.zeros(self._dij.dose_grid.num_voxels, dtype=bool)

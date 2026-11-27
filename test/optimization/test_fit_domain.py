@@ -86,6 +86,20 @@ def test_polo_warns_on_region_inside_gtv(proton_case):
     ]
 
 
+def test_polo_warns_on_radiation_mode_other_than_protons(proton_case):
+    pln, ct, cst, dij, stf, vois = proton_case
+    vois["Target"].objectives = [NTCPPOLO(priority=1.0, risk_voi_name="Body")]
+    for beam in stf.beams:
+        beam.radiation_mode = "helium"
+
+    _, warnings = _initialize(pln, ct, cst, dij, stf)
+
+    assert warnings == [
+        "POLO on 'Target': the plan's radiation mode is helium, but the model was fitted on "
+        "proton plans."
+    ]
+
+
 def test_polo_objectives_with_different_risk_structures_are_independent(proton_case):
     pln, ct, cst, dij, stf, vois = proton_case
     # Keep the body's region the same whether or not the target carries an objective.
