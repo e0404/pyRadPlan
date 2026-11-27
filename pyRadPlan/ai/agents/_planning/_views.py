@@ -34,7 +34,10 @@ def model_evaluation(ev: Optional[dict], plan: Optional[int] = None) -> Optional
     out.update(ev, goals=[goal_line(r) for r in ev["goals"]])
     out.pop("unresolved_structures", None)
     if out.get("unresolved_goals"):
-        out["note"] = "Unresolved goals are not evaluated: map their structures."
+        out["note"] = (
+            "Unresolved goals are not evaluated: map their structures. Structures "
+            "listed under empty_structures have no voxels."
+        )
     else:
         out.pop("unresolved_goals", None)
     return out
@@ -109,9 +112,22 @@ def model_optimizer_report(rep: dict) -> dict:
     }
 
 
-# Objective fields the agent leaves at their defaults; hidden from the schema it is sent
-# (validation still runs on the full objective models)
+# Objective fields the agent leaves at their defaults: hidden from the schema it is sent,
+# and reset by with_hidden_defaults in case the model sends them anyway (validation runs
+# on the full objective models)
 _HIDDEN_OBJECTIVE_FIELDS = ("quantity", "robustness")
+
+
+def with_hidden_defaults(objective: Any) -> Any:
+    """Return *objective* with the fields hidden from the model at their defaults."""
+    fields = type(objective).model_fields
+    defaults = {
+        name: fields[name].get_default(call_default_factory=True)
+        for name in _HIDDEN_OBJECTIVE_FIELDS
+        if name in fields
+    }
+    changed = {k: v for k, v in defaults.items() if getattr(objective, k) != v}
+    return objective.model_copy(update=changed) if changed else objective
 
 
 def slim_schema(schema: dict) -> dict:

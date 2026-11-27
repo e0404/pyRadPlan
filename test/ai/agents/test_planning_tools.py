@@ -39,7 +39,7 @@ from pyRadPlan.ai.agents._planning import (
 )
 from pyRadPlan.ai.agents._planning import _geometry as geo
 from pyRadPlan.ai.agents._planning._constraints import ConstraintTable
-from pyRadPlan.ai.agents._planning._state import sitk_array
+from pyRadPlan.ai.agents._planning._state import _cpu_backend, _dose_is_linear, sitk_array
 from pyRadPlan.optimization.objectives import (
     MeanDose,
     MeanOverdosing,
@@ -413,7 +413,7 @@ def test_applied_site_constraints_reevaluate_the_plans(hn_state, monkeypatch):
 @pytest.fixture(scope="module")
 def dosed():
     ct, cst = load_tg119()
-    s = PlanningState(ct=ct, cst=cst, pln=PhotonPlan(), protocol=TG_PROTOCOL)
+    s = PlanningState(ct=ct, cst=cst, pln=PhotonPlan(), protocol=TG_PROTOCOL, max_optimizations=50)
     s.set_beams([0, 72, 144, 216, 288], None)
     s.set_objectives("OuterTarget", [SquaredDeviation(priority=100, d_ref=2.0)])
     s.set_objectives("Core", [SquaredOverdosing(priority=10, d_max=0.8)])
@@ -550,6 +550,31 @@ def test_optimize_uses_scipy_on_the_cpu_and_is_reproducible(dosed, monkeypatch):
     assert not plan.result.beam_quantities  # kept plans hold the totals only
 
 
+def test_cpu_backend_restores_only_what_it_changed():
+    from pyRadPlan import settings  # noqa: PLC0415
+
+    xp = settings.xp
+    before = xp.prefer_gpu, xp.preferred_cpu_array_backend
+    try:
+        xp.prefer_gpu, xp.preferred_cpu_array_backend = True, "numpy"
+        with _cpu_backend(False):
+            assert xp.prefer_gpu is True
+            xp.prefer_gpu = False  # set meanwhile: not undone
+        assert xp.prefer_gpu is False
+
+        xp.prefer_gpu = True
+        with _cpu_backend():
+            assert xp.prefer_gpu is False
+        assert xp.prefer_gpu is True and xp.preferred_cpu_array_backend == "numpy"
+
+        with _cpu_backend():
+            xp.prefer_gpu = True  # set meanwhile: kept
+            xp.preferred_cpu_array_backend = "array_api_strict"  # was numpy already: kept
+        assert xp.prefer_gpu is True and xp.preferred_cpu_array_backend == "array_api_strict"
+    finally:
+        xp.prefer_gpu, xp.preferred_cpu_array_backend = before
+
+
 def test_optimize_can_start_from_an_earlier_plan(dosed):
     dosed.set_objectives("Core", [SquaredOverdosing(priority=10, d_max=0.8)])
     dosed.optimize(max_iter=60)
@@ -655,6 +680,31 @@ def test_pareto_front_samples_blends_for_free(two_trade_offs):
     blended = {g["goal"]: g["value"] for g in ev["goals"]}
     for goal, value in c["values"].items():
         assert blended[goal] == pytest.approx(value, abs=1e-3)
+
+
+def test_pareto_front_needs_a_dose_linear_in_the_fluence(two_trade_offs, monkeypatch):
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    lq = SimpleNamespace(provides=lambda *names: True)
+    variable = SimpleNamespace(bio_model=lq, rbe=None, alpha_dose=1, sqrt_beta_dose=1)
+    constant = SimpleNamespace(bio_model=None, rbe=1.1, alpha_dose=None, sqrt_beta_dose=None)
+    assert _dose_is_linear(variable, "physical_dose") and _dose_is_linear(constant, "rbe_x_dose")
+    assert not _dose_is_linear(variable, "rbe_x_dose")
+    assert not two_trade_offs._nonlinear_plans  # photons
+
+    monkeypatch.setattr(two_trade_offs, "_nonlinear_plans", {2})
+    with pytest.raises(PlanningError, match="variable RBE.*blend_plans"):
+        two_trade_offs.pareto_front([1, 2])
+
+
+def test_blends_and_pareto_samples_are_capped(two_trade_offs, monkeypatch):
+    monkeypatch.setattr(two_trade_offs, "max_pareto_samples", 25)
+    assert two_trade_offs.pareto_front([1, 2], n_samples=2000)["num_blends"] <= 25
+    kept = sum(1 for p in two_trade_offs.plans if p.blend)
+    monkeypatch.setattr(two_trade_offs, "max_blends", kept)
+    with pytest.raises(PlanningError, match="blends are kept already"):
+        two_trade_offs.blend_plans([1, 2], [0.5, 0.5])
+    assert sum(1 for p in two_trade_offs.plans if p.blend) == kept
 
 
 def test_pareto_front_axes_and_dominated_plans(two_trade_offs):

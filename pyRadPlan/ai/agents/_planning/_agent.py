@@ -11,9 +11,10 @@ import dataclasses
 import functools
 import inspect
 import logging
-from typing import Annotated, Any, Collection, Literal, Optional
+from typing import Annotated, Any, Callable, Collection, Literal, Optional
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_ai import (
     Agent,
     ApprovalRequired,
@@ -23,10 +24,12 @@ from pydantic_ai import (
     RunContext,
     ToolDefinition,
     ToolDenied,
+    capture_run_messages,
 )
 from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 from pydantic_core import to_json
 
 from pyRadPlan.core import ComputeCancelledError
@@ -44,6 +47,7 @@ from ._views import (
     model_optimizer_report,
     model_pareto,
     slim_schema,
+    with_hidden_defaults,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,51 @@ _DENIALS = {
     "redirect": "Not run: the planner reviewed the plans and says: {}",
     "finish": "Not run: the planner ends the run. Write your final report now. {}",
 }
+_FINISH = "The planner ended the run. Return your final report now."
+# Tool calls allowed per run_planning_agent / continue_planning_agent call unless given:
+# this many, plus this many per optimization of the budget
+_TOOL_CALLS_BASE = 40
+_TOOL_CALLS_PER_OPTIMIZATION = 20
+
+
+class PlanningRunError(Exception):
+    """A planning run ended early without a report; what it did so far is kept.
+
+    Raised by :func:`run_planning_agent` and :func:`continue_planning_agent` when the
+    pydantic-ai run fails: a usage limit is reached (requests, tool calls), the model
+    misbehaves (e.g. keeps sending invalid arguments) or the provider / connection fails.
+    The original exception is the ``__cause__``. The :class:`PlanningState` keeps its
+    plans; pass this error to :func:`continue_planning_agent` in place of a result to go
+    on from where the run stopped. A stop request (``ComputeCancelledError``) is not
+    wrapped.
+
+    Attributes
+    ----------
+    messages : list[ModelMessage]
+        The whole conversation up to the failure.
+    usage : RunUsage
+        Usage over all calls so far.
+    output : None
+        No report (same attribute as a run result).
+    """
+
+    def __init__(self, messages: list[ModelMessage], usage: RunUsage, cause: BaseException):
+        super().__init__(
+            f"The planning run stopped early ({type(cause).__name__}: {cause}). "
+            "Continue it with continue_planning_agent."
+        )
+        self.messages = messages
+        self.usage = usage
+        self.output = None
+
+    def all_messages(self) -> list[ModelMessage]:
+        """Return the conversation, as a run result does."""
+        return self.messages
+
+    @property
+    def limit_exceeded(self) -> bool:
+        """Whether a usage limit ended the run, so continuing with a new limit goes on."""
+        return isinstance(self.__cause__, UsageLimitExceeded)
 
 
 class PlanningReport(BaseModel):
@@ -69,6 +118,11 @@ class PlanningReport(BaseModel):
     )
     suggestions_for_planner: list[str] = Field(
         default_factory=list, description="What a human planner should check or try next."
+    )
+    # Filled by pyRadPlan, not by the model: goals may be mapped to any clinical VOI
+    goal_aliases: SkipJsonSchema[dict[str, str]] = Field(
+        default_factory=dict,
+        description="Protocol structure name -> VOI its goals were evaluated on.",
     )
 
 
@@ -198,6 +252,62 @@ def compact_history(messages: list[ModelMessage], step: int) -> list[ModelMessag
     return out
 
 
+def _tool_decorator(agent: Agent, tools: Optional[Collection[str]], registered: set) -> Callable:
+    """Return the decorator registering a planning tool with *agent* (if in *tools*)."""
+
+    def tool(method: Any = None, description: Optional[str] = None, prepare: Any = None):
+        # Tools share the state, so calls of one response run in order, not in parallel.
+        # Errors reach the model as results instead of ending the run: a PlanningError
+        # (a refusal the model can act on) and any other failure. Neither uses up the
+        # retries, which are left to arguments failing validation. A stop request ends
+        # the run; once the planner ended it, no further plans are made.
+        def register(fn):
+            registered.add(fn.__name__)
+            if tools is not None and fn.__name__ not in tools:
+                return fn
+
+            @functools.wraps(fn)
+            def safe(*args, **kwargs):
+                state: PlanningState = args[0].deps
+                if state.control is not None and state.control.stop_requested:
+                    raise ComputeCancelledError("The planning agent was stopped on request.")
+                if fn.__name__ in _REVIEW_TOOLS and not args[0].tool_call_approved:
+                    if reason := state.review_reason(fn.__name__):
+                        state._notify("review", name=fn.__name__, reason=reason)
+                        raise ApprovalRequired(metadata={"reason": reason})
+                state._notify("tool", name=fn.__name__, args=kwargs)
+                error = None
+                try:
+                    if state.finish_requested and fn.__name__ in _PRODUCING_TOOLS:
+                        raise PlanningError(_FINISH)
+                    return fn(*args, **kwargs)
+                except (ModelRetry, ComputeCancelledError) as e:
+                    error = str(e)
+                    raise
+                except PlanningError as e:
+                    error = str(e)
+                    return {"error": error, "refused": True}
+                except Exception as e:
+                    logger.exception("Planning tool %s failed", fn.__name__)
+                    error = f"{type(e).__name__}: {e}"
+                    return {
+                        "error": error,
+                        "note": "Unexpected failure inside pyRadPlan, not a wrong argument. "
+                        "The state may be partly changed (check case_overview); do not "
+                        "repeat the same call unchanged.",
+                    }
+                finally:
+                    state._notify("tool_done", name=fn.__name__, error=error)
+
+            return agent.tool(
+                description=description or inspect.getdoc(method), sequential=True, prepare=prepare
+            )(safe)
+
+        return register
+
+    return tool
+
+
 def create_planning_agent(
     model: Any = None,
     tools: Optional[Collection[str]] = None,
@@ -211,13 +321,15 @@ def create_planning_agent(
     ``DeferredToolRequests`` when the planner should review (see
     :meth:`PlanningState.review_reason` and :func:`continue_planning_agent`).
 
+    A call the state refuses (:class:`PlanningError`: unknown VOI, budget used up, ...)
+    comes back to the model as the result ``{"error": ..., "refused": True}``.
+
     *compact_after* > 0 compacts the message history every that many optimizations (see
     :func:`compact_history`), so later requests send fewer tokens. Each compaction
     rewrites the history, so a provider's prompt cache is rebuilt from the first
     shortened message on; 0 never compacts.
     """
     model = resolve_model(model)
-    objective_union = get_objectives_union(exclude_image_references=True)
 
     def compact(ctx: RunContext[PlanningState], messages: list[ModelMessage]):
         state = ctx.deps
@@ -244,58 +356,28 @@ def create_planning_agent(
         capabilities=[ProcessHistory(compact)] if compact_after > 0 else None,
     )
 
+    @agent.output_validator
+    def add_goal_aliases(ctx: RunContext[PlanningState], output: Any) -> Any:
+        if isinstance(output, PlanningReport):
+            state = ctx.deps
+            names = {g.voi for g in state.protocol.goals}
+            output.goal_aliases = {
+                name: voi for name, voi in state.aliases.items() if name in names and voi != name
+            }
+        return output
+
     registered: set[str] = set()
+    tool = _tool_decorator(agent, tools, registered)
+    _register_structure_tools(tool)
+    _register_plan_tools(tool)
+    unknown = set(tools or ()) - registered
+    if unknown:
+        raise ValueError(f"Unknown planning tools {sorted(unknown)}. Known: {sorted(registered)}")
+    return agent
 
-    def tool(method: Any = None, description: Optional[str] = None, prepare: Any = None):
-        # Tools share the state, so calls of one response run in order, not in parallel.
-        # Errors reach the model instead of ending the run: a PlanningError as a retry
-        # prompt to fix the call, any other failure as an error result. A stop request
-        # ends the run; once the planner ended it, no further plans are made.
-        def register(fn):
-            registered.add(fn.__name__)
-            if tools is not None and fn.__name__ not in tools:
-                return fn
 
-            @functools.wraps(fn)
-            def safe(*args, **kwargs):
-                state: PlanningState = args[0].deps
-                if state.control is not None and state.control.stop_requested:
-                    raise ComputeCancelledError("The planning agent was stopped on request.")
-                if fn.__name__ in _REVIEW_TOOLS and not args[0].tool_call_approved:
-                    if reason := state.review_reason(fn.__name__):
-                        state._notify("review", name=fn.__name__, reason=reason)
-                        raise ApprovalRequired(metadata={"reason": reason})
-                state._notify("tool", name=fn.__name__, args=kwargs)
-                error = None
-                try:
-                    if state.finish_requested and fn.__name__ in _PRODUCING_TOOLS:
-                        raise ModelRetry(
-                            "The planner ended the run. Return your final report now."
-                        )
-                    return fn(*args, **kwargs)
-                except (ModelRetry, ComputeCancelledError) as e:
-                    error = str(e)
-                    raise
-                except PlanningError as e:
-                    error = str(e)
-                    raise ModelRetry(error) from e
-                except Exception as e:
-                    logger.exception("Planning tool %s failed", fn.__name__)
-                    error = f"{type(e).__name__}: {e}"
-                    return {
-                        "error": error,
-                        "note": "Unexpected failure inside pyRadPlan, not a wrong argument. "
-                        "The state may be partly changed (check case_overview); do not "
-                        "repeat the same call unchanged.",
-                    }
-                finally:
-                    state._notify("tool_done", name=fn.__name__, error=error)
-
-            return agent.tool(
-                description=description or inspect.getdoc(method), sequential=True, prepare=prepare
-            )(safe)
-
-        return register
+def _register_structure_tools(tool: Callable) -> None:
+    """Register the tools on structures, anatomy, helpers and goals."""
 
     @tool(PlanningState.inspect_structures)
     def inspect_structures(ctx: RunContext[PlanningState]) -> dict:
@@ -367,6 +449,13 @@ def create_planning_agent(
     ) -> dict:
         return ctx.deps.get_site_constraints(table, site, apply)
 
+
+def _register_plan_tools(tool: Callable) -> None:
+    """Register the tools on beams, objectives, optimization and plans."""
+    # Without the objectives created in code (outcome models): validating those loads
+    # pickled estimators or downloads models, which no model output may trigger
+    objective_union = get_objectives_union(exclude_image_references=True, selectable_only=True)
+
     @tool(PlanningState.case_overview)
     def case_overview(ctx: RunContext[PlanningState]) -> dict:
         return ctx.deps.case_overview()
@@ -391,7 +480,7 @@ def create_planning_agent(
     def set_objectives(
         ctx: RunContext[PlanningState], voi_name: str, objectives: list[objective_union]
     ) -> dict:
-        return ctx.deps.set_objectives(voi_name, objectives)
+        return ctx.deps.set_objectives(voi_name, [with_hidden_defaults(o) for o in objectives])
 
     @tool(PlanningState.optimize)
     def optimize(
@@ -404,8 +493,6 @@ def create_planning_agent(
         feedback, state.feedback = state.feedback, None
         # A refused call carries the planner's feedback instead of dropping it
         note = f" Planner feedback: {feedback}" if feedback else ""
-        if state.num_optimizations >= state.max_optimizations:
-            raise ModelRetry("Optimization budget used up. Return your final report now." + note)
         try:
             evaluation = state.optimize(max_iter, min_improvement, start_from)
         except PlanningError as e:
@@ -449,11 +536,6 @@ def create_planning_agent(
     ) -> dict:
         return ctx.deps.analyze_qis(vois, ref_vols, ref_doses)
 
-    unknown = set(tools or ()) - registered
-    if unknown:
-        raise ValueError(f"Unknown planning tools {sorted(unknown)}. Known: {sorted(registered)}")
-    return agent
-
 
 def planning_tools() -> dict[str, str]:
     """Name and description of every planning tool, in registration order."""
@@ -467,8 +549,9 @@ def run_planning_agent(
     state: PlanningState,
     task: str,
     model: Any = None,
-    max_optimizations: int = 8,
+    max_optimizations: Optional[int] = None,
     request_limit: int = 40,
+    tool_calls_limit: Optional[int] = None,
     tools: Optional[Collection[str]] = None,
     compact_after: int = 0,
 ):
@@ -476,11 +559,21 @@ def run_planning_agent(
 
     ``.output`` is the :class:`PlanningReport`, or ``DeferredToolRequests`` if the run
     paused for a review (resume with :func:`continue_planning_agent`). *state* holds
-    plan, objectives, dose and history.
+    plan, objectives, dose and history; what an earlier run left of the planner's end
+    of the run and feedback is cleared.
+
+    *max_optimizations* replaces the budget of *state* if given. *request_limit* caps
+    the model requests and *tool_calls_limit* the tool calls of this call (default:
+    derived from the optimization budget). Reaching a limit, or any other failure of
+    the run, raises a :class:`PlanningRunError` holding the conversation so far, which
+    :func:`continue_planning_agent` takes in place of a result.
     """
-    state.max_optimizations = max_optimizations
+    if max_optimizations is not None:
+        state.max_optimizations = max_optimizations
+    state.finish_requested = False
+    state.feedback = None
     agent = create_planning_agent(model, tools=tools, compact_after=compact_after)
-    return _run(agent, state, task, request_limit, "run_planning_agent")
+    return _run(agent, state, task, (request_limit, tool_calls_limit), "run_planning_agent")
 
 
 def continue_planning_agent(
@@ -493,14 +586,18 @@ def continue_planning_agent(
     tools: Optional[Collection[str]] = None,
     compact_after: int = 0,
     protocol: Optional[Protocol] = None,
+    tool_calls_limit: Optional[int] = None,
 ):
-    """Continue the run that returned *previous* on the same *state*.
+    """Continue the run that returned (or raised) *previous* on the same *state*.
 
     After a pause, *action* decides the pending call: ``continue`` runs it with *prompt*
     as planner feedback, ``redirect`` skips it and passes *prompt* on, ``finish`` asks
-    for the final report. After a report, *prompt* is the next task. A changed
-    *protocol* re-evaluates every plan and is reported to the agent. Budgets are those
-    of *state*; *request_limit* counts the requests of this call.
+    for the final report. After a report, *prompt* is the next task. After a
+    :class:`PlanningRunError`, the run goes on where it stopped, *prompt* (optional) is
+    passed to the model and ``finish`` asks for the report. A changed *protocol*
+    re-evaluates every plan and is reported to the agent. Budgets are those of *state*;
+    *request_limit* and *tool_calls_limit* count the requests and tool calls of this
+    call, so a continued run has them anew.
     """
     notes = []
     if protocol is not None and (changes := state.set_protocol(protocol)):
@@ -511,12 +608,20 @@ def continue_planning_agent(
     agent = create_planning_agent(model, tools=tools, compact_after=compact_after)
     history = previous.all_messages()
     pending = previous.output
+    limits = (request_limit, tool_calls_limit)
+    if isinstance(previous, PlanningRunError):
+        if action == "finish":
+            text = f"{_FINISH} {text}".strip()
+        # A request the model has not answered yet goes on without a new prompt
+        if not text and not (history and isinstance(history[-1], ModelRequest)):
+            text = "Continue."
+        return _run(
+            agent, state, text or None, limits, "continue_planning_agent", previous, history
+        )
     if not isinstance(pending, DeferredToolRequests):
         if not text:
             raise ValueError("Give a prompt to continue a finished run.")
-        return _run(
-            agent, state, text, request_limit, "continue_planning_agent", previous, history
-        )
+        return _run(agent, state, text, limits, "continue_planning_agent", previous, history)
 
     approvals: dict[str, Any] = {}
     for call in pending.approvals:
@@ -538,7 +643,7 @@ def continue_planning_agent(
         agent,
         state,
         None,
-        request_limit,
+        limits,
         "continue_planning_agent",
         previous,
         history,
@@ -546,19 +651,33 @@ def continue_planning_agent(
     )
 
 
-def _run(
-    agent, state, prompt, request_limit, operation, previous=None, history=None, results=None
-):
-    # request_limit counts this call's requests; the usage adds up over all calls
-    used = previous.usage.requests if previous is not None else 0
-    result = agent.run_sync(
-        prompt,
-        deps=state,
-        message_history=history,
-        deferred_tool_results=results,
-        usage=copy.copy(previous.usage) if previous is not None else None,
-        usage_limits=UsageLimits(request_limit=used + request_limit),
-    )
-    model_name = getattr(agent.model, "model_name", agent.model)
-    log_run_usage(result, str(model_name), operation=operation)
+def _run(agent, state, prompt, limits, operation, previous=None, history=None, results=None):
+    # The limits count this call's requests and tool calls; the usage adds up over all calls
+    request_limit, tool_calls_limit = limits
+    if tool_calls_limit is None:
+        tool_calls_limit = (
+            _TOOL_CALLS_BASE + _TOOL_CALLS_PER_OPTIMIZATION * state.max_optimizations
+        )
+    usage = copy.deepcopy(previous.usage) if previous is not None else RunUsage()
+    model_name = str(getattr(agent.model, "model_name", agent.model))
+    with capture_run_messages() as messages:
+        try:
+            result = agent.run_sync(
+                prompt,
+                deps=state,
+                message_history=history,
+                deferred_tool_results=results,
+                usage=usage,
+                usage_limits=UsageLimits(
+                    request_limit=usage.requests + request_limit,
+                    tool_calls_limit=usage.tool_calls + tool_calls_limit,
+                ),
+            )
+        except ComputeCancelledError:
+            raise
+        except Exception as e:
+            error = PlanningRunError(list(messages) or list(history or []), usage, e)
+            log_run_usage(error, model_name, operation=operation)
+            raise error from e
+    log_run_usage(result, model_name, operation=operation)
     return result

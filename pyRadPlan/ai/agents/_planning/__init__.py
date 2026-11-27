@@ -10,6 +10,7 @@
 
 from ._agent import (
     PlanningReport,
+    PlanningRunError,
     compact_history,
     continue_planning_agent,
     create_planning_agent,
@@ -43,6 +44,7 @@ __all__ = [
     "PlanRecord",
     "PlanningError",
     "PlanningReport",
+    "PlanningRunError",
     "PlanningState",
     "Protocol",
     "RingRecipe",

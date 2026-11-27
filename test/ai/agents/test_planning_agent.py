@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("pydantic_ai")
 
 from pydantic_ai import DeferredToolRequests, models
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -23,6 +24,7 @@ from pyRadPlan.ai.agents._planning import (
     Goal,
     PlanningError,
     PlanningReport,
+    PlanningRunError,
     PlanningState,
     PlanRecord,
     Protocol,
@@ -31,8 +33,13 @@ from pyRadPlan.ai.agents._planning import (
     create_planning_agent,
     evaluate_protocol,
     planning_tools,
+    run_planning_agent,
 )
-from pyRadPlan.optimization.objectives import SquaredDeviation, SquaredOverdosing
+from pyRadPlan.optimization.objectives import (
+    SquaredDeviation,
+    SquaredOverdosing,
+    get_available_objectives,
+)
 from pyRadPlan.plan import PhotonPlan
 
 models.ALLOW_MODEL_REQUESTS = False  # guarantee no real LLM is ever called here
@@ -403,19 +410,14 @@ def test_listener_sees_tool_calls_and_stop_ends_the_run(state):
     assert events == [("tool", "case_overview"), ("tool_done", "case_overview")]
 
 
-def test_agent_optimization_budget(state, monkeypatch):
-    calls = []
-
-    def fake_optimize(self, max_iter=500, min_improvement=1e-2, start_from=None):
-        calls.append(1)
-        return _record(self, {"all_hard_passed": False, "goals": []})
-
-    monkeypatch.setattr(PlanningState, "optimize", fake_optimize)
-    model, seen = _scripted_model([[("optimize", {})], [("optimize", {})], "final"])
-    state.max_optimizations = 1
+def test_optimization_budget_is_enforced_by_the_state(state):
+    state.num_optimizations = state.max_optimizations = 1
+    with pytest.raises(PlanningError, match="budget of 1 used up"):
+        state.optimize()
+    model, seen = _scripted_model([[("optimize", {})], "final"])
     create_planning_agent(model).run_sync("x", deps=state)
-    assert len(calls) == 1
-    assert "budget" in str(seen[2].parts[0].content)
+    assert "budget" in _returned(seen[1], "optimize")
+    assert state.num_optimizations == 1 and state.num_dij_calcs == 0
 
 
 def _offered_tools(state) -> dict:
@@ -746,3 +748,172 @@ def test_continue_reports_changed_goals(state):
     prompt = next(p for p in seen[1].parts if isinstance(p, UserPromptPart)).content
     assert "changed the goals" in prompt and "added Core max <= 1.2 (hard)" in prompt
     assert state.protocol is protocol
+
+
+# ---- 5. refusals, limits and failed runs -----------------------------------------------
+
+
+def test_outcome_objectives_are_neither_offered_nor_accepted(state, monkeypatch):
+    hidden = set(get_available_objectives()) - set(get_available_objectives(selectable_only=True))
+    assert hidden  # the outcome objectives, which load estimators when validated
+    schema = _offered_tools(state)["set_objectives"].parameters_json_schema
+    offered = {d["properties"]["name"]["const"] for d in schema["$defs"].values()}
+    assert offered and not offered & hidden
+
+    before = state.current_objectives()
+    bad = {"name": sorted(hidden)[0], "penalty": 1}
+    call = [("set_objectives", {"voi_name": "Core", "objectives": [bad]})]
+    model, _ = _scripted_model([call, call, call, "final"])
+    with pytest.raises(PlanningRunError) as failed:  # invalid arguments use up the retries
+        run_planning_agent(state, "x", model=model)
+    assert isinstance(failed.value.__cause__, UnexpectedModelBehavior)
+    assert not failed.value.limit_exceeded and state.current_objectives() == before
+    done = continue_planning_agent(state, failed.value, model=model)
+    assert isinstance(done.output, PlanningReport)
+
+    monkeypatch.setattr(SquaredDeviation, "selectable", False)
+    with pytest.raises(PlanningError, match="cannot be set here"):
+        state.set_objectives("Core", [SquaredDeviation(priority=1, d_ref=1.0)])
+    assert state.current_objectives() == before
+
+
+def test_refusals_are_results_and_do_not_end_the_run(state):
+    wrong = [("set_objectives", {"voi_name": "Rectum", "objectives": []})]
+    model, seen = _scripted_model([wrong] * 5 + ["final"])
+    events = []
+    state.listener = lambda event, **data: events.append((event, data.get("error")))
+    result = run_planning_agent(state, "x", model=model)
+    assert isinstance(result.output, PlanningReport)
+    returned = [p for m in seen[1:] for p in m.parts if isinstance(p, ToolReturnPart)]
+    assert len(returned) == 5
+    assert all(r.content["refused"] and "Unknown VOI" in r.content["error"] for r in returned)
+    assert ("tool_done", returned[0].content["error"]) in events
+
+
+def test_a_reached_limit_keeps_the_conversation(state):
+    model, seen = _scripted_model([[("case_overview", {})]] * 3 + ["final"])
+    with pytest.raises(PlanningRunError, match="UsageLimitExceeded") as failed:
+        run_planning_agent(state, "plan it", model=model, request_limit=2)
+    err = failed.value
+    assert err.limit_exceeded and isinstance(err.__cause__, UsageLimitExceeded)
+    assert err.output is None and err.usage.requests == 2 and err.usage.tool_calls == 2
+    assert err.all_messages() is err.messages
+    assert err.messages[0].parts[-1].content == "plan it"
+    assert _returned(err.messages[-1], "case_overview")
+
+    done = continue_planning_agent(state, err, model=model, request_limit=2)
+    assert isinstance(done.output, PlanningReport) and done.usage.requests == 4
+    assert len(done.all_messages()) == len(err.messages) + 4  # the history is kept
+    assert not any(isinstance(p, UserPromptPart) for p in seen[2].parts)  # no new prompt
+
+
+def test_tool_calls_are_limited(state):
+    two = [("case_overview", {}), ("structure_geometry", {})]
+    model, seen = _scripted_model([two, two, "final"])
+    with pytest.raises(PlanningRunError) as failed:
+        run_planning_agent(state, "x", model=model, tool_calls_limit=3)
+    assert failed.value.limit_exceeded and failed.value.usage.tool_calls == 2
+    done = continue_planning_agent(state, failed.value, "Go on.", model=model)
+    assert isinstance(done.output, PlanningReport)
+    assert any(isinstance(p, UserPromptPart) and p.content == "Go on." for p in seen[2].parts)
+
+    state.max_optimizations = 0  # the default follows the optimization budget: 40 calls
+    model, _ = _scripted_model([[("case_overview", {})] * 41, "final"])
+    with pytest.raises(PlanningRunError, match="tool_calls_limit of 40"):
+        run_planning_agent(state, "x", model=model)
+
+
+def test_a_failing_provider_keeps_the_conversation(state):
+    calls = []
+
+    def fn(messages, info: AgentInfo) -> ModelResponse:
+        calls.append(messages[-1])
+        if len(calls) == 1:
+            return ModelResponse(parts=[ToolCallPart("case_overview", {})])
+        if len(calls) == 2:
+            raise ConnectionError("connection lost")
+        report = PlanningReport(all_hard_goals_met=False, summary="x").model_dump()
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, report)])
+
+    model = FunctionModel(fn)
+    with pytest.raises(PlanningRunError, match="connection lost") as failed:
+        run_planning_agent(state, "x", model=model)
+    assert isinstance(failed.value.__cause__, ConnectionError) and not failed.value.limit_exceeded
+    assert _returned(failed.value.messages[-1], "case_overview")
+    done = continue_planning_agent(state, failed.value, action="finish", model=model)
+    assert done.output.summary == "x" and state.finish_requested
+    assert "planner ended the run" in str(calls[2].parts[-1].content)
+
+
+def test_run_resets_the_flags_of_a_reused_state_and_keeps_its_budget(state):
+    state.max_optimizations, state.finish_requested, state.feedback = 3, True, "old"
+    model, _ = _scripted_model(["final", "final"])
+    run_planning_agent(state, "x", model=model)
+    assert state.max_optimizations == 3
+    assert state.finish_requested is False and state.feedback is None
+    run_planning_agent(state, "x", model=model, max_optimizations=5)
+    assert state.max_optimizations == 5
+
+
+def test_hidden_objective_fields_stay_at_their_defaults(state):
+    sd = {
+        "name": "Squared Deviation",
+        "penalty": 7,
+        "d_ref": 2.0,
+        "quantity": "rbe_x_dose",
+        "robustness": "voxel_worst_case",
+    }
+    model, _ = _scripted_model(
+        [[("set_objectives", {"voi_name": "OuterTarget", "objectives": [sd]})], "final"]
+    )
+    create_planning_agent(model).run_sync("x", deps=state)
+    obj = state.cst.vois[1].objectives[0]
+    assert obj.priority == 7 and obj.quantity == "physical_dose" and obj.robustness == "none"
+
+
+def test_report_lists_the_goal_aliases(state):
+    state.aliases = {"Core": "BODY", "NotAGoal": "Core", "OuterTarget": "OuterTarget"}
+    model, _ = _scripted_model(["final"])
+    report = run_planning_agent(state, "x", model=model).output
+    assert report.goal_aliases == {"Core": "BODY"}
+    assert "goal_aliases" not in PlanningReport.model_json_schema()["properties"]
+
+
+# ---- 6. state consistency --------------------------------------------------------------
+
+
+def test_restore_is_refused_after_the_structures_changed(state):
+    state.snapshot("v1")
+    state.map_structures(exclude=["Core"])
+    with pytest.raises(PlanningError, match="map_structures changed"):
+        state.restore("v1")
+    assert "Core" not in state.voi_names and state.excluded == ["Core"]
+    state.snapshot("v2")
+    state.set_objectives("OuterTarget", [])
+    state.restore("v2")
+    assert state.current_objectives()["OuterTarget"]
+
+
+def test_state_does_not_change_the_callers_plan():
+    ct, cst = load_tg119()
+    pln = PhotonPlan()
+    before = pln.model_dump()
+    s = PlanningState(ct=ct, cst=cst, pln=pln, protocol=PROTOCOL)
+    s.set_beams([0, 90], None)
+    assert s.pln is not pln and pln.model_dump() == before
+    assert s.current_beams()["gantry_angles"] == [0, 90]
+
+
+def test_set_beams_rejects_duplicates_and_keeps_the_dij_of_unchanged_beams(state):
+    for gantry, couch in (([0, 0, 0], None), ([10, 10.0], None), ([0, 90, 0], [5, 0, 5])):
+        with pytest.raises(PlanningError, match="given twice"):
+            state.set_beams(gantry, couch)
+    with pytest.raises(PlanningError, match="given twice"):
+        state.set_beam_pool([0, 0])
+    state.set_beams([0, 0], [0, 90])  # same gantry, other couch
+    state.set_beams([0, 90], None)
+    state.dij = state.dose = dij = object()
+    out = state.set_beams([0, 90], [0, 0])
+    assert state.dij is dij and state.dose is dij and "nothing changed" in out["note"]
+    state.set_beams([90, 0], None)  # another order is another dose influence
+    assert state.dij is None and state.dose is None

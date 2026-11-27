@@ -23,9 +23,10 @@ from pyRadPlan.ct import CT
 from pyRadPlan.dij import Dij
 from pyRadPlan.dose._calc_dose import calc_dose_influence
 from pyRadPlan.optimization._fluence_optimization import fluence_optimization
-from pyRadPlan.optimization.objectives import MeanDose
+from pyRadPlan.optimization.objectives import MeanDose, get_available_objectives
 from pyRadPlan.optimization.solvers import SolverBase, get_available_solvers
 from pyRadPlan.plan import Plan, validate_pln
+from pyRadPlan.quantities._rbe_x_dose import RBExDose
 from pyRadPlan.result import PlanResult
 from pyRadPlan.stf._generate_stf import generate_stf
 
@@ -101,16 +102,39 @@ def _cpu_backend(enabled: bool = True) -> Iterator[None]:
     """Run the block with numpy on the CPU (the backend is a global setting).
 
     GPU reductions are not deterministic, so the same objectives could give different
-    plans; the agent needs reproducible results to judge its changes.
+    plans; the agent needs reproducible results to judge its changes. Only the settings
+    this changed are put back, and only while they still hold the value set here, so a
+    change made meanwhile (another thread, the user) survives.
     """
+    if not enabled:
+        yield
+        return
     xp = get_settings().xp
-    before = xp.prefer_gpu, xp.preferred_cpu_array_backend
-    if enabled:
-        xp.prefer_gpu, xp.preferred_cpu_array_backend = False, "numpy"
+    wanted = {"prefer_gpu": False, "preferred_cpu_array_backend": "numpy"}
+    before = {k: getattr(xp, k) for k, v in wanted.items() if getattr(xp, k) != v}
+    for k in before:
+        setattr(xp, k, wanted[k])
     try:
         yield
     finally:
-        xp.prefer_gpu, xp.preferred_cpu_array_backend = before
+        for k, value in before.items():
+            if getattr(xp, k) == wanted[k]:
+                setattr(xp, k, value)
+
+
+def _dose_is_linear(dij: Any, quantity: str) -> bool:
+    """Whether *quantity* of a result of *dij* is linear in the fluence.
+
+    Physical dose and constant-RBE weighted dose are; an RBE-weighted dose from the LQ
+    effect (variable RBE) is not.
+    """
+    if quantity != "rbe_x_dose":
+        return True
+    has_lq = (
+        getattr(dij, "alpha_dose", None) is not None
+        and getattr(dij, "sqrt_beta_dose", None) is not None
+    )
+    return RBExDose.choose_path(dij, has_effect=has_lq, strict=False) != "effect"
 
 
 def _beam_subset(dij: Dij, beams: list[int]) -> Dij:
@@ -141,7 +165,11 @@ def _beam_subset(dij: Dij, beams: list[int]) -> Dij:
 
 @dataclass
 class PlanningState:
-    """Everything the agent works on. Lives in Python, never in the chat."""
+    """Everything the agent works on. Lives in Python, never in the chat.
+
+    The plan is copied, so setting beams never changes the caller's plan: read the
+    beams from ``state.pln``.
+    """
 
     ct: CT
     cst: StructureSet
@@ -154,6 +182,9 @@ class PlanningState:
     allow_couch: bool = True
     max_iter: int = 5000
     max_optimizations: int = 8
+    # Blends kept as plans (each holds a CT-grid dose); pareto_front keeps none
+    max_blends: int = 20
+    max_pareto_samples: int = 2000
     # set_beams is refused once this many optimizations are used (None: never)
     lock_beams_after: Optional[int] = None
     # Comparing beam setups: at most max_beam_setups get optimizations, each up to
@@ -205,6 +236,11 @@ class PlanningState:
     # couch_angles, stf, dij, region
     beam_pool: Optional[dict] = None
     _influence: Optional[tuple] = None  # (dij, VOI names, rows), see beam_influence
+    # Plans whose dose is not linear in the fluence (variable RBE), see pareto_front
+    _nonlinear_plans: set = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        self.pln = validate_pln(self.pln).model_copy(deep=True)
 
     # ---- helpers ---------------------------------------------------------------------
     @property
@@ -824,13 +860,25 @@ class PlanningState:
     def restore(self, label: str) -> dict:
         """Return to the objectives, helpers and dose of snapshot *label*.
 
-        Beams must be unchanged. A snapshot saved with a dose needs no new optimize.
+        Beams and the clinical structures (map_structures) must be unchanged. A snapshot
+        saved with a dose needs no new optimize.
         """
         if label not in self.snapshots:
             raise PlanningError(f"No snapshot '{label}'. Available: {list(self.snapshots)}")
         snap = self.snapshots[label]
         if snap["beams"] != self.current_beams():
             raise PlanningError("Beams changed since this snapshot; set_beams first.")
+        saved = {
+            (v.name, v.voi_type)
+            for v in snap["cst"].vois
+            if v.voi_type != "HELPER" and v.name not in snap["helpers"]
+        }
+        if saved != {(v.name, v.voi_type) for v in self._clinical_vois()}:
+            raise PlanningError(
+                f"map_structures changed the structures or their types since '{label}' was "
+                "saved, so its objectives, dose and evaluation no longer fit. Not restored: "
+                "set the objectives again and save a new version."
+            )
         self.cst = snap["cst"]
         self.created_helpers = list(snap["helpers"])
         self.dose, self.last_evaluation = snap["dose"], snap["evaluation"]
@@ -1108,9 +1156,15 @@ class PlanningState:
             )
         if not self.allow_couch and any(couch_angles or []):
             raise PlanningError("Only coplanar beams are allowed: leave the couch at 0.")
-        setup = BeamSetup(gantry_angles=gantry_angles, couch_angles=couch_angles or [])
+        setup = self._beam_setup(gantry_angles, couch_angles)
         tried = self._optimizations_per_setup()
         key = self._setup_key(setup.model_dump())
+        if self.dij is not None and key == self._setup_key(self.current_beams()):
+            return {
+                "beams": self.current_beams(),
+                "dij_calcs_left": self.max_dij_calcs - self.num_dij_calcs,
+                "note": "These are the current beams: nothing changed, dose influence kept.",
+            }
         if (
             self.max_beam_setups is not None
             and key not in tried
@@ -1165,7 +1219,7 @@ class PlanningState:
         reports every candidate. Uses one dose influence calculation; afterwards no beams
         are set until set_beams picks some.
         """
-        setup = BeamSetup(gantry_angles=gantry_angles, couch_angles=couch_angles or [])
+        setup = self._beam_setup(gantry_angles, couch_angles)
         self._write_beams(setup)
         self.beam_pool = None
         dij = self._ensure_dij()
@@ -1181,6 +1235,20 @@ class PlanningState:
         self.stf = self.dij = None
         self._log("set_beam_pool", num_beams=len(setup.gantry_angles))
         return {"num_candidates": len(setup.gantry_angles), "bixels": dij.total_num_of_bixels}
+
+    @staticmethod
+    def _beam_setup(gantry_angles: list[float], couch_angles: Optional[list[float]]) -> BeamSetup:
+        """Validate the angles; a beam (gantry and couch angle) may be given only once."""
+        setup = BeamSetup(gantry_angles=gantry_angles, couch_angles=couch_angles or [])
+        seen = set()
+        for g, c in zip(setup.gantry_angles, setup.couch_angles):
+            beam = (round(float(g) % 360.0, 2), round(float(c) % 360.0, 2))
+            if beam in seen:
+                raise PlanningError(
+                    f"Gantry {g:g} / couch {c:g} is given twice: use each beam once."
+                )
+            seen.add(beam)
+        return setup
 
     def _write_beams(self, setup: BeamSetup) -> None:
         """Put *setup* into the plan; the dose influence and the dose become stale."""
@@ -1334,6 +1402,15 @@ class PlanningState:
         """
         if voi_name not in self.voi_names:
             raise UnknownVoiError(voi_name, self.voi_names)
+        # Objectives created in code (outcome models) load estimators when validated
+        refused = sorted(
+            {str(getattr(o, "name", o)) for o in objectives if not getattr(o, "selectable", False)}
+        )
+        if refused:
+            raise PlanningError(
+                f"{refused} cannot be set here. Use: "
+                f"{sorted(get_available_objectives(selectable_only=True))}."
+            )
         vois = [
             v.model_copy(update={"objectives": list(objectives)}) if v.name == voi_name else v
             for v in self.cst.vois
@@ -1371,6 +1448,11 @@ class PlanningState:
         An exact repeat of an earlier optimization (same objectives, start and settings, or
         continuing a converged plan with its own objectives) is refused without using one.
         """
+        if self.num_optimizations >= self.max_optimizations:
+            raise PlanningError(
+                f"Optimization budget of {self.max_optimizations} used up. "
+                "Return your final report now."
+            )
         if not any(v.objectives for v in self.cst.vois):
             raise PlanningError("No objectives defined. Call set_objectives first.")
         max_iter = min(max_iter, self.max_iter)
@@ -1522,9 +1604,19 @@ class PlanningState:
         plans in between; blending near-identical plans gains nothing. Physical (and
         constant-RBE) dose is linear in the fluence, so max, min and mean goals that all
         sources pass also pass in the blend; D<x> and V<x> goals can change either way.
+        With a variable RBE the dose is not linear, so any goal can change (and
+        pareto_front, which relies on the linearity, is refused).
         Weights (>= 0) are normalized to sum 1. The blend becomes the current
-        plan: save it with plan_versions or use it as start_from.
+        plan: save it with plan_versions or use it as start_from. The number of blends
+        kept is limited (pareto_front compares blends without keeping them).
         """
+        num_blends = sum(1 for p in self.plans if p.blend)
+        if num_blends >= self.max_blends:
+            raise PlanningError(
+                f"{num_blends} blends are kept already (at most {self.max_blends}). "
+                "pareto_front compares blends without keeping them; continue with the "
+                "plans you have."
+            )
         if len(plans) < 2 or len(set(plans)) != len(plans):
             raise PlanningError("Give at least two different plan numbers.")
         if len(weights) != len(plans):
@@ -1569,6 +1661,8 @@ class PlanningState:
         """Sample blends of plans (same beams) and return their Pareto front.
 
         Costs no optimization and changes no plan. Only blends passing all hard goals count.
+        Needs a dose that is linear in the fluence (physical or constant-RBE weighted, see
+        blend_plans): with a variable RBE it is refused, blend_plans stays exact.
         Trade-off axes are the target goals, soft goals and mean goals whose value differs
         between the plans by >= 1 % of its limit (or the goal labels in axes); other hard
         goals (OAR max and the like) only need to pass (constraint_goals). Axis values are
@@ -1588,6 +1682,14 @@ class PlanningState:
         sources = [self._plan(i) for i in plans]
         if any(p.beams != sources[0].beams for p in sources):
             raise PlanningError("All plans need the same beams.")
+        nonlinear = [p.index for p in sources if p.index in self._nonlinear_plans]
+        if nonlinear:
+            raise PlanningError(
+                f"The dose of plans {nonlinear} is RBE-weighted with a variable RBE and not "
+                "linear in the fluence, so blends cannot be sampled from the plan doses. "
+                "Use blend_plans, which computes each blend exactly."
+            )
+        n_samples = min(n_samples, self.max_pareto_samples)
         protocol = self._full_protocol()
         masks = {v.name: geo.as_bool(v.mask) for v in self.cst.vois}
         masks[NORMAL_TISSUE] = self._normal_tissue_region()
@@ -1769,6 +1871,8 @@ class PlanningState:
             **data,
         )
         self.plans.append(plan)
+        if not _dose_is_linear(self.dij, quantity):
+            self._nonlinear_plans.add(plan.index)
         self._notify("plan", plan=plan)
 
     def optimizer_report(self) -> dict:
