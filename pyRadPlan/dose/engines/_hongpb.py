@@ -35,6 +35,9 @@ class ParticleHongPencilBeamEngine(ParticlePencilBeamEngineAbstract):
             pb_kernel["lateral_cut_off"]["comp_fac"] * lateral * kernels["idd"]
         )
 
+        if "sample_weight" in bixel:
+            bixel["physical_dose"] = bixel["physical_dose"] * bixel["sample_weight"]
+
         # Check if we have valid dose values
         if xp.any(xp.isnan(bixel["physical_dose"])) or xp.any(bixel["physical_dose"] < 0):
             raise ValueError("Error in particle dose calculation.")

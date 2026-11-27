@@ -185,6 +185,73 @@ one line:
     pln.prop_dose_calc = {"engine": "HongPB"}
     dij = calc_dose_influence(ct, cst, stf, pln)
 
+.. _lateral-tail-sampling:
+
+Lateral cut-off and tail sampling (particles)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A pencil beam is laterally unbounded, so the particle pencil beam engines limit the voxels
+they compute per beamlet. ``dosimetric_lateral_cutoff`` sets the level of a lateral radius
+and ``cut_off_method`` how the level is measured and what happens beyond the radius.
+
+By default (``"integral"``) the engines cut the lateral profile off and scale the
+remaining dose with one compensation factor per energy. The factor restores the dose of a
+single beamlet on average, but the dose of a plan still depends on the cut-off, since the
+missing tails of neighbouring beamlets add up differently for every field size.
+
+The ``_tail_sampling`` methods remove this dependence. Every voxel within the radius is
+computed as before. Beyond it, a voxel is kept with a probability that follows the lateral
+fall-off of the dose, and a kept voxel is weighted with the inverse of that probability. The
+expected dose of every voxel is therefore the dose without any cut-off, at the price of
+statistical noise in the low-dose tail, which averages out over the beamlets of a plan. The
+decision uses only the radial distance and the depth of a voxel, so rejected voxels are
+never evaluated.
+
+.. code-block:: python
+
+    pln.prop_dose_calc = {
+        "engine": "HongPB",
+        "cut_off_method": "relative_tail_sampling",
+    }
+    dij = calc_dose_influence(ct, cst, stf, pln)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - ``cut_off_method``
+     - Meaning
+   * - ``"integral"``
+     - The radius encloses the fraction ``dosimetric_lateral_cutoff`` of the lateral dose
+       integral. The dose beyond is cut off and compensated.
+   * - ``"relative"``
+     - The radius ends where the dose has dropped to ``1 - dosimetric_lateral_cutoff`` of
+       its lateral maximum. The dose beyond is cut off and compensated.
+   * - ``"integral_tail_sampling"``
+     - The radius of ``"integral"``; the dose beyond is sampled.
+   * - ``"relative_tail_sampling"``
+     - The radius of ``"relative"``; the dose beyond is sampled.
+
+Without an explicit ``dosimetric_lateral_cutoff`` the level is 99.5 % for the two methods
+that cut the dose off and 98 % for the sampling methods, which do not lose the dose beyond
+the radius. For ions, ``"relative_tail_sampling"`` gave the smallest matrices at the accuracy
+of an uncut calculation in our tests; for VHEE, whose double Gaussian has a strong halo,
+``"integral_tail_sampling"`` is the less noisy choice.
+
+Both radii are the same for a single Gaussian. With a halo (double Gaussian), the relative
+radius follows the narrow component and gives the smaller matrix, while the integral radius
+reaches into the halo. With sampling, a larger radius lowers the noise and enlarges the
+matrix.
+
+Two more settings apply to the sampling methods. ``tail_sampling_min_probability`` sets
+where the sampled tail ends: the dose beyond that radius is added to the sampled tail, so a
+larger value computes fewer voxels but moves the far tail inwards. ``tail_sampling_seed``
+seeds the random sequence; the same seed reproduces the same matrix.
+
+A sampled matrix is a random realisation: single entries in the tail differ from the exact
+dose, and two seeds give two different matrices. Quantities derived from the dose (LET,
+biological quantities, range scenarios) use the same samples and weights.
+
 .. _concept_ai_dose_calculation:
 
 AI-based dose calculation
@@ -394,7 +461,7 @@ The ``Dij`` object can also convert its influence matrices explicitly with
 Jit-compiled kernels
 ~~~~~~~~~~~~~~~~~~~~
 
-A handful of hot-path computations (currently in the Siddon ray tracer) are written once
+A handful of hot-path computations (currently in the Siddon ray tracer and the lateral tail sampling) are written once
 as plain Array API code and additionally wrapped in
 :func:`pyRadPlan.core.xp_utils.jittable`. This decorator gives such a kernel jit-compiled
 execution paths per backend — a `numba <https://numba.pydata.org>`_ implementation for

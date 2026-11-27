@@ -2,13 +2,14 @@
 
 import warnings
 from abc import abstractmethod
-from typing import cast, ClassVar, Literal, Any, Optional, Union
+from typing import Annotated, cast, ClassVar, Literal, Any, Optional, Union
 import logging
 import time
 from copy import deepcopy
 
 import numpy as np
 import array_api_compat
+from pydantic import Field
 
 from scipy.interpolate import interp1d
 from scipy.integrate import cumulative_trapezoid
@@ -33,9 +34,18 @@ from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
 from ...core.xp_utils import ArrayBackend1DInterpolator, to_namespace, to_numpy
-from ._particle_cutoff import CutoffQuadrature, evaluate_cutoff
+from ._particle_cutoff import CutoffQuadrature, evaluate_cutoff, evaluate_tail_sampling
+from .kernels._tail_sampling_kernel import (
+    GOLDEN_RATIO_FRACTION,
+    select_tail_samples,
+    thin_tail_candidates,
+)
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_HARD_CUTOFF = 0.995
+DEFAULT_TAIL_SAMPLING_CUTOFF = 0.98
 
 
 class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
@@ -60,10 +70,27 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     lateral_model : Literal["auto", "single", "double", "multi", "fastest"]
         Lateral Model used. 'auto' uses the most accurate model available ( multiple Gaussians).
         "fastest" uses the most simple, inaccurate model (e.g., single Gaussian).
-    cut_off_method : Literal["integral", "relative"]
-        Method used to determine lateral cut off. 'integral' uses the integral of the lateral
-        dose profile to obtain the cut-off distance. 'relative' finds the lateral distance at which
-        the dose drops to the requested cutoff
+    cut_off_method : Literal["integral", "relative", "integral_tail_sampling", ...]
+        How the lateral cut-off radius is determined from ``dosimetric_lateral_cutoff`` and
+        what happens beyond it. 'integral' encloses that fraction of the integral of the
+        lateral dose profile, 'relative' ends where the dose has dropped to
+        ``1 - dosimetric_lateral_cutoff`` of its lateral maximum. Both cut the dose off there
+        and scale the rest with a compensation factor. The '_tail_sampling' variants
+        determine the same radius, but replace the cut and the compensation by importance
+        sampling of the lateral tail: voxels within the radius are always computed, and
+        further out a voxel is accepted with a probability following the lateral fall-off
+        and weighted by its inverse, which keeps the dose unbiased. The acceptance is
+        decided from the radial distance before the kernel is evaluated.
+    dosimetric_lateral_cutoff : float, optional
+        Level of the lateral cut-off radius, measured as given by ``cut_off_method``. By
+        default 0.995 for the methods that cut the dose off and 0.98 for the
+        '_tail_sampling' methods, where the tail beyond the radius is still accounted for.
+    tail_sampling_min_probability : float
+        Smallest acceptance probability. Sampling ends where the dose has dropped to
+        this fraction of the dose at the core edge; the little dose beyond is folded
+        into the sampled tail.
+    tail_sampling_seed : int
+        Seed of the per-voxel random offsets of the sampling sequence.
     """
 
     # Charge z and mass number A of the radiation modes for which range shifter scattering is
@@ -84,7 +111,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     calc_bio_dose: Union[Literal["auto"], bool] = "auto"
     air_offset_correction: bool = True
     lateral_model: Literal["auto", "single", "double", "multi", "fastest", "singleXY"] = "fastest"
-    cut_off_method: Literal["integral", "relative"] = "integral"
+    cut_off_method: Literal[
+        "integral", "relative", "integral_tail_sampling", "relative_tail_sampling"
+    ] = "integral"
+    dosimetric_lateral_cutoff: Annotated[
+        Optional[float], Field(gt=0.0, le=1.0, description="Relative dosimetric cut-off")
+    ] = None
+    tail_sampling_min_probability: Annotated[float, Field(gt=0.0, lt=1.0)] = 1e-3
+    tail_sampling_seed: int = 0
     tissue_classes: list[TissueProperties] = []  # list of tissues used in the cst
 
     _dij_guarantee_canonical: ClassVar[bool]
@@ -110,8 +144,30 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._energy_index_cache = {}
         self._depth_interpolator_cache = {}
         self._focus_interpolator_cache = {}
+        self._tail_offsets = None
+        self._tail_counter = 0
+        self._tail_range_shifts = None
 
         super().__init__(pln)
+
+    @property
+    def _samples_lateral_tail(self) -> bool:
+        """Whether the lateral tail is sampled; a cut-off of 1 leaves nothing to sample."""
+        return self.cut_off_method.endswith("_tail_sampling") and (
+            0 < self._lateral_cutoff_level < 1
+        )
+
+    @property
+    def _lateral_cutoff_level(self) -> float:
+        if self.dosimetric_lateral_cutoff is not None:
+            return self.dosimetric_lateral_cutoff
+        if self.cut_off_method.endswith("_tail_sampling"):
+            return DEFAULT_TAIL_SAMPLING_CUTOFF
+        return DEFAULT_HARD_CUTOFF
+
+    @property
+    def _cut_off_radius_method(self) -> str:
+        return self.cut_off_method.removesuffix("_tail_sampling")
 
     @abstractmethod
     def _calc_particle_bixel(self, bixel: dict):
@@ -399,10 +455,36 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # and a potential range shifter
         tmp_offset = kernel["offset"] - curr_bixel["rad_depth_offset"]
         cut_off_info = kernel["lateral_cut_off"]
+        sample_weight = None
         # Find depth-dependent lateral cutoff
-        if self.dosimetric_lateral_cutoff == 1:
+        if cut_off_info is not None and "tail_tables" in cut_off_info:
+            tail = cut_off_info["tail_tables"]
+            if "grid" not in tail:
+                tail["grid"] = cut_off_info["depths"] + kernel["offset"]
+                tail["depth_min"] = float(cut_off_info["depths"][0])
+                tail["depth_max"] = float(kernel["depths"][-1])
+            # The acceptance only needs the radial distance and the depth, so rejected
+            # voxels never reach the kernel evaluation. Among the voxels that passed
+            # the envelope of the ray, the bixels decide with numbers rotated from
+            # bixel to bixel, which decorrelates the energies.
+            curr_ix, sample_weight = select_tail_samples(
+                curr_ray["rad_depths"],
+                curr_ray["radial_dist_sq"],
+                curr_ray["tail_v"],
+                curr_ray["tail_envelope"],
+                tail["grid"],
+                tail["core_sq"],
+                tail["slope"],
+                tail["fac"],
+                curr_bixel["rad_depth_offset"],
+                (curr_bixel["bixel_index"] * GOLDEN_RATIO_FRACTION) % 1.0,
+                self.tail_sampling_min_probability,
+                tail["depth_min"] + tmp_offset,
+                tail["depth_max"] + tmp_offset,
+            )
+        elif self._lateral_cutoff_level == 1:
             curr_ix = curr_ray["rad_depths"] <= kernel["depths"][-1] + tmp_offset
-        elif 0 < self.dosimetric_lateral_cutoff < 1:
+        elif 0 < self._lateral_cutoff_level < 1:
             # cutoff_info = kernel.get("lateral_cut_off")
 
             if cut_off_info is not None and cut_off_info["cut_off"].shape[0] > 1:
@@ -459,7 +541,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Apply mask
         # Compact once; take preserves trailing dimensions and works across Array API backends.
-        curr_ix = xp.nonzero(curr_ix)[0]
+        if sample_weight is None:
+            curr_ix = xp.nonzero(curr_ix)[0]
+        else:
+            curr_bixel["sample_weight"] = sample_weight
         curr_bixel["ix"] = xp.take(curr_ray["ix"], curr_ix, axis=0)
 
         # Get quantities from ray and mask them
@@ -528,6 +613,26 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             dij = self._allocate_let_container(dij)
 
         self._effective_lateral_cutoff = self.geometric_lateral_cutoff
+
+        self._tail_counter = 0
+        self._tail_offsets = None
+        if self._samples_lateral_tail:
+            # The Array API has no random number generation: drawn once on the host
+            rng = np.random.default_rng(self.tail_sampling_seed)
+            self._tail_offsets = self.xp.asarray(
+                rng.random(self.dose_grid.num_voxels, dtype=np.float32), device=self.device
+            )
+            # The rays are thinned once for all range shifts of the scenarios
+            shifts = {(0.0, 0.0)}
+            for scenario in self._scenarios:
+                shift = scenario.values.get("range")
+                if shift is not None:
+                    shifts.add((float(shift[0]), float(shift[1])))
+            shifts = np.asarray(sorted(shifts), dtype=np.float64)
+            self._tail_range_shifts = (
+                self.xp.asarray(1.0 + shifts[:, 1], dtype=self.xp.float64, device=self.device),
+                self.xp.asarray(shifts[:, 0], dtype=self.xp.float64, device=self.device),
+            )
 
         return dij
 
@@ -600,7 +705,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Precompute CutOff
         logger.info("Calculating lateral cutoffs for beam %d...", i)
         t_start = time.time()
-        self._calc_lateral_particle_cut_off(self.dosimetric_lateral_cutoff, beam_info)
+        self._calc_lateral_particle_cut_off(self._lateral_cutoff_level, beam_info)
         t_elapsed = time.time() - t_start
         logger.info("Done in %f seconds.", t_elapsed)
 
@@ -759,9 +864,10 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # The small isotropic quadratures evaluate faster on the host than on a GPU.
         cutoff_xp, cutoff_device = array_api_compat.array_namespace(np.empty(0)), None
+        sampling = self._samples_lateral_tail
         quadrature = (
             CutoffQuadrature.create(self.lateral_model, xp=cutoff_xp, device=cutoff_device)
-            if cut_off_level != 1
+            if cut_off_level != 1 or sampling
             else None
         )
 
@@ -908,7 +1014,26 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 comp_fac=1.0, depths=depth_values, cut_off=np.inf * np.ones_like(depth_values)
             )
 
-            if cut_off_level != 1:
+            if sampling:
+                base_kernel = deepcopy(kernel).to_namespace(cutoff_xp, device=cutoff_device)
+                sigma_ini_sq = float(largest_sigma_sq4unique_energies[cnt - 1])
+                result = to_numpy(
+                    evaluate_tail_sampling(
+                        to_namespace(cutoff_xp, depth_values, device=cutoff_device),
+                        quadrature,
+                        lambda depths, grid: self._cutoff_dose_profile(
+                            depths, base_kernel, sigma_ini_sq, grid
+                        ),
+                        core=cut_off_level,
+                        min_probability=self.tail_sampling_min_probability,
+                        method=self._cut_off_radius_method,
+                    )
+                )
+                kernel.lateral_cut_off.core_cut_off = result[:, 0]
+                kernel.lateral_cut_off.cut_off = result[:, 1]
+                kernel.lateral_cut_off.tail_slope = result[:, 2]
+                kernel.lateral_cut_off.tail_fac = result[:, 3]
+            elif cut_off_level != 1:
                 # Convert once per energy, and keep the default compensation during integration.
                 base_kernel = deepcopy(kernel).to_namespace(cutoff_xp, device=cutoff_device)
                 # Host-selected scalar must be a Python scalar for strict Array API backends.
@@ -921,7 +1046,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                         depths, base_kernel, sigma_ini_sq, grid
                     ),
                     cutoff=cut_off_level,
-                    method=self.cut_off_method,
+                    method=self._cut_off_radius_method,
                 )
                 # One small device-to-host transfer per energy for the serialized machine model.
                 result = to_numpy(result)
@@ -965,6 +1090,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         else:
             ray["rad_depth_offset"] = [0] * len(ray["SSD"])
 
+        if self._samples_lateral_tail:
+            self._thin_ray_for_tail_sampling(ray, xp)
+
         # Reference LQ parameters of the voxels found by the ray tracer, keyed by CT phase.
         # The parameter arrays hold one column per voxel parameter set of the scenario set,
         # not per CT phase.
@@ -982,6 +1110,88 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         return ray
 
+    def _thin_ray_for_tail_sampling(self, ray: dict, xp) -> None:
+        """Draw the sampling numbers of a ray and drop voxels no bixel on it can accept.
+
+        The bixels of a ray share one random number per voxel. A voxel can only be
+        accepted by a bixel if this number is below the envelope of the acceptance
+        probabilities of all bixels on the ray (largest core radius and slowest
+        fall-off per depth). Voxels above the envelope are removed once, so the bixels
+        only handle a set of about the size of a hard cut-off cone.
+        """
+        tables = self._tail_envelope_tables(ray, xp)
+
+        # Per-voxel offsets rotated by the golden ratio from ray to ray: the acceptances
+        # of a voxel spread evenly over the rays reaching it, which lowers the noise
+        # compared to independent draws.
+        self._tail_counter += 1
+        rotation = (self._tail_counter * GOLDEN_RATIO_FRACTION) % 1.0
+        ray["tail_v"] = []
+        ray["tail_envelope"] = []
+        for phase in range(len(ray["ix"])):
+            keep, numbers, envelope = thin_tail_candidates(
+                self._tail_offsets,
+                ray["ix"][phase],
+                ray["rad_depths"][phase],
+                ray["radial_dist_sq"][phase],
+                *tables,
+                *self._tail_range_shifts,
+                float(ray["rad_depth_offset"][phase]),
+                rotation,
+                self.tail_sampling_min_probability,
+            )
+            ray["tail_v"].append(numbers)
+            ray["tail_envelope"].append(envelope)
+            for key in (
+                "ix",
+                "radial_dist_sq",
+                "lat_dists",
+                "iso_lat_dists",
+                "geo_depths",
+                "rad_depths",
+            ):
+                ray[key][phase] = xp.take(ray[key][phase], keep, axis=0)
+
+    def _tail_envelope_tables(self, ray: dict, xp) -> tuple:
+        """Envelope of the sampling tables of all bixels on a ray, cached per bixel set."""
+        keys = frozenset(
+            (beamlet["energy"], float(beamlet["range_shifter"]["eq_thickness"]))
+            for beamlet in ray["beamlets"]
+        )
+        # Cleared together with the kernels the tables derive from
+        cache_key = ("tail_envelope", keys)
+        tables = self._depth_interpolator_cache.get(cache_key)
+        if tables is not None:
+            return tables
+        # Depth axes of the sampling tables, without the offset of the ray
+        axes = []
+        for energy, thickness in keys:
+            kernel = self._machine.get_kernel_by_energy(energy)
+            cut_off = kernel.lateral_cut_off
+            axes.append(
+                (
+                    cut_off.depths + float(kernel.offset) - thickness,
+                    cut_off.core_cut_off**2,
+                    cut_off.tail_slope,
+                )
+            )
+        # On the union of all nodes the interpolated maximum (minimum) of the piecewise
+        # linear tables bounds every single table from above (below)
+        grid = np.unique(np.concatenate([axis for axis, _, _ in axes]))
+        core_sq = np.zeros_like(grid)
+        slope = np.full_like(grid, 1e30)
+        for axis, table_core_sq, table_slope in axes:
+            core_sq = np.maximum(
+                core_sq, np.interp(grid, axis, table_core_sq, left=0.0, right=0.0)
+            )
+            slope = np.minimum(slope, np.interp(grid, axis, table_slope, left=1e30, right=1e30))
+        tables = tuple(
+            xp.asarray(table, dtype=xp.float64, device=self.device)
+            for table in (grid, core_sq, slope)
+        )
+        self._depth_interpolator_cache[cache_key] = tables
+        return tables
+
     def _clear_kernel_cache(self) -> None:
         """Invalidate converted kernels and their prepared interpolation together."""
         self._kernel_cache.clear()
@@ -996,6 +1206,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         ct_phase = scenario.ct_phase
         scen_ray["sigma_ini"] = ray["sigma_ini"][ct_phase]
+        if "tail_v" in ray:
+            scen_ray["tail_v"] = ray["tail_v"][ct_phase]
+            scen_ray["tail_envelope"] = ray["tail_envelope"][ct_phase]
         scen_ray["rad_depth_offset"] = ray["rad_depth_offset"][ct_phase]
 
         if self._calc_bio_dose:

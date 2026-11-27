@@ -1,5 +1,6 @@
 """Array API quadrature for particle lateral-cutoff preparation."""
 
+import math
 from dataclasses import dataclass, replace
 from numbers import Integral
 from typing import Callable
@@ -224,4 +225,104 @@ def evaluate_cutoff(
             selected = xp.take_along_axis(area, indices[:, None], axis=1)[:, 0]
             result[start:stop, 1] = (selected / area[:, -1]) ** -1
         result[start:stop, 2] = xp.abs(area[:, -1] / idd[start:stop] - 1) * 100
+    return result
+
+
+def evaluate_tail_sampling(
+    depths: Array,
+    quadrature: CutoffQuadrature,
+    dose_profile: Callable[[Array, CutoffQuadrature], Array],
+    *,
+    core: float,
+    min_probability: float,
+    method: str = "integral",
+    max_samples: int = 1_000_000,
+) -> Array:
+    """Prepare the per-depth tables for importance sampling of the lateral tail.
+
+    Voxels within the core radius are always computed. Further out a voxel is accepted
+    with probability ``exp(-(r^2 - r_core^2) * slope)`` and weighted with
+    ``factor / probability``. Sampling ends at the outer radius, where the dose has
+    dropped to ``min_probability`` times the dose at the core edge. The slope is the
+    secant of the log dose profile between both radii, so the probability reaches
+    ``min_probability`` exactly at the outer radius. A sum of Gaussians is log-convex
+    in ``r^2``: the probability never falls below the dose ratio to the core edge and
+    the weighted tail values stay below the dose at the core edge.
+
+    Parameters
+    ----------
+    depths : Array
+        One-dimensional depths.
+    quadrature : CutoffQuadrature
+        Radial/angular samples on the same namespace and device.
+    dose_profile : callable
+        Called with a depth batch and the quadrature; returns physical dose with shape
+        ``(n_depths, n_samples)``.
+    core : float
+        Level of the core that is always computed, in (0, 1).
+    method : {"integral", "relative"}
+        ``integral``: the core encloses the fraction ``core`` of the lateral integral.
+        ``relative``: the core ends where the dose has dropped to ``1 - core`` of its
+        lateral maximum.
+    min_probability : float
+        Smallest acceptance probability, in (0, 1).
+    max_samples : int
+        Maximum depth-by-sample entries per batch.
+
+    Returns
+    -------
+    Array
+        Shape ``(n_depths, 4)``: core radius, outer radius, slope and the factor that
+        folds the dose beyond the outer radius into the sampled tail.
+    """
+    xp = array_api_compat.array_namespace(depths, quadrature.radii)
+    device = array_api_compat.device(depths)
+    if not 0 < core < 1 or not 0 < min_probability < 1:
+        raise ValueError("Tail sampling needs a core and a minimum probability in (0, 1).")
+    if method not in ("integral", "relative"):
+        raise ValueError("Invalid Cutoff Method. Must be 'integral' or 'relative'!")
+    n_angles = quadrature.n_angles
+    radii = quadrature.radii[::n_angles]
+    result = xp.zeros((depths.shape[0], 4), dtype=xp.float64, device=device)
+    batch_size = max(1, max_samples // quadrature.radii.shape[0])
+    for start in range(0, depths.shape[0], batch_size):
+        stop = min(start + batch_size, depths.shape[0])
+        dose = dose_profile(depths[start:stop], quadrature)
+        if bool(xp.any(xp.isnan(dose))) or bool(xp.any(dose < 0)):
+            raise ValueError("Error in particle dose calculation.")
+        rings = xp.reshape(
+            quadrature.radii * dose * quadrature.dr * quadrature.angular_weights,
+            (dose.shape[0], -1, n_angles),
+        )
+        area = xp.cumulative_sum(xp.sum(rings, axis=2), axis=1)
+        total = area[:, -1:]
+        # Slowest lateral fall-off over the angles (anisotropic models)
+        profile = xp.max(xp.reshape(dose, (dose.shape[0], -1, n_angles)), axis=2)
+        if method == "integral":
+            in_tail = area >= core * total
+        else:
+            in_tail = profile <= (1 - core) * xp.max(profile, axis=1, keepdims=True)
+        ix_core = xp.argmax(xp.astype(in_tail, xp.int32), axis=1)
+        d_core = xp.take_along_axis(profile, ix_core[:, None], axis=1)
+        beyond = xp.arange(radii.shape[0], device=device)[None, :] > ix_core[:, None]
+        ix_outer = xp.argmax(
+            xp.astype(beyond & (profile <= min_probability * d_core), xp.int32), axis=1
+        )
+        # Without a sample below the threshold the tail extends over the whole quadrature
+        ix_outer = xp.where(ix_outer > ix_core, ix_outer, radii.shape[0] - 1)
+        r_core = xp.take(radii, ix_core, axis=0)
+        r_outer = xp.take(radii, ix_outer, axis=0)
+        a_core = xp.take_along_axis(area, ix_core[:, None], axis=1)[:, 0]
+        a_outer = xp.take_along_axis(area, ix_outer[:, None], axis=1)[:, 0]
+        shell = a_outer - a_core
+        positive = shell > xp.finfo(xp.float64).smallest_normal
+        factor = xp.where(
+            positive,
+            (total[:, 0] - a_core) / xp.where(positive, shell, xp.ones_like(shell)),
+            xp.ones_like(shell),
+        )
+        result[start:stop, 0] = r_core
+        result[start:stop, 1] = r_outer
+        result[start:stop, 2] = -math.log(min_probability) / (r_outer**2 - r_core**2)
+        result[start:stop, 3] = factor
     return result

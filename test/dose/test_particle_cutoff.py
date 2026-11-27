@@ -8,7 +8,11 @@ import pytest
 
 from pyRadPlan.core.xp_utils import to_namespace, to_numpy
 from pyRadPlan.dose.engines import ParticleHongPencilBeamEngine
-from pyRadPlan.dose.engines._particle_cutoff import CutoffQuadrature, evaluate_cutoff
+from pyRadPlan.dose.engines._particle_cutoff import (
+    CutoffQuadrature,
+    evaluate_cutoff,
+    evaluate_tail_sampling,
+)
 
 
 @pytest.fixture(params=["numpy", "cupy", "array_api_strict"])
@@ -367,3 +371,48 @@ def test_cutoff_rejects_mismatched_shapes(xp):
             cutoff=0.99,
             method="integral",
         )
+
+
+@pytest.mark.parametrize("method", ["integral", "relative"])
+def test_tail_sampling_tables_of_a_gaussian(xp, method):
+    """A single Gaussian has an analytic core radius, fall-off and tail factor."""
+    engine, kernel, host_grid = _inputs("single")
+    depths = np.array([0.0, 4.5, 8.0])
+    core, min_probability, sigma_ini_sq = 0.9, 1e-2, 0.4
+    backend_kernel = {
+        key: to_namespace(xp, value) if isinstance(value, np.ndarray) else value
+        for key, value in kernel.items()
+    }
+    tables = to_numpy(
+        evaluate_tail_sampling(
+            xp.asarray(depths),
+            host_grid.to_namespace(xp),
+            lambda batch, quadrature: engine._cutoff_dose_profile(
+                batch, backend_kernel, sigma_ini_sq, quadrature
+            ),
+            core=core,
+            min_probability=min_probability,
+            method=method,
+            max_samples=200,
+        )
+    )
+    sigma_sq = np.interp(depths, kernel["depths"], kernel["sigma"]) ** 2 + sigma_ini_sq
+    r_core = np.sqrt(-2 * sigma_sq * np.log(1 - core))
+    r_outer = np.sqrt(r_core**2 - 2 * sigma_sq * np.log(min_probability))
+    # The radii snap to the quadrature samples
+    np.testing.assert_allclose(tables[:, 0], r_core, rtol=0.06)
+    np.testing.assert_allclose(tables[:, 1], r_outer, rtol=0.06)
+    np.testing.assert_allclose(tables[:, 2], 1 / (2 * sigma_sq), rtol=0.12)
+    np.testing.assert_allclose(tables[:, 3], 1 / (1 - min_probability), rtol=0.01)
+    probability_at_outer = np.exp(-(tables[:, 1] ** 2 - tables[:, 0] ** 2) * tables[:, 2])
+    np.testing.assert_allclose(probability_at_outer, min_probability, rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"core": 0.0}, {"core": 1.0}, {"min_probability": 0.0}, {"method": "invalid"}]
+)
+def test_invalid_tail_sampling_settings_fail(kwargs):
+    _, _, grid = _inputs("single")
+    settings = {"core": 0.9, "min_probability": 1e-2, **kwargs}
+    with pytest.raises(ValueError):
+        evaluate_tail_sampling(np.array([0.0]), grid, lambda *_: None, **settings)
