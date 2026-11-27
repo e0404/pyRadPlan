@@ -116,13 +116,11 @@ polo_voi = VOI(
 cst.vois.append(polo_voi)
 
 # %% [markdown]
-# We calculate the optimized fluence and compute the resulting physical dose and POLO probability
-# map.
+# We optimize the fluence. The result holds the physical dose, reported as course dose because of
+# `dose_convention="total"`, and the optimized fluence. The POLO probability map is added to it.
 # %%
-fluence = fluence_optimization(ct, cst, stf, dij, pln)
-
-# Compute standard physical result (without POLO quantity), reported as course dose
-result = dij.compute_result_ct_grid(fluence, num_of_fractions=pln.result_dose_factor)
+result = fluence_optimization(ct, cst, stf, dij, pln)
+fluence = result.fluence
 
 # Like every pyRadPlan quantity, POLO is computed over the whole dose grid. Only the POLO
 # segment is exported, though: the model is defined for brain tissue, so values inside the
@@ -130,7 +128,7 @@ result = dij.compute_result_ct_grid(fluence, num_of_fractions=pln.result_dose_fa
 # 'POLO VOI' opts out of overlap resolution, its mask is exactly the one the objective saw.
 polo_qty = POLO(dij, cst=cst, risk_voi_name="Core", num_of_fractions=pln.num_of_fractions)
 polo_full = polo_qty.compute_ct_grid(fluence)
-result["polo"] = sitk.Mask(polo_full, sitk.Cast(polo_voi.mask, sitk.sitkUInt8))
+result.add_quantity("polo", sitk.Mask(polo_full, sitk.Cast(polo_voi.mask, sitk.sitkUInt8)))
 
 total_ntcp = polo_qty.compute_total_ntcp(fluence, mask=polo_voi.mask)
 logging.info(f"Optimized Plan Total POLO NTCP: {total_ntcp:.4%}")
@@ -149,14 +147,14 @@ else:
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["physical_dose"],
+        overlay=result.physical_dose,
         view_slice=view_slice,
     )
 
     plot_slice(
         image_volume=ct,
         cst=cst,
-        overlay=result["polo"],
+        overlay=result.polo,
         view_slice=view_slice,
         overlay_cmap="inferno",
     )
