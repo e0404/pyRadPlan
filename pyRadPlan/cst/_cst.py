@@ -667,75 +667,60 @@ class StructureSet(PyRadPlanBaseModel):
         """
         Apply overlaps to the StructureSet.
 
-        A voxel is removed from a participating VOI if it also belongs to a participating
-        VOI with a lower overlap priority number. Participation is set per VOI by
-        ``apply_overlap``:
+        Only VOIs with objectives are resolved against each other: a voxel is removed
+        from a VOI with objectives if it also belongs to a VOI with objectives and a
+        lower overlap priority number. VOIs without objectives neither take voxels from
+        other VOIs nor lose any, so they keep their full masks.
 
-        - ``"auto"`` (default): participates only if the VOI has objectives.
-        - ``True``: always participates, even without objectives.
-        - ``False``: keeps its own voxels but still removes them from lower-priority VOIs.
-        - ``None``: excluded in both directions; keeps its full mask and removes no voxels
-          from any other VOI.
-
-        A warning is emitted for any VOI that carries objectives but is left empty, since
-        its objectives would silently have no effect during optimization.
+        A VOI's ``overlap_handling`` refines this: with ``"keep"`` the VOI keeps its
+        voxels but still takes voxels from VOIs with higher priority numbers, with
+        ``"ignore"`` it is left out of the overlap handling like a VOI without objectives.
 
         Returns
         -------
         StructureSet
             The StructureSet with overlaps applied.
         """
+
         if not self.vois:
             return self.model_copy(deep=True)
 
-        new_vois = [v.model_copy() for v in self.vois]
-
-        def participates(voi: VOI) -> bool:
-            if voi.apply_overlap == "auto":
-                return bool(voi.objectives)
-            return voi.apply_overlap is not None
-
-        overlap_indices = [i for i, v in enumerate(self.vois) if participates(v)]
-        if not overlap_indices:
-            return self._warn_on_empty_objectives(new_vois)
-
-        priorities = [self.vois[i].overlap_priority for i in overlap_indices]
-        ix_sorted = [overlap_indices[i] for i in np.argsort(priorities, kind="stable")]
+        ix_sorted = np.argsort([v.overlap_priority for v in self.vois], kind="stable")
 
         # Work on numpy arrays, since sitk's mask filters do not support 4D images
         shape = sitk.GetArrayViewFromImage(self.vois[ix_sorted[0]].mask).shape
-        # union of the participating VOIs with a strictly lower priority number
+        # union of the VOIs with objectives and a strictly lower priority number
         carving_mask = np.zeros(shape, dtype=bool)
-        # union of the participating VOIs in the current priority group
+        # union of the VOIs with objectives in the current priority group
         group_mask = np.zeros(shape, dtype=bool)
         group_priority = self.vois[ix_sorted[0]].overlap_priority
 
+        new_vois = [None] * len(self.vois)
+
         for ix_voi in ix_sorted:
-            curr_voi = new_vois[ix_voi]
+            curr_voi = self.vois[ix_voi].model_copy()
             if curr_voi.overlap_priority != group_priority:
                 carving_mask = carving_mask | group_mask
                 group_mask = np.zeros(shape, dtype=bool)
                 group_priority = curr_voi.overlap_priority
 
+            new_vois[ix_voi] = curr_voi
+            if not curr_voi.objectives or curr_voi.overlap_handling == "ignore":
+                continue
+
             orig_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
             group_mask = group_mask | orig_mask
 
-            if curr_voi.apply_overlap is not False and carving_mask.any():
-                curr_voi.mask = (orig_mask & ~carving_mask).astype(np.uint8)
-
-        return self._warn_on_empty_objectives(new_vois)
-
-    def _warn_on_empty_objectives(self, new_vois: list[VOI]) -> Self:
-        """Warn about VOIs left empty by overlap resolution, then build the new StructureSet."""
-        for voi in new_vois:
-            if voi.objectives and not sitk.GetArrayViewFromImage(voi.mask).any():
-                logger.warning(
-                    "VOI '%s' has objectives defined but was fully overlapped by structures "
-                    "with a higher overlap priority. Its objectives will have no effect during "
-                    "optimization. Set `apply_overlap=None` on this VOI to exclude it from "
-                    "overlap resolution.",
-                    voi.name,
-                )
+            if curr_voi.overlap_handling == "cut" and carving_mask.any():
+                curr_mask = orig_mask & ~carving_mask
+                curr_voi.mask = curr_mask.astype(np.uint8)
+                if orig_mask.any() and not curr_mask.any():
+                    logger.warning(
+                        "%s: objectives defined, but the structure is fully overlapped by "
+                        "structures with higher overlap priority. Its objectives will not be "
+                        "considered during optimization.",
+                        curr_voi.name,
+                    )
 
         return self.model_copy(deep=True, update={"vois": new_vois})
 
@@ -907,8 +892,16 @@ class StructureSet(PyRadPlanBaseModel):
         priority number win voxels that several VOIs share. That VOI keeps the voxel in
         :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
         the result is the same with and without overlap priorities applied.
+
+        VOIs with ``overlap_handling="ignore"`` are left out of the overlap handling and of
+        this list, so they never take voxels' tissue data from the other VOIs.
         """
-        return sorted(enumerate(self.vois, 1), key=lambda item: -item[1].overlap_priority)
+        labeled = [
+            (label, voi)
+            for label, voi in enumerate(self.vois, 1)
+            if voi.overlap_handling != "ignore"
+        ]
+        return sorted(labeled, key=lambda item: -item[1].overlap_priority)
 
     def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
         """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""

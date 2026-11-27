@@ -81,8 +81,8 @@ dij = calc_dose_influence(ct, cst, stf, pln)
 # therefore overlaps both 'BODY' and 'Core'. Overlap resolution normally assigns each voxel to a
 # single VOI by priority, which would strip this structure down to nothing -- 'OuterTarget',
 # 'Core' and 'BODY' all outrank it -- leaving the objective with no voxels to optimize.
-# `apply_overlap=None` exempts it from that: it keeps its full mask, and 'BODY' and 'Core' keep
-# theirs.
+# `overlap_handling="ignore"` exempts it from that: it keeps its full mask, and 'BODY' and 'Core'
+# keep theirs.
 # %%
 vois = {voi.name: voi for voi in cst.vois}
 
@@ -110,7 +110,7 @@ polo_voi = VOI(
     voi_type="OAR",
     mask=sitk.MaskNegated(vois["BODY"].mask, vois["OuterTarget"].mask),
     grid=vois["BODY"].grid,
-    apply_overlap=None,
+    overlap_handling="ignore",
     objectives=[NTCPPOLO(priority=1.0e3, risk_voi_name="Core")],
 )
 cst.vois.append(polo_voi)

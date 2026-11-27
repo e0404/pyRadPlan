@@ -8,7 +8,7 @@ model-repository contract.
 """
 
 from ._settings import AiSettings
-from ._preprocessor import BasePreprocessor
+from ._preprocessor import BasePreprocessor, OutcomePreprocessor
 from ._registry import (
     ModelTask,
     list_local_models,
@@ -31,10 +31,12 @@ from ._trust import (
     trust_model,
     untrust_model,
 )
+from ._pyanno4rt_loader import OutcomeFeature, OutcomeModelSpec, load_pyanno4rt_model
 
 __all__ = [
     "AiSettings",
     "BasePreprocessor",
+    "OutcomePreprocessor",
     "ModelTask",
     "list_local_models",
     "task_from_dir",
@@ -53,4 +55,7 @@ __all__ = [
     "is_trusted",
     "trust_model",
     "untrust_model",
+    "OutcomeFeature",
+    "OutcomeModelSpec",
+    "load_pyanno4rt_model",
 ]

@@ -126,17 +126,12 @@ class VOI(PyRadPlanBaseModel, ABC):
         `alpha_x` / `beta_x`.
     overlap_priority : int
         The overlap priority of the VOI. Lowest number is overlapping higher numbers.
-        Also used for render order and grouping in IO and GUI, independently of
-        ``apply_overlap``.
-    apply_overlap : bool, None or "auto"
-        Controls participation in overlap resolution. ``"auto"`` (default) follows the
-        standard rule: the VOI takes part only if it has objectives. ``True`` always takes
-        part (cut by higher priorities, cuts lower ones), even without objectives.
-        ``False`` keeps this VOI's own voxels but still removes them from lower-priority
-        VOIs. ``None`` excludes it in both directions: it keeps its full mask, and no other
-        VOI loses voxels to it. ``None`` is intended for auxiliary
-        evaluation structures (e.g. an NTCP region) that must overlap other VOIs, where
-        assigning each voxel to a single VOI would be wrong.
+    overlap_handling : {"cut", "keep", "ignore"}
+        How :meth:`~pyRadPlan.cst.StructureSet.apply_overlap_priorities` treats the VOI:
+        ``"cut"`` (default) removes its voxels that belong to a VOI with higher priority,
+        ``"keep"`` leaves its voxels alone while it still takes voxels from VOIs with lower
+        priority, and ``"ignore"`` leaves it out of the overlap handling, like a VOI without
+        objectives. matRad has no equivalent, so the value is not exported to matRad.
     """
 
     name: str
@@ -153,13 +148,12 @@ class VOI(PyRadPlanBaseModel, ABC):
     overlap_priority: int = Field(
         alias="Priority", default_factory=lambda data: DEFAULT_OVERLAPS[data["voi_type"]]
     )
-
-    apply_overlap: Union[bool, None, Literal["auto"]] = Field(
-        default="auto",
+    overlap_handling: Literal["cut", "keep", "ignore"] = Field(
+        default="cut",
         description=(
-            "'auto': takes part in overlap handling only if it has objectives. True: cut by "
-            "higher priorities. False: keeps its voxels but still cuts lower priorities. "
-            "None: ignored by overlap handling."
+            "'cut': loses voxels to VOIs with higher priority. 'keep': keeps its voxels but "
+            "still cuts VOIs with lower priority. 'ignore': left out of the overlap handling. "
+            "Not exported to matRad, which has no equivalent."
         ),
     )
 
@@ -1079,8 +1073,7 @@ class VOI(PyRadPlanBaseModel, ABC):
         property_dict = {
             "alphaX": self.tissue_properties.alpha_x,
             "betaX": self.tissue_properties.beta_x,
-            # matRad encodes "excluded from overlap handling" as Priority = NaN
-            "Priority": np.nan if self.apply_overlap is None else self.overlap_priority,
+            "Priority": self.overlap_priority,
             "Visible": self.visible,
             "visibleColor": np.asarray(self.color, dtype=float) / 255.0,
             # Not read by matRad, which ignores unknown fields here; keeps the full tissue.

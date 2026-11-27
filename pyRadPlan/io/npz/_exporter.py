@@ -69,7 +69,7 @@ class NpzExporter(BaseExporter):
                         "beta_x": voi.tissue_properties.beta_x,
                         "tissue_properties": voi.tissue_properties.model_dump(),
                         "overlap_priority": voi.overlap_priority,
-                        "apply_overlap": voi.apply_overlap,
+                        "overlap_handling": voi.overlap_handling,
                         "visible": voi.visible,
                         "color": list(voi.color),
                         "indices_array": key,

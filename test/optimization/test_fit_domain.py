@@ -8,7 +8,12 @@ from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.ct import validate_ct
 from pyRadPlan.cst import validate_cst
 from pyRadPlan.dij import validate_dij
-from pyRadPlan.optimization.objectives import HellingerConvPOLO, LogSumExpConvPOLO, NTCPPOLO
+from pyRadPlan.optimization.objectives import (
+    HellingerConvPOLO,
+    LogSumExpConvPOLO,
+    NTCPPOLO,
+    SquaredDeviation,
+)
 from pyRadPlan.optimization.problems import NonLinearFluencePlanningProblem
 from pyRadPlan.plan import validate_pln
 from pyRadPlan.stf import validate_stf
@@ -57,14 +62,14 @@ def test_polo_risk_structure_ignores_overlap_handling(proton_case, caplog):
 def test_polo_warns_on_region_without_risk_voxels(proton_case, caplog):
     pln, ct, cst, dij, stf, vois = proton_case
     vois["Body"].objectives = [NTCPPOLO(priority=1.0, risk_voi_name="Target")]
-    # Without objectives the target only cuts the body when told to explicitly.
-    vois["Target"].apply_overlap = True
+    # Only a VOI with objectives takes voxels from the body.
+    vois["Target"].objectives = [SquaredDeviation(priority=1.0, d_ref=2.0)]
 
     _, warnings = _initialize(pln, ct, cst, dij, stf)
 
     assert len(warnings) == 1
     assert "no voxel of the risk structure 'Target'" in warnings[0]
-    assert "apply_overlap=None on 'Body'" in warnings[0]
+    assert "overlap_handling='ignore' on 'Body'" in warnings[0]
     assert warnings[0] in caplog.text
 
 
@@ -84,7 +89,7 @@ def test_polo_warns_on_region_inside_gtv(proton_case):
 def test_polo_objectives_with_different_risk_structures_are_independent(proton_case):
     pln, ct, cst, dij, stf, vois = proton_case
     # Keep the body's region the same whether or not the target carries an objective.
-    vois["Target"].apply_overlap = True
+    vois["Body"].overlap_handling = "keep"
 
     def evaluate(objectives):
         for name, objs in objectives.items():

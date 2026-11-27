@@ -70,3 +70,29 @@ class BasePreprocessor(ABC):
     def __call__(self, inputs: Any) -> Any:
         """Alias for :meth:`preprocess`."""
         return self.preprocess(inputs)
+
+
+class OutcomePreprocessor(BasePreprocessor):
+    """Preprocessor contract for outcome models used as optimization objectives.
+
+    The objective calls ``postprocess(model(*preprocess(dose)))`` and differentiates the
+    result w.r.t. ``dose``, so :meth:`preprocess` must use differentiable torch ops.
+    """
+
+    @abstractmethod
+    def configure(self, ct: Any, cst: Any, cst_masks: Optional[list[str]] = None, device=None):
+        """Prepare the static inputs (e.g. CT and masks) on ``device``."""
+
+    @abstractmethod
+    def set_dose_grid(self, dose_grid: Any) -> None:
+        """Set the grid the optimization dose lives on."""
+
+    @abstractmethod
+    def preprocess(self, inputs: Any) -> Any:
+        """Map the dose on the dose grid to the model inputs.
+
+        ``inputs`` is a flat float32 torch tensor on the model device with one value per
+        voxel of the dose grid, in the order of the C-order flattening of the ``(z, y, x)``
+        array (x runs fastest), i.e. of ``sitk.GetArrayFromImage(image).reshape(-1)`` and of
+        ``VOI.scenario_indices(order="numpy")``. Returns the tuple of positional model inputs.
+        """

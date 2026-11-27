@@ -95,7 +95,7 @@ class OptimizationWidget(WorkspaceWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(workspace, parent)
-        self._available = list(get_available_objectives().keys())
+        self._available = list(get_available_objectives(selectable_only=True))
         self._setup_ui()
         self.initialize()
 
@@ -257,8 +257,13 @@ class OptimizationWidget(WorkspaceWidget):
         self._table.setItem(row, self._COL_VOI, voi_item)
 
         cmb = CompactComboBox(self._OBJECTIVE_CHARACTERS)
-        cmb.addItems(self._available)
-        cmb.setCurrentText(obj.name)
+        if type(obj).selectable:
+            cmb.addItems(self._available)
+            cmb.setCurrentText(obj.name)
+        else:
+            cmb.addItem(obj.name)
+            cmb.setEnabled(False)
+            cmb.setToolTip(f"{obj.name} is set up in code; its type cannot be changed here.")
         cmb.currentTextChanged.connect(
             lambda text, v=voi_idx, o=obj_idx: self._on_objective_changed(v, o, text)
         )

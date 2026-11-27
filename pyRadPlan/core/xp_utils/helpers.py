@@ -520,7 +520,7 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     Free unused GPU memory for the given array namespace.
 
     This function releases cached GPU memory back to the system. For CuPy,
-    it frees all blocks in the default memory pool. For PyTorch, it empties
+    it frees the default and pinned memory pools. For PyTorch, it empties
     the CUDA cache.
 
     Parameters
@@ -537,6 +537,7 @@ def free_gpu_memory(xp: ArrayNamespace) -> None:
     torch = loaded_backend("torch")
     if array_api_compat.is_cupy_namespace(xp) and cp is not None:
         cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
     elif array_api_compat.is_torch_namespace(xp) and torch is not None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

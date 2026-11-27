@@ -53,11 +53,15 @@ class OptInfo(TypedDict, total=False):
     result_info : dict
         Solver-specific result information (convergence status, iteration
         count, etc.).
+    objective_info : list[dict]
+        Auxiliary information reported by the individual objectives (e.g. NTCP histories from
+        outcome objectives). Absent when no objective reports any.
     """
 
     obj_history: list[float]
     num_iter: int
     result_info: dict
+    objective_info: list[dict]
 
 
 def fluence_optimization(  # noqa: PLR0913
@@ -114,7 +118,7 @@ def fluence_optimization(  # noqa: PLR0913
         # The caller owns this dictionary and may reuse it across solves. The optional keys are
         # dropped up front so a key this solve does not fill cannot be read as its result - and
         # so a solve that raises leaves no stale values behind either.
-        for key in ("obj_history", "num_iter", "result_info"):
+        for key in ("obj_history", "num_iter", "result_info", "objective_info"):
             opt_info.pop(key, None)
 
     if opt_info is not None and records_history:
@@ -138,6 +142,11 @@ def fluence_optimization(  # noqa: PLR0913
         # that does not is left without the key rather than reported as zero iterations.
         if isinstance(result_info, dict) and "num_iter" in result_info:
             opt_info["num_iter"] = int(result_info["num_iter"])
+        # Left unset when no objective reports anything, like the other optional keys.
+        collect = getattr(planning_prob, "collect_objective_info", None)
+        objective_info = collect() if callable(collect) else None
+        if objective_info:
+            opt_info["objective_info"] = objective_info
 
     result = _dij.compute_result_ct_grid(
         fluence, num_of_fractions=_pln.result_dose_factor, scenarios=scenarios

@@ -219,7 +219,7 @@ class POLOBase(FluenceDependentQuantity):
                 messages.append(
                     f"{name} on '{region_name}': no voxel of the risk structure "
                     f"'{self.risk_voi_name}' lies in this region, so the periventricular term "
-                    "has no effect. If overlap handling removed it, set apply_overlap=None on "
+                    "has no effect. If overlap handling removed it, set overlap_handling='ignore' on "
                     f"'{region_name}'."
                 )
         return messages

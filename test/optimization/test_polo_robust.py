@@ -35,8 +35,8 @@ def robust_case(test_data_protons_raw):
     for voi in cst.vois:
         voi.objectives = []
     vois = {voi.name: voi for voi in cst.vois}
-    # Target cuts Body in every run, whether or not it carries an objective.
-    vois["Target"].apply_overlap = True
+    # Body keeps its region in every run, whether or not Target carries an objective.
+    vois["Body"].overlap_handling = "keep"
 
     for name in ("physical_dose", "let_dose"):
         base = getattr(dij, name).flat[0]

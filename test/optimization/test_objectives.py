@@ -581,3 +581,31 @@ def test_polo_objectives_custom_quantity_preservation():
         lse.quantity != Objective.model_fields["quantity"].default
     )  # "linear_polo" != "physical_dose"
     assert lse.quantity == "linear_polo"
+
+
+def test_objectives_created_in_code_are_registered_but_not_selectable():
+    from pyRadPlan.optimization.objectives import Objective, get_objectives_union
+
+    created_in_code = {"Outcome Model", "Outcome LR", "Outcome scikit-learn"}
+    available = get_available_objectives()
+    selectable = get_available_objectives(selectable_only=True)
+    assert Objective.selectable is True
+    assert created_in_code <= set(available)
+    assert set(available) - set(selectable) == created_in_code
+    assert all(not available[name].selectable for name in created_in_code)
+
+    def names(union):
+        return {cls.model_fields["name"].default for cls in union.__args__[0].__args__}
+
+    assert names(get_objectives_union()) == set(available)
+    assert names(get_objectives_union(selectable_only=True)) == set(selectable)
+    llm = names(get_objectives_union(exclude_image_references=True, selectable_only=True))
+    assert llm == set(selectable) - {"Squared Mimicking"}
+
+
+def test_llm_output_schema_leaves_out_objectives_created_in_code():
+    agents = pytest.importorskip("pyRadPlan.ai.agents._cst_agents")
+
+    schema = str(agents._create_output_model(("PTV",)).model_json_schema())
+    assert "Squared Deviation" in schema
+    assert "Outcome" not in schema
