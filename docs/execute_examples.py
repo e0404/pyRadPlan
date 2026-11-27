@@ -57,6 +57,9 @@ SKIP = {
     "*ai_agent*": "needs AI API credentials",
     "*ai_planning_agent*": "needs AI API credentials",
     "*ai_model*": "downloads model repositories from the HuggingFace Hub",
+    "ai_dosecalc": "downloads a dose-calculation model from the HuggingFace Hub",
+    "ntcp_optimization_tg119": "downloads an outcome model from the HuggingFace Hub",
+    "ntcp_optimization_xero_*": "needs the matRad head-and-neck phantom and a local outcome model",
 }
 
 

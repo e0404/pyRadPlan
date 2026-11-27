@@ -65,3 +65,7 @@ sv:Ph/PhysicsList/Modules = {{ physics_modules | length }}{% for m in physics_mo
 d:Ph/PhysicsList/CutForElectron = 0.050000 mm
 d:Ph/PhysicsList/CutForAllParticles = 0.050000 mm
 d:Ph/PhysicsList/CutForGamma = 0.050000 mm
+{% if em_range_min is not none %}d:Ph/PhysicsList/EMRangeMin = {{ em_range_min }} eV
+{% endif %}{% if em_range_max is not none %}d:Ph/PhysicsList/EMRangeMax = {{ em_range_max }} MeV
+{% endif %}{% if em_bins_per_decade is not none %}i:Ph/PhysicsList/EMBinsPerDecade = {{ em_bins_per_decade }}
+{% endif %}

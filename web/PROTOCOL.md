@@ -439,6 +439,7 @@ Save Plan and Save Workspace).
 | `plan.get` (extended) | read | `{detail?: boolean}` | without `detail`: v0 `PlanSummary`; with: `PlanDetail` |
 | `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?, current_bio?}` (default: the plan's, else the default plan's; `current_bio`: amendment 22) | `PlanOptions` (+ `bio_selection`, amendment 22) |
 | `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver", name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
+| `plan.form_choices` | read | `{kind, name, radiation_mode?}` (as `plan.form`) | `{id, choices: Record<string, Choice[]>}`: suggested values per field (amendment 28); `choices: {}` when the algorithm suggests none or its lookup fails |
 | `plan.set` (extended) | write | partial `PlanSummary` plus the v1 fields below | `SessionState` |
 | `plan.tissue_check` | read, may load base data | `{draft?: {radiation_mode, machine, engine, bio_model}}` (the unapplied form; default: the plan) | `{marker: "error" \| "warning" \| "", issues: Issue[]}` (the ⚠ / ℹ marker) |
 
@@ -496,10 +497,10 @@ advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 | `tissue.schema` | read, may load base data | `{bio_model?, machine?, engine?}` (default: the plan's) | `{models: [{label: "Generic" \| "LEM" \| "MKM" \| "mMKM", fields: FieldDescriptor[]}], reference_radiations: Choice[], picks: [{id, kind: "base_data" \| "preset", label, group, exact: boolean, model, values, description}], option_label}` |
 | `tissue.evaluate` | read, may load base data | `{rows: [{structure, tissue: TissueDraft}], op?: "none" \| "derive" \| "match" \| "relabel" \| "apply_pick", pick?: string, targets?: string[], edited?: {structure, field}}` | `{rows: [{structure, tissue: TissueDraft, issues: Issue[], comparison: {closest_class, matched, provenance_fix, parameters: [{name, declared, value, matches}]} \| null, pick: string \| null, sources: Record<string, "explicit" \| "published" \| "estimated" \| "base_data" \| "default" \| "derived">}], notes: string[], can_match: boolean, can_relabel: string[], can_derive: boolean}`; nothing is written; `edited` triggers the live re-derivation of α_x / β_x for MKM rows ; `pick` is the id of the `tissue.schema` pick the row's tissue corresponds to (null if none), see amendment 24 |
 | `tissue.apply` | write | `{rows: [{structure: string \| number, tissue}], apply_anyway?: boolean}` | `{state}`; same error gate as `cst.update_structure` |
-| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref`; `reference_images` are the full quantities of all results by their component keys |
+| `objectives.catalog` | read | – | `{objectives: [{name, scenario_aware, parameters: FieldDescriptor[], robustness: Choice[]}], quantities: Choice[], robustness: Choice[], default_by_type: {TARGET: "Squared Deviation", "*": "Squared Overdosing"}, reference_images: Choice[]}`; parameter descriptors carry bounds, `unit` ("%" for relative volumes) or `unit_from: "quantity"` for dose references, `f_diff` as a choice, `d_ref` of Squared Mimicking as `image_ref`; `reference_images` are the full quantities of all results by their component keys; objectives that are created in code (`Objective.selectable` false, e.g. the outcome objectives) are not listed, and a frontend shows such an objective of a structure with its type locked |
 | `objectives.add` | write | `{structure: string \| number}` | `{state, structure: StructureDetail}`; default type by VOI type, quantity shared by the existing objectives if they agree |
 | `objectives.update` | write | `{structure: string \| number, index, changes: {priority?, quantity?, robustness?, parameters?: Record<string, unknown>}}` | `{state, structure}` |
-| `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule) |
+| `objectives.change_type` | write | `{structure: string \| number, index, name}` | `{state, structure}`; keeps priority and an allowed robustness, resets quantity and parameters (Qt rule); a `ValidationError` on `name` if the objective or the new type is created in code |
 | `objectives.remove` | write | `{structure: string \| number, index}` | `{state, structure}` |
 | `objectives.set_quantity_all` | write | `{quantity}` | `{state}` |
 
@@ -786,3 +787,16 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
       there is no steering information or it does not fit the fluence). Doses of several
       results go into one folder per result name. Other quantities are skipped; selecting none of
       the two doses fails with `PreconditionError(code="no_data")`.
+28. 2026-11-26 (plan form, suggested values): **added** `plan.form_choices {kind, name,
+    radiation_mode?}` → `{id, choices}`, the values an algorithm suggests for fields of its
+    `plan.form` (Qt fills its editable combo boxes from the same `config_choices(radiation_mode)`
+    classmethod; any algorithm class may define one, today the AI engine lists the dose models it
+    could run). `id` is the form's `FormSchema.id`; `choices` maps field names to `Choice`s
+    (`value` = `label` = the suggested text), duplicates removed, fields the form does not show
+    left out. A class without `config_choices`, or a lookup that fails, gives `choices: {}`; an
+    unknown form fails as `plan.form` does. It is a separate request because the lookup may go
+    online (natively the AI engine asks the HuggingFace hub): a frontend opens the form from
+    `plan.form` and adds the suggestions when they arrive, without touching what was typed
+    meanwhile. They only suggest: the field keeps its descriptor (the AI engine's `model` stays
+    `type: "str"`) and accepts any text. In the browser there is no hub client, so only models on
+    the (virtual) disk could be listed; the lookup is local and returns at once.

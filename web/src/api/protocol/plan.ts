@@ -118,6 +118,16 @@ export interface PlanOptions {
 
 export type FormKind = "engine" | "bio_model" | "scenario" | "problem" | "solver";
 
+/**
+ * Suggested values per field of an algorithm form (`plan.form_choices`, v1 amendment 28): what
+ * the Qt dialogs list in their editable combo boxes. Free text stays allowed.
+ */
+export interface FormChoices {
+  /** The form they belong to, as `FormSchema.id`. */
+  id: string;
+  choices: Record<string, Choice[]>;
+}
+
 export type BioModelSet = string | { model: string; option?: string | null; values?: Record<string, unknown> };
 
 /** `plan.set` v1: partial v0 summary plus the v1 fields. */
@@ -249,6 +259,10 @@ export interface PlanMethods {
   "plan.form": {
     params: { kind: FormKind; name: string; radiation_mode?: string; values?: Record<string, unknown> };
     result: FormSchema;
+  };
+  "plan.form_choices": {
+    params: { kind: FormKind; name: string; radiation_mode?: string };
+    result: FormChoices;
   };
   "plan.set": { params: PlanSetParams; result: SessionState };
   "plan.tissue_check": {

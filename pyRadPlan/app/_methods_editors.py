@@ -58,6 +58,13 @@ def _plan_form(
     return session.plan_form(kind, name, radiation_mode=radiation_mode, values=values)
 
 
+@method("plan.form_choices")
+def _plan_form_choices(
+    session: Session, kind: str, name: str, radiation_mode: Optional[str] = None
+) -> dict:
+    return session.plan_form_choices(kind, name, radiation_mode=radiation_mode)
+
+
 @method("plan.tissue_check")
 def _plan_tissue_check(session: Session, draft: Optional[dict] = None) -> dict:
     return session.plan_tissue_check(draft)

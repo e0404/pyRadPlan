@@ -57,8 +57,9 @@ autosummary_generate = True
 # unchanged (they opt out of execution in their metadata), and replaced by a conversion without
 # outputs, with a warning, once their script changed. PYRADPLAN_DOCS_NB_EXECUTION=cache is a
 # local opt-in to execute the notebooks without outputs with myst-nb (cached in
-# _build/.jupyter_cache); examples needing tools a build system lacks (Qt display, FRED/TOPAS,
-# MATLAB/Octave, AI credentials, see execute_examples.SKIP) are never executed.
+# _build/.jupyter_cache); examples needing tools or data a build system lacks (Qt display,
+# FRED/TOPAS, MATLAB/Octave, AI credentials, model downloads, phantoms and models that are not
+# shipped, see execute_examples.SKIP) are never executed.
 execute_examples.set_example_environment()  # kernels inherit it: no GUI, inline figures
 nb_execution_mode = os.environ.get("PYRADPLAN_DOCS_NB_EXECUTION", "off")
 nb_execution_cache_path = str(DOCS_DIR / "_build" / ".jupyter_cache")

@@ -135,7 +135,7 @@ def _create_output_model(voi_names: tuple[str, ...]) -> type[BaseModel]:
     type[BaseModel]
         The output model with per-VOI objective suggestions.
     """
-    objective_union = get_objectives_union(exclude_image_references=True)
+    objective_union = get_objectives_union(exclude_image_references=True, selectable_only=True)
 
     voi_objectives_model = create_model(
         "VoiObjectives",

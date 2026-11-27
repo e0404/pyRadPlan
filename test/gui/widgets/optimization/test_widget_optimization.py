@@ -607,3 +607,75 @@ def test_a_rejected_edit_is_shown_and_leaves_the_objective(qapp, tg119):
 
     assert widget._lbl_status.text().startswith("Ignored invalid penalty -1.0: ")
     assert _objectives(ws.cst.vois[voi])[0].priority == before
+
+
+def _scripted_objective(monkeypatch):
+    """Register an objective only code can create: it needs a ``handle`` no editor has."""
+    from typing import Any, ClassVar, Literal
+
+    from pydantic import Field, model_validator
+
+    from pyRadPlan.optimization.objectives import Objective
+    from pyRadPlan.optimization.objectives._factory import OBJECTIVES
+
+    class Scripted(Objective):
+        name: Literal["Scripted"] = "Scripted"
+        selectable: ClassVar[bool] = False
+        loads: ClassVar[int] = 0
+        model: str
+        handle: Any = Field(default=None, exclude=True)
+
+        @model_validator(mode="before")
+        @classmethod
+        def _load(cls, data: Any) -> Any:
+            if isinstance(data, dict) and data.get("handle") is None:
+                Scripted.loads += 1
+                data = {**data, "handle": object()}
+            return data
+
+        def compute_objective(self, values):
+            return values.sum()
+
+        def compute_gradient(self, values):
+            return values
+
+    monkeypatch.setitem(OBJECTIVES, "Scripted", Scripted)
+    return Scripted
+
+
+def test_objectives_created_in_code_are_shown_but_not_offered(qapp, tg119, monkeypatch):
+    from pyRadPlan.optimization.objectives import get_available_objectives
+
+    scripted = _scripted_objective(monkeypatch)
+    ct, cst = tg119
+    voi = next(i for i, v in enumerate(cst.vois) if _objectives(v))
+    cst.vois[voi].objectives = [scripted(model="some model"), *cst.vois[voi].objectives]
+    ws = WorkspaceManager()
+    widget = OptimizationWidget(workspace=ws)
+    ws.set_many(ct=ct, cst=cst)
+
+    assert widget._available == list(get_available_objectives(selectable_only=True))
+    assert not {"Scripted", "Outcome Model", "Outcome LR"} & set(widget._available)
+
+    combos = [
+        widget._table.cellWidget(row, widget._COL_OBJECTIVE)
+        for row in range(widget._table.rowCount())
+    ]
+    row = next(i for i, cmb in enumerate(combos) if cmb.currentText() == "Scripted")
+    assert combos[row].count() == 1 and not combos[row].isEnabled()
+    other = combos[row + 1]
+    assert other.isEnabled()
+    assert [other.itemText(i) for i in range(other.count())] == widget._available
+
+    widget._on_penalty_changed(voi, 0, 9.0)
+    stored = _objectives(ws.cst.vois[voi])[0]
+    assert isinstance(stored, scripted) and stored.priority == 9.0
+    assert scripted.loads == 1
+
+    widget._on_objective_changed(voi, 0, "Max DVH")
+    assert "cannot be changed" in widget._lbl_status.text()
+    assert _objectives(ws.cst.vois[voi])[0].name == "Scripted"
+
+    widget._on_objective_changed(voi, 1, "Scripted")
+    assert "cannot be selected" in widget._lbl_status.text()
+    assert _objectives(ws.cst.vois[voi])[1].name != "Scripted"

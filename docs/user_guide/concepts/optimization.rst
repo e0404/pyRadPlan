@@ -195,6 +195,9 @@ Available objectives
    * - :class:`~pyRadPlan.optimization.objectives.SquaredMimicking`
      - Penalizes deviation from a reference dose distribution (plan mimicking).
 
+Objectives on a probability predicted by an outcome model (e.g. NTCP) are described in
+:ref:`concept_outcome_objectives`.
+
 Attaching objectives to structures
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -291,6 +294,132 @@ A custom quantity has to declare its ``fraction_exponent`` to be used with ``"to
 otherwise setting up the problem raises an error rather than guessing.
 
 The optimizer logs which interpretation it applies.
+
+.. _concept_outcome_objectives:
+
+Outcome model objectives
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+An outcome objective minimizes a probability that a model predicts from the dose, e.g. a normal
+tissue complication probability (NTCP), next to the conventional objectives of the plan. There
+are two families:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Class
+     - Description
+   * - :class:`~pyRadPlan.optimization.objectives.OutcomeModel`
+     - A differentiable torch model from the :ref:`model hub <concept_ai_modelhub>`, e.g. a CNN
+       on the dose distribution, CT and structure masks. Its preprocessor implements
+       :class:`~pyRadPlan.ai.modelhub.OutcomePreprocessor`. Needs ``torch``; a downloaded model
+       runs only once trusted (see :ref:`modelhub_trust`).
+   * - :class:`~pyRadPlan.optimization.objectives.OutcomeLR`
+     - Logistic regression on scalar dose and geometry features of segments, with an analytic
+       gradient. Only the coefficients of the model are used.
+   * - :class:`~pyRadPlan.optimization.objectives.OutcomeSklearn`
+     - Any binary scikit-learn classifier with ``predict_proba`` on the same features. The
+       gradient is taken by finite differences (``2 * n_features`` predictions each), so it
+       suits smooth models (e.g. an MLP), not tree ensembles.
+
+The two feature-based objectives take a model trained with
+`pyanno4rt <https://github.com/pyanno4rt/pyanno4rt>`_, loaded with
+:func:`~pyRadPlan.ai.modelhub.load_pyanno4rt_model` (see :ref:`modelhub_pyanno4rt`); this needs
+``scikit-learn``, which is not installed with pyRadPlan. For other models, derive from
+:class:`~pyRadPlan.optimization.objectives.OutcomeObjective` or
+:class:`~pyRadPlan.optimization.objectives.FeatureOutcomeObjective`.
+
+.. warning::
+
+   Outcome objectives are a research feature and not validated for clinical use. A model is
+   only valid for the anatomy, radiation mode and dose range it was trained on.
+
+Outcome objectives are created in code: the objective lists of the GUI and the web version and
+the AI planning agents do not offer them, but an outcome objective set in code is displayed
+there.
+
+**The model sees only the dose of the VOI the objective is attached to**, with 0 Gy everywhere
+else. Attach the objective to a helper VOI that covers what the model needs -- the whole dose
+grid for a CNN, all segments of the features for a feature-based model (a segment that is not
+covered is refused) -- and set ``overlap_handling="ignore"`` on it, so that the helper VOI
+neither loses voxels to the other structures nor takes voxels from them:
+
+.. code-block:: python
+
+    import SimpleITK as sitk
+
+    from pyRadPlan.ai.modelhub import trust_model
+    from pyRadPlan.cst import HelperVOI
+    from pyRadPlan.optimization.objectives import OutcomeModel
+
+    trust_model("<org>/<model>")  # once, for a model downloaded from the hub
+    ntcp = OutcomeModel(
+        priority=10000.0,
+        model="<org>/<model>",  # or a local model folder
+        cst_masks=["Core"],  # structures handed to the model's preprocessor
+        warmup_iterations=5,
+    )
+
+    mask = sitk.Image(ct.cube_hu.GetSize(), sitk.sitkUInt8) + 1
+    mask.CopyInformation(ct.cube_hu)
+    cst.vois = cst.vois + [
+        HelperVOI(
+            name="NTCP",
+            ct_image=ct,
+            mask=mask,
+            overlap_handling="ignore",
+            objectives=[ntcp],
+        )
+    ]
+
+    opt_info = {}
+    result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+    ntcp_history = opt_info["objective_info"][0]["history"]
+
+A feature-based objective is set up the same way, e.g.
+``OutcomeLR(priority=100.0, model="path/to/pyanno4rt/snapshot")`` on a helper VOI over the union
+of its segments. Segment names are matched to the VOI names ignoring case; ``segment_map``
+translates names that differ.
+
+The options shared by all outcome objectives:
+
+``monitor_only``
+    The objective returns the value 0 and a zero gradient, so it does not steer the plan, but
+    the predicted probability is still recorded. Use it to follow the probability of a
+    conventionally optimized plan.
+``warmup_iterations``
+    The same for the first iterations only, which lets the conventional objectives shape the
+    dose before the model takes part.
+``num_of_fractions``
+    The optimizer works on the dose of one fraction. With ``pln.dose_convention = "total"`` the
+    number of fractions is taken from the plan and the model receives the dose of the whole
+    course. With ``"per_fraction"`` the model receives the fraction dose; pass
+    ``num_of_fractions`` to the objective for a model trained on total-course dose (as
+    pyanno4rt models are).
+
+The probabilities of all evaluations are reported in ``opt_info["objective_info"]``, a list with
+one entry per objective that reports something, naming the objective and its VOI
+(``{"objective": ..., "voi": ..., "history": [...]}`` for outcome objectives).
+Any objective can report data this way by implementing
+:meth:`~pyRadPlan.optimization.objectives.Objective.report_info`, and can prepare itself with
+the CT and the structure set in
+:meth:`~pyRadPlan.optimization.objectives.Objective.setup`, which the planning problem calls
+before the optimization.
+
+The feature-based objectives support the pyanno4rt feature functions ``Dose Mean``,
+``Dose Maximum``, ``Dose Minimum``, ``Dose Deviation``, ``Dose Dx`` and ``Dose Vx`` (which has
+no gradient and therefore does not steer the plan), and the geometry features
+``Segment Volume``, ``Segment Area``, ``Segment Sphericity`` and ``Segment Eccentricity``, which
+are computed once on the CT grid. Their values equal those of pyanno4rt, with one exception:
+segment area and sphericity do so only when the x and y resolutions of the CT are equal,
+because pyanno4rt swaps the two there.
+
+Runnable examples:
+:doc:`CNN-based NTCP on the TG119 phantom </tutorials/examples/ntcp_optimization_tg119>`,
+:doc:`CNN-based xerostomia NTCP </tutorials/examples/ntcp_optimization_xero_cnn>` and
+:doc:`xerostomia NTCP with a pyanno4rt logistic regression
+</tutorials/examples/ntcp_optimization_xero_lr>`.
 
 .. _concept_robust_optimization:
 

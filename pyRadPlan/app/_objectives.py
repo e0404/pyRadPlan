@@ -135,7 +135,7 @@ def catalog(results: Any = None) -> dict[str, Any]:
 
     references = reference_images(results)
     objectives = []
-    for name, cls in get_available_objectives().items():
+    for name, cls in get_available_objectives(selectable_only=True).items():
         objectives.append(
             {
                 "name": name,
@@ -251,7 +251,7 @@ def add(ws: Any, structure: str, voi_index: Optional[int] = None) -> None:
 
     voi = _voi(ws.cst, structure, voi_index)
     name = DEFAULT_BY_TYPE.get(str(voi.voi_type).upper(), DEFAULT_BY_TYPE["*"])
-    available = list(get_available_objectives())
+    available = list(get_available_objectives(selectable_only=True))
     if name not in available and available:
         name = available[0]
     objective = get_objective(name)
@@ -304,11 +304,25 @@ def update(
 def change_type(
     ws: Any, structure: str, index: int, name: str, voi_index: Optional[int] = None
 ) -> None:
-    """Replace an objective by another type, keeping priority and an allowed robustness."""
-    from pyRadPlan.optimization.objectives import get_objective  # noqa: PLC0415
+    """Replace an objective by another type, keeping priority and an allowed robustness.
+
+    The type of an objective that is not selectable (created in code, see
+    :attr:`Objective.selectable`) is fixed, and no objective can become one.
+    """
+    from pyRadPlan.optimization.objectives import (  # noqa: PLC0415
+        get_available_objectives,
+        get_objective,
+    )
 
     voi = _voi(ws.cst, structure, voi_index)
     objectives, old = _at(voi, index)
+    message = None
+    if not type(old).selectable:
+        message = f"The type of {old.name!r} cannot be changed: it is set up in code"
+    elif name in get_available_objectives() and not get_available_objectives()[name].selectable:
+        message = f"{name!r} cannot be selected here: it is set up in code"
+    if message is not None:
+        raise FormValidationError(message, [{"field": "name", "message": message}])
     new = get_objective(name)
     changes: dict[str, Any] = {"priority": old.priority}
     if old.robustness in type(new).available_robustness():
