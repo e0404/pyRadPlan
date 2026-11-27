@@ -317,5 +317,13 @@ class ParticlePencilBeamKernel(PyRadPlanBaseModel):
                 "cut_off": xp_to_namespace(xp, self.lateral_cut_off.cut_off, device=device),
                 "depths": xp_to_namespace(xp, self.lateral_cut_off.depths, device=device),
             }
+            if self.lateral_cut_off.core_cut_off is not None:
+                data["lateral_cut_off"]["tail_tables"] = {
+                    "core_sq": xp_to_namespace(
+                        xp, self.lateral_cut_off.core_cut_off**2, device=device
+                    ),
+                    "slope": xp_to_namespace(xp, self.lateral_cut_off.tail_slope, device=device),
+                    "fac": xp_to_namespace(xp, self.lateral_cut_off.tail_fac, device=device),
+                }
 
         return data

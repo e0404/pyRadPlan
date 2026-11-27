@@ -1,6 +1,6 @@
 # import warnings
 import numpy as np
-from typing import Any
+from typing import Any, Optional
 from pydantic import (
     Field,
     field_validator,
@@ -19,6 +19,10 @@ class LateralCutOff(PyRadPlanBaseModel):
     depths: NDArray[Shape["1-*"], np.float64] = Field(
         default=np.array([0.0, np.inf], dtype=np.float64)
     )
+    # Tail sampling tables (per depth). When set, ``cut_off`` is the outer sampling limit.
+    core_cut_off: Optional[NDArray[Shape["1-*"], np.float64]] = None
+    tail_slope: Optional[NDArray[Shape["1-*"], np.float64]] = None
+    tail_fac: Optional[NDArray[Shape["1-*"], np.float64]] = None
 
     @field_validator("comp_fac", mode="before")
     @classmethod
