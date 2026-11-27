@@ -98,13 +98,15 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -e ".[jax]" pytest pytest-cov pytest-timeout scikit-learn
             python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-        # test/ai, the AI dose engine tests and the torch outcome objective need torch, which the
-        # main job does not install: their coverage comes from here. scikit-learn is not a
+        # The model hub tests, the AI dose engine tests and the torch outcome objective need torch,
+        # which the main job does not install: their coverage comes from here. test/ai/agents
+        # runs in the main job only: its planning tests calculate dose influence matrices, which
+        # takes minutes per test on JAX. scikit-learn is not a
         # dependency and is installed for the pyanno4rt loader and the feature-based outcome
         # objectives. Codecov waits for all uploads of a commit before it reports
         # (after_n_builds in codecov.yml: the main job's upload plus one per backend).
         - name: Run tests with pytest
-          run: pytest test/ai test/core/xp_utils test/dose test/optimization/test_outcome_model.py test/optimization/test_outcome_lr.py test/test_raytracersiddon.py test/stf -q --timeout=300 --cov=pyRadPlan --cov-report xml:.testreports/coverage.xml
+          run: pytest test/ai/modelhub test/ai/test_pyanno4rt_loader.py test/core/xp_utils test/dose test/optimization/test_outcome_model.py test/optimization/test_outcome_lr.py test/test_raytracersiddon.py test/stf -q --timeout=300 --cov=pyRadPlan --cov-report xml:.testreports/coverage.xml
         - name: Upload coverage reports to Codecov
           uses: codecov/codecov-action@v7
           with:
