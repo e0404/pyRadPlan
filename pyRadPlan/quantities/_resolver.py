@@ -26,6 +26,7 @@ class QuantityResolver:
     Dynamic Dependency Injection (via Signature Inspection):
     When instantiating a quantity class, the resolver inspects the quantity's ``__init__`` signature.
     It automatically supplies required dependencies from:
+
     1. Problem-level context (e.g., ``cst``, ``ct``, ``stf``, ``num_of_fractions``). Planning
        problems pass the ``cst`` as given, before overlap priorities are applied.
     2. Objective-level parameters that the objective explicitly opts into via its
@@ -35,6 +36,7 @@ class QuantityResolver:
     3. Explicit ``quantity_kwargs`` passed to the resolver.
 
     Mode resolution per class:
+
     - If the dij has an attribute matching the class ``identifier``, mode is ``"direct"``
       and dependencies are not constructed.
     - Otherwise mode is ``"indirect"``; both ``required_dependencies`` and

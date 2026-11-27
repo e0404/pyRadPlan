@@ -525,10 +525,14 @@ def test_polo_objectives():
     assert np.isscalar(lse_obj.compute_objective(vals))
 
     # HellingerConvPOLO
+    # HellingerConvPOLO: the sum of eta without the model's intercept of -26.3 per voxel
     hconv_obj = HellingerConvPOLO()
     assert hconv_obj.quantity == "linear_polo"
-    assert hconv_obj.compute_objective(vals) == np.sum(vals)
+    assert np.isclose(hconv_obj.compute_objective(vals), np.sum(vals) + 3 * 26.3)
     assert np.all(hconv_obj.compute_gradient(vals) == 1.0)
+    # Voxels outside the dose domain (-inf) add nothing, the intercept included.
+    eta = np.array([-26.3, -25.3, -np.inf], dtype=np.float32)
+    assert np.isclose(hconv_obj.compute_objective(eta), 1.0)
 
 
 def test_polo_objectives_dose_threshold_defaults():

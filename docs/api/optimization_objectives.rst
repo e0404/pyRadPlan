@@ -18,6 +18,21 @@ optimization.objectives
     Variance
 
 
+POLO Objectives
+---------------
+
+Objectives on the probability of lesion origin (POLO) model for proton plans, see
+:class:`~pyRadPlan.quantities.POLO`. They are a research feature.
+
+.. autosummary::
+   :toctree: generated/optimization/objectives/
+
+    NTCPPOLO
+    HellingerPOLO
+    LogSumExpConvPOLO
+    HellingerConvPOLO
+
+
 Outcome Objectives
 ------------------
 

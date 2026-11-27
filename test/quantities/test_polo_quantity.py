@@ -8,7 +8,7 @@ from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import StructureSet, create_voi
 from pyRadPlan.dij import Dij
 from pyRadPlan.optimization.objectives import HellingerConvPOLO, LogSumExpConvPOLO
-from pyRadPlan.quantities import POLO, LinearPOLO, QuantityResolver
+from pyRadPlan.quantities import POLO, LinearPOLO, QuantityResolver, total_ntcp
 
 
 @pytest.fixture
@@ -168,6 +168,13 @@ def test_eta_objectives_are_continuous_across_2_gy(sample_dij_dense, objective_c
     # eta rises by 0.19 + 0.018 per Gy in each of the 125 voxels, so 2 mGy move the
     # log-sum-exp by 4e-4 and the sum by 0.05.
     assert abs(value(2.001) - value(1.999)) < 0.1
+
+
+def test_total_ntcp_keeps_its_precision_in_float32():
+    # 1 - exp(sum(log1p(-p))) cancels in float32: for an NTCP of 1e-6 it was 1.3 % off.
+    p = np.full(1000, 1e-9, dtype=np.float32)
+    exact = -np.expm1(np.sum(np.log1p(-p.astype(np.float64))))
+    assert np.isclose(float(total_ntcp(p)), exact, rtol=1e-5)
 
 
 def test_polo_derivative_without_forward_compute(sample_dij_dense):

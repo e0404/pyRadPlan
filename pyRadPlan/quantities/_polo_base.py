@@ -35,7 +35,8 @@ def total_ntcp(values: Array) -> Array:
     """
     xp = array_api_compat.array_namespace(values)
     vals = xp.clip(values, 0.0, P_MAX)
-    return 1.0 - xp.exp(xp.sum(xp.log1p(-vals)))
+    # expm1 rather than 1 - exp: in float32 the difference cancels for a small NTCP.
+    return -xp.expm1(xp.sum(xp.log1p(-vals)))
 
 
 class POLOBase(FluenceDependentQuantity):
@@ -119,7 +120,8 @@ class POLOBase(FluenceDependentQuantity):
             Structure set to extract the risk mask from, by name.
         risk_voi_name : str, optional
             VOI name in the CST for the periventricular risk structure, by default
-            ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component.
+            ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component; the
+            POLO objectives always name a structure.
         dose_threshold : float, optional
             Course dose in Gy below which the model is treated as undefined, by default
             2.0 Gy. Set to 0.0 to disable. The objectives on the linear predictor disable
@@ -172,8 +174,9 @@ class POLOBase(FluenceDependentQuantity):
                 raise ValueError(
                     f"POLO risk VOI '{risk_voi_name}' not found in CST and no binary_risk_mask "
                     "provided. The POLO model was originally fitted using a 'Ventricles_4mm' "
-                    "risk mask. If you intentionally want to evaluate POLO without the "
-                    "periventricular risk component, explicitly set `risk_voi_name=None`."
+                    "risk mask; set `risk_voi_name` to the structure that plays this role. "
+                    "Evaluating POLO without the periventricular risk component is possible "
+                    "on the quantity only, constructed with `risk_voi_name=None`."
                 )
             binary_risk_mask = self.array_backend.zeros(
                 (self._dij.dose_grid.num_voxels,), dtype=self._dtype

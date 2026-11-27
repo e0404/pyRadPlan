@@ -6,6 +6,7 @@ from pydantic import Field
 import array_api_compat
 
 from ...core.xp_utils.typing import Array
+from ...quantities import POLOBase
 from ._objective import Objective, ParameterMetadata
 
 
@@ -15,7 +16,10 @@ class HellingerConvPOLO(Objective):
 
     The sum of the linear predictor eta over the voxels of the region: the simplified
     Hellinger objective of Ortkamp et al. (Equation 14) evaluated on the decision function
-    instead of the probability.
+    instead of the probability. The intercept of the model (-26.3) is subtracted from every
+    voxel. It does not move the minimum, but as a constant of -26.3 per voxel it would
+    dominate the objective value, and a solver's relative stopping criterion then fires
+    long before the plan has converged.
 
     **Deviation from the paper.** Ortkamp et al. (Sec. 2.3) evaluate every POLO objective
     only on voxels receiving at least 2 Gy. This objective keeps every voxel by default
@@ -74,8 +78,8 @@ class HellingerConvPOLO(Objective):
 
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        finite_vals = xp.where(xp.isfinite(values), values, xp.zeros_like(values))
-        return xp.sum(finite_vals)
+        shifted = xp.where(xp.isfinite(values), values - POLOBase.INTERCEPT, xp.zeros_like(values))
+        return xp.sum(shifted)
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
