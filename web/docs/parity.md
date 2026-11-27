@@ -82,7 +82,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Right: Info | `_main_win.py:263` | verified on Pyodide | frontend | `app.info` |
 | Tablet / phone layouts (configuration row above the viewer, single column on phones; collapsible groups) | none (desktop only) | done (mock e2e, `e2e:responsive`) | frontend (web only) | – |
 | Status bar: "<Widget>: <message>" for 10 s on a widget update failure | `_main_win.py:110-119` | done (mock e2e) | frontend | – |
-| Busy lock: computation disables Plan, Objectives and the whole File menu (Base Data / Settings stay enabled) | `_main_win.py:107,146-150` | done (mock e2e) | frontend | `state.busy` |
+| Busy lock: computation disables Plan, Objectives and the whole File menu (Base Data stays enabled; Qt also locks Settings, whose UI mode rebuilds its left column, the web keeps it enabled) | `_main_win.py:107,146-150` | done (mock e2e) | frontend | `state.busy` |
 | Close while busy: "Computation running … Quit anyway?" | `_main_win.py:152-174` | done (mock e2e) | frontend (`beforeunload` prompt while busy) | `state.busy` |
 | Beam drag routed into the plan form (beam editor), edited angles drawn as pending | `_main_win.py:99-101` | done (mock e2e) | impl | `view.beams` |
 | Pending plan edits offered before Save Plan / Save Workspace / steps (`add_pending_changes_source`) | `_main_win.py:102-104`, `widgets/workflow/_workflow_widget.py:1043-1101` | done (mock e2e) | frontend (dialog "Apply and continue / Continue without applying / Cancel", then `plan.set`) | `plan.set` |
@@ -103,6 +103,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Save CST… format choice + "cannot store objectives" warning | `_file.py:87-89` → `_workflow_widget.py:1540-1616` | verified on Pyodide | impl: mat, pickle, HDF5, npz, DICOM RTSTRUCT / SEG (zip); label maps NIfTI/NRRD/MetaImage and the NRRD Slicer segmentation: stub (SimpleITK WriteImage) | `export.save {object:"cst"}`, `app.info.capabilities.formats` |
 | Save Result… (Save Result dialog, then image files) | `_file.py:90-91` → `_workflow_widget.py:1618-1701` | verified on Pyodide | impl with the browser-capable formats (npz, mat `resultGUI`, DICOM CT + RTDOSE + RT (Ion) Plan of the active result as zip; one file or zip); NIfTI/NRRD/MetaImage: stub (WriteImage). Qt asks "Image files" or DICOM first | `export.save {object:"result"}` |
 | Save Workspace… (HDF5 by default or pickle, incl. all results and the active name; requires CT; pending-edit check) | `_file.py:94-95` → `_workflow_widget.py:1489-1513` | verified on Pyodide | impl (HDF5, reloads in the browser; pickle: cross-runtime compatibility depends on the shim fix) | `export.save {object:"workspace"}` |
+| UI Mode ▸ Agentic (the left column becomes an Agent tab plus one tab per plan of the planning agent; see "Agentic mode") | `_file.py:27-31,98-110`, `_main_win.py:179-330` | none (Qt only; `web/src/store/uiMode.ts` lists only default and educational) | stub: `pydantic_ai` not installed in Pyodide; needs provider keys and cross-origin network calls from the browser. Not offered in the web menu yet (open) | – |
 | UI Mode ▸ Default / Educational (exclusive, tooltips) | `_file.py:98-110,159-161` | verified on Pyodide | impl (frontend setting; plan form locks `advanced` fields) | `app.settings` (optional), descriptors `advanced` |
 | Exit | `_file.py:113-114` | n/a | n/a (closing the tab) | – |
 | Enable rules (pln / dij / cst / result / ct present) | `_file.py:122-128` | done (mock e2e) | impl | `state.actions` (v1 entries `save_*`) |
@@ -457,6 +458,20 @@ Qt has no context menu here; editing goes through the click on the name.
 |---|---|---|---|---|
 | AI task dialog (model, treatment site, user prompt, system prompt, data context, Run / Close, usage line) | `ai/_ai_task_dialog.py:74-239` | stub (as Qt; reason from the real capabilities) | stub: `pydantic_ai` not installed in Pyodide; needs provider keys and network | `app.info.capabilities.features.ai` |
 | Availability tooltips (missing dependency / no model key) | `ai/__init__.py:13-40` | done (mock e2e) | impl (reason text from capabilities) | `app.info.capabilities` |
+
+## Agentic mode (`widgets/agent/`, `windows/_main_win.py`)
+
+Qt only: the web frontend has no agentic UI mode. Besides the missing AI runtime (see "Runtime
+checks behind the stubs"), the run logic (worker thread, pause / continue / resume after an error,
+selecting and publishing the plans, the workspace state per plan tab) lives in the Qt widgets and
+the main window, not in `pyRadPlan.app`; it has to move there before a web frontend can use it.
+
+| Element | Qt | Web | Target | Methods |
+|---|---|---|---|---|
+| Agent tab: Workflow box (status, phase dots, Load File / Load Folder, Run / Abort agent, Pause, Clear run) | `agent/_agent_panel.py` | none (Qt only) | stub: `pydantic_ai` not installed in Pyodide; needs provider keys and network; run logic not in `pyRadPlan.app` (open) | – |
+| Agent tab: tabs Plan (plan editor) / Agentic Plan (model, budgets, task, goals with constraint tables and import / export, tools) / Progress (goals per plan) / Agentic Result (report, usage, table of all optimizations with "Load plan") | `agent/_agentic_plan_widget.py`, `_progress_plot.py`, `_result_widget.py` | none (Qt only) | stub: as above (open) | – |
+| Agent log and the Continue / Redirect / Finish box (paused, finished or failed run) | `agent/_agent_panel.py` | none (Qt only) | stub: as above (open) | – |
+| Plan tabs with a workspace state each (selected plans, "Load plan"; locked while busy; dropped with a new patient) | `_main_win.py:235-330` | none (Qt only) | stub: as above (open) | – |
 
 ## Dependencies outside `pyRadPlan/app` and `web/` (for the orchestrator)
 

@@ -2,15 +2,15 @@
 
 from types import SimpleNamespace
 
+from pydantic_ai.usage import RunUsage
+
 from pyRadPlan._settings import get_settings
 from pyRadPlan.ai.agents import pop_last_run_usage
 from pyRadPlan.ai.agents._usage import log_run_usage, summarize_run_usage
 
 
 def _fake_result(input_tokens=1200, output_tokens=340):
-    return SimpleNamespace(
-        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
-    )
+    return SimpleNamespace(usage=RunUsage(input_tokens=input_tokens, output_tokens=output_tokens))
 
 
 def test_summarize_run_usage_formats_tokens_and_cost():

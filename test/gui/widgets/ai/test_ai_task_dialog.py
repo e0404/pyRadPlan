@@ -41,13 +41,15 @@ def test_dialog_shows_usage_after_run(qapp, monkeypatch):
     """Usage recorded during the run (as the agent functions do) ends up in the status."""
     from types import SimpleNamespace
 
+    from pydantic_ai.usage import RunUsage
+
     from pyRadPlan.ai.agents._usage import log_run_usage
 
     monkeypatch.setenv("PYRADPLAN_AI_DISPLAY_USAGE", "true")
     applied = []
 
     def _run(model, site, ctx):
-        fake_result = SimpleNamespace(usage=SimpleNamespace(input_tokens=1200, output_tokens=340))
+        fake_result = SimpleNamespace(usage=RunUsage(input_tokens=1200, output_tokens=340))
         log_run_usage(fake_result, model, operation="test")
         return "result"
 

@@ -19,10 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VOI.overlap_handling`: `"cut"` (default) removes the voxels of overlapping VOIs with a higher priority as before, `"keep"` keeps the VOI's voxels while it still cuts VOIs of lower priority, and `"ignore"` leaves the VOI out of the overlap handling, e.g. for a helper VOI that hands the whole dose to an outcome objective
 - `Objective.setup(ct, cst)` is called by the planning problem with the CT and the structures before the optimization, and `Objective.report_info()` returns data an objective collected during it, found in `opt_info["objective_info"]` (e.g. the probability history of an outcome objective)
 - Documentation: a user guide section on outcome model objectives and the tutorials `ntcp_optimization_tg119`, `ntcp_optimization_xero_cnn` and `ntcp_optimization_xero_lr`
+- Planning agent (`pyRadPlan.ai.agents.run_planning_agent`, research feature, not for clinical use): a language model sets up beams and objectives, optimizes and checks the dose against clinical goals from a goal file or a constraint table. The bundled `demo` table holds QUANTEC/RTOG-style values (simplified, for demonstration only, not validated). Every plan is kept with a score, so the best trade-offs can be compared (`select_distinct_plans`). Runs can pause for review, and a run stopped by the request limit or a provider error raises a `PlanningRunError` that keeps the conversation; both are resumed with `continue_planning_agent`
+- GUI: an *agentic* UI mode (File > UI Mode) with an *Agent* tab that runs the planning agent and opens the chosen plans in their own tabs
+- `MeanOverdosing` objective: penalizes the mean dose only above `d_max`
+- Optimization can start from a given fluence (`fluence_optimization(..., initial_fluence=...)`, `PlanningProblem.solve(..., x0=...)`)
+- AI agents can use a local Ollama server (`OLLAMA_BASE_URL`) and support newer Anthropic models such as Sonnet 5.5
+- Documentation: a user guide section on the planning agent and the agentic UI mode, and the tutorials `utils_ai_planning_agent` and `utils_ai_planning_agent_hn`
 
 ### Changed
 
 - Loading a model (`load_model`, the AI beamlet engine) decides by where the model came from whether its code may run, not by how it is named. A model folder you placed yourself now runs without `trust_remote_code` also when it is loaded by id, and is never refreshed from the Hub (an unpinned load by id could overwrite it before). `load_model` raises `UntrustedModelError`, a `ValueError`, for downloaded code that is not trusted
+- The AI agents require `pydantic_ai>=2.0`
 
 ### Security
 

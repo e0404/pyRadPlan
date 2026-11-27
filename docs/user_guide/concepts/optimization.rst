@@ -35,6 +35,42 @@ Under the hood, this function:
 4. Calls the solver and returns a :class:`~pyRadPlan.result.PlanResult` with the quantities on
    the CT grid and the optimal fluence vector (``result.fluence``).
 
+.. _concept_initial_fluence:
+
+Starting from a given fluence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default the solver starts with all bixel weights at zero. With ``initial_fluence`` it
+starts from a fluence you provide instead (a *warm start*), typically the result of an
+earlier optimization with the same beams:
+
+.. code-block:: python
+
+    first = fluence_optimization(ct, cst, stf, dij, pln)
+
+    # change an objective, e.g. tighten an OAR limit, then continue from the first result
+    oar.objectives[0].d_max = 20.0
+    second = fluence_optimization(ct, cst, stf, dij, pln, initial_fluence=first.fluence)
+
+A warm start pays off after a small change of the objectives: the solver needs fewer
+iterations, and the plan changes mainly where the new objectives ask for it. This matters
+most for DVH objectives (``MinDVH``, ``MaxDVH``), whose result depends on the starting point.
+After a large change, e.g. different target doses, starting from zero is the safer choice.
+
+The fluence must have one value per bixel of ``dij`` (``dij.total_num_of_bixels``), so it
+cannot be reused after the beams or the bixel grid changed; a wrong length raises a
+``ValueError``. Values below the lower bound of the fluence (zero) are raised to the bound,
+and non-finite values (``NaN``, ``inf``) are rejected with a ``ValueError``.
+
+When working with a planning problem directly, pass the starting point as ``x0``:
+
+.. code-block:: python
+
+    from pyRadPlan.optimization.problems import get_problem_from_pln
+
+    problem = get_problem_from_pln(pln)
+    fluence, info = problem.solve(ct, cst, stf, dij, x0=first.fluence)
+
 Planning problems
 -----------------
 
@@ -185,7 +221,11 @@ Available objectives
    * - :class:`~pyRadPlan.optimization.objectives.SquaredOverdosing`
      - Penalizes only dose above the reference. Use for OAR sparing without coverage trade-off.
    * - :class:`~pyRadPlan.optimization.objectives.MeanDose`
-     - Penalizes the mean dose in the structure.
+     - Penalizes the squared deviation of the mean dose from ``d_ref``, in both directions.
+       With the default ``d_ref=0`` it minimizes the mean dose.
+   * - :class:`~pyRadPlan.optimization.objectives.MeanOverdosing`
+     - Penalizes the mean dose only above ``d_max`` (one-sided). Use it for a mean-dose limit
+       of an OAR: a mean below the limit is not penalized and not pushed up.
    * - :class:`~pyRadPlan.optimization.objectives.MaxDVH`
      - Penalizes violation of a maximum DVH constraint (Dx < limit).
    * - :class:`~pyRadPlan.optimization.objectives.MinDVH`

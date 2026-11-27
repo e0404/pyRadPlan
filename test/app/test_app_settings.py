@@ -92,7 +92,7 @@ def test_settings_forms(client, restore_settings):
     gui = _section(result, "gui")["form"]
     (ui_mode,) = gui["fields"]
     assert ui_mode["type"] == "choice"
-    assert [c["value"] for c in ui_mode["choices"]] == ["default", "educational"]
+    assert [c["value"] for c in ui_mode["choices"]] == ["default", "educational", "agentic"]
     assert gui["values"] == {"ui_mode": restore_settings.gui.ui_mode}
     xp = _section(result, "xp")["form"]
     assert xp["values"]["prefer_gpu"] == restore_settings.xp.prefer_gpu

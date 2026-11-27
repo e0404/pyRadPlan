@@ -30,7 +30,7 @@ AI_MISSING = "Install the optional 'ai' dependencies (pydantic-ai) to use this"
 #: Shown when no AI provider key is configured (the Qt tooltip ``AI_NO_MODEL_TIP``).
 AI_NO_MODEL = (
     "No AI model available: set a provider API key (e.g. ANTHROPIC_API_KEY,"
-    " OPENAI_API_KEY) in the environment or a .env file"
+    " OPENAI_API_KEY) or OLLAMA_BASE_URL in the environment or a .env file"
 )
 
 _NO_HOST_FILES = "The browser runtime has no access to the files of this computer"

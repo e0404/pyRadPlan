@@ -8,6 +8,7 @@ from pyRadPlan.cst import StructureSet
 from pyRadPlan.plan import Plan, validate_pln
 from pyRadPlan._settings import get_settings
 
+from ._models import resolve_model
 from ._settings import load_ai_env
 from ._usage import log_run_usage
 
@@ -145,7 +146,7 @@ def generate_beam_angles(
 
     prompt = beam_angles_system_prompt(pln.radiation_mode, with_geometry=cst is not None)
 
-    agent = Agent(effective_model, output_type=BeamSetup, system_prompt=prompt)
+    agent = Agent(resolve_model(effective_model), output_type=BeamSetup, system_prompt=prompt)
 
     user_prompt = (
         f"Treatment site: {treatment_site}, "

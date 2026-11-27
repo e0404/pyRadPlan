@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+from pydantic_ai.usage import RunUsage
+
 import pytest
 
 pytest.importorskip("pydantic_ai")
@@ -58,15 +60,14 @@ class _FakeAgent:
     def run_sync(self, user_prompt):
         _FakeAgent.captured["user_prompt"] = user_prompt
         output = _FakeAgent.captured["output_type"](objectives=[])
-        return SimpleNamespace(
-            output=output, usage=SimpleNamespace(input_tokens=0, output_tokens=0)
-        )
+        return SimpleNamespace(output=output, usage=RunUsage(input_tokens=0, output_tokens=0))
 
 
 @pytest.fixture
 def fake_agent(monkeypatch):
     monkeypatch.setattr("pyRadPlan.ai.agents._cst_agents.Agent", _FakeAgent)
     monkeypatch.setattr("pyRadPlan.ai.agents._cst_agents.load_ai_env", lambda *a, **k: None)
+    monkeypatch.setattr("pyRadPlan.ai.agents._models.load_ai_env", lambda *a, **k: None)
     return _FakeAgent
 
 

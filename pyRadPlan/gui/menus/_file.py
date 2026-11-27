@@ -28,6 +28,7 @@ from ._settings import apply_settings_values
 _UI_MODE_TIPS = {
     "default": "Show every control",
     "educational": "Reduce the widgets to the basic operations (e.g. beam angles) for teaching",
+    "agentic": "Let the planning agent create plans from clinical goals",
 }
 
 

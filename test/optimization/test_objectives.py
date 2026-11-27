@@ -8,6 +8,7 @@ from pyRadPlan.optimization.objectives import (
     SquaredUnderdosing,
     EUD,
     MeanDose,
+    MeanOverdosing,
     MinDVH,
     MaxDVH,
     get_available_objectives,
@@ -28,6 +29,7 @@ def test_objective_availability():
     assert "Squared Underdosing" in available_objectives
     assert "EUD" in available_objectives
     assert "Mean Dose" in available_objectives
+    assert "Mean Overdosing" in available_objectives
     assert "Min DVH" in available_objectives
     assert "Max DVH" in available_objectives
 
@@ -371,6 +373,46 @@ def test_MeanDose_compute_gradient():
     mean_dose.d_ref = 1.0
     grad_expected = xp.full(3, 1 / 3, dtype=xp.float32)
     assert xp.all(mean_dose.compute_gradient(dose) == grad_expected)
+
+
+def test_MeanDose_pulls_a_lower_mean_up():
+    mean_dose = MeanDose(d_ref=3.0)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
+    assert mean_dose.compute_objective(dose) == 1
+    assert xp.all(mean_dose.compute_gradient(dose) < 0)
+
+
+def test_MeanOverdosing_constructor():
+    obj = MeanOverdosing(d_max=2, priority=100)
+    assert obj.name == "Mean Overdosing"
+    assert obj.parameter_names == ["d_max"]
+    assert obj.parameter_types == ["reference"]
+    assert obj.parameters == [2.0]
+    assert obj.priority == 100.0
+
+
+def test_MeanOverdosing_is_one_sided():
+    obj = MeanOverdosing(d_max=3.0)
+    dose = xp.asarray([1, 2, 3], dtype=xp.float32)
+    assert obj.compute_objective(dose) == 0
+    assert xp.all(obj.compute_gradient(dose) == 0)
+
+    obj.d_max = 1.0
+    assert float(obj.compute_objective(dose)) == pytest.approx(1.0)
+    grad_expected = xp.full(3, 2 / 3, dtype=xp.float32)
+    assert xp.all(xp.abs(obj.compute_gradient(dose) - grad_expected) < 1e-6)
+
+
+def test_MeanOverdosing_gradient_matches_finite_differences():
+    obj = MeanOverdosing(d_max=1.0)
+    dose = np.asarray([1.0, 2.0, 2.5, 0.5])  # mean 1.5
+    grad = obj.compute_gradient(dose)
+    eps = 1e-6
+    for i in range(dose.size):
+        step = np.zeros_like(dose)
+        step[i] = eps
+        fd = (obj.compute_objective(dose + step) - obj.compute_objective(dose - step)) / (2 * eps)
+        assert grad[i] == pytest.approx(fd, rel=1e-5)
 
 
 def test_MinDVH_constructor():

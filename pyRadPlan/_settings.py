@@ -273,7 +273,7 @@ class XpSettings(_PyRadPlanBaseSettings):
 
 
 #: Presentation modes of the GUI, see :attr:`GuiSettings.ui_mode`.
-GuiUiMode = Literal["default", "educational"]
+GuiUiMode = Literal["default", "educational", "agentic"]
 
 
 class GuiSettings(_PyRadPlanBaseSettings):
@@ -287,11 +287,12 @@ class GuiSettings(_PyRadPlanBaseSettings):
 
     Attributes
     ----------
-    ui_mode : {"default", "educational"}
+    ui_mode : {"default", "educational", "agentic"}
         Presentation mode of the widgets. ``"default"`` shows every control;
         ``"educational"`` reduces the widgets to the basic operations (e.g.
-        radiation mode and beam angles in the plan editor) for teaching.
-        Presentation only: hidden fields keep their values.
+        radiation mode and beam angles in the plan editor) for teaching;
+        ``"agentic"`` lets the planning agent create the plans, each shown in
+        its own tab. Presentation only: hidden fields keep their values.
 
     Examples
     --------
@@ -315,7 +316,8 @@ class GuiSettings(_PyRadPlanBaseSettings):
     ui_mode: GuiUiMode = Field(
         default="default",
         description="Presentation mode of the GUI widgets: 'default' shows every control, "
-        "'educational' reduces the widgets to the basic operations for teaching.",
+        "'educational' reduces the widgets to the basic operations for teaching, "
+        "'agentic' lets the planning agent create the plans.",
     )
 
 

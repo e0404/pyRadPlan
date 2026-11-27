@@ -4,6 +4,8 @@ A fixed three-column layout around a central slice viewer, with every widget
 bound to a shared :class:`~pyRadPlan.gui.workspace.WorkspaceManager`:
 
 - Left column:  Workflow / Plan / Objectives & constraints / Log
+  (agentic UI mode: an *Agent* tab, then one tab per plan the agent selected,
+  each holding the column above)
 - Center:       Logo banner (top), the Slice Viewer (large), Visualization
 - Right column: Viewer Options / Structure Visibility / Info
 
@@ -23,6 +25,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSplitter,
+    QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +45,7 @@ from pyRadPlan.gui.widgets import (
     LogConsoleWidget,
 )
 from pyRadPlan.gui.widgets._logo_widget import LogoWidget
+from pyRadPlan.gui.widgets._ui_mode import UIMode
 from pyRadPlan.gui.widgets._info_widget import InfoWidget
 from pyRadPlan.gui.windows._analysis_win import close_analysis_windows
 from pyRadPlan.gui.windows._splash_win import (
@@ -106,6 +111,16 @@ class MainWindow(QMainWindow):
         # Lock the input widgets while a workflow computation is running.
         self.workflow_widget.busy_changed.connect(self._on_busy_changed)
 
+        # Agentic mode: built on first use, as it loads pydantic-ai. Each tab after the
+        # Agent tab is a plan; the workspace holds the state of the current tab and
+        # _tab_states the others (None for the current one).
+        self.agent_panel = None
+        self._tab_states: list[Optional[dict]] = [None]
+        self._tab_keys: list = [None]  # per tab: the optimization it shows (see AgentPanel)
+        self._current_tab = 0
+        self._switching_tabs = False
+        self.workspace.workspace_changed.connect(self._on_workspace_changed)
+
         # Surface widget refresh failures (otherwise only logged) to the user.
         for widget in (
             self.workflow_widget,
@@ -120,6 +135,7 @@ class MainWindow(QMainWindow):
 
         self._build_layout()
         self._build_menu_bar()
+        self._apply_layout_mode()
 
     def _apply_compact_font(self) -> None:
         # Set on the application, not the window: widgets with a style sheet (or whose
@@ -142,12 +158,162 @@ class MainWindow(QMainWindow):
         """Push the configured ``settings.gui.ui_mode`` to the widgets and the File menu."""
         self.plan_widget.set_ui_mode(get_settings().gui.ui_mode)
         self._file_menu.refresh_ui_mode()
+        self._apply_layout_mode()
 
     def _on_busy_changed(self, busy: bool) -> None:
-        """Disable input editors while a background computation runs."""
+        """Disable input editors while a background computation or the agent runs."""
+        busy = busy or self._is_busy()  # the other source may still run
         self.plan_widget.setEnabled(not busy)
         self.optimization_widget.setEnabled(not busy)
         self._file_menu.setEnabled(not busy)
+        self._settings_menu.setEnabled(not busy)  # the UI mode rebuilds the left column
+        self._agent_tabs.tabBar().setEnabled(not busy)
+
+    def _is_busy(self) -> bool:
+        agent_busy = self.agent_panel is not None and self.agent_panel.is_busy
+        return self.workflow_widget.is_busy or agent_busy
+
+    # ------------------------------------------------------------------
+    # Agentic mode
+    # ------------------------------------------------------------------
+
+    def _apply_layout_mode(self) -> None:
+        """Show the classic left column, or the Agent and plan tabs in agentic mode."""
+        if get_settings().gui.ui_mode == UIMode.AGENTIC and self.agent_panel is None:
+            self._build_agent_panel()
+        self._place_widgets()
+
+    def _build_agent_panel(self) -> None:
+        from pyRadPlan.gui.widgets.agent import AgentPanel  # noqa: PLC0415
+        from pyRadPlan.gui.widgets.ai import busy_cursor  # noqa: PLC0415
+
+        with busy_cursor():  # loads pydantic-ai
+            self.agent_panel = AgentPanel(
+                self.workspace, self.workflow_widget, before_run=self._apply_plan_edits
+            )
+        self.agent_panel.busy_changed.connect(self._on_busy_changed)
+        self.agent_panel.run_started.connect(self._clear_plan_tabs)
+        self.agent_panel.plans_selected.connect(self._add_plan_tabs)
+        self.agent_panel.run_cleared.connect(self._clear_plan_tabs)
+        self.agent_panel.plan_requested.connect(self._show_plan_tab)
+        self.agent_panel.update_failed.connect(
+            lambda msg: self.statusBar().showMessage(f"AgentPanel: {msg}", 10000)
+        )
+        self._switching_tabs = True
+        try:
+            self._agent_tabs.insertTab(0, self.agent_panel, "Agent")
+            self._agent_tabs.setCurrentIndex(0)
+        finally:
+            self._switching_tabs = False
+
+    def _apply_plan_edits(self) -> bool:
+        if not self.plan_widget.has_pending_changes():
+            return True
+        return self.plan_widget.apply_changes()
+
+    def _place_widgets(self) -> None:
+        """Put the classic column and the plan editor where the current mode shows them.
+
+        In agentic mode, the Agent tab holds the plan editor and a plan tab the classic
+        column; otherwise the classic column is the left column.
+        """
+        agentic = self.agent_panel is not None and get_settings().gui.ui_mode == UIMode.AGENTIC
+        on_plan_tab = agentic and self._current_tab > 0
+        self._left_stack.setCurrentIndex(1 if agentic else 0)
+        if on_plan_tab:
+            column_host = self._agent_tabs.widget(self._current_tab)
+        else:
+            column_host = self._classic_page
+        column_host.layout().addWidget(self._classic_column)
+        if agentic and not on_plan_tab:
+            plan_host = self.agent_panel.plan_page
+        else:
+            plan_host = self._plan_group
+        plan_host.layout().addWidget(self.plan_widget)
+        self._classic_column.show()
+        self.plan_widget.show()
+
+    def _on_agent_tab_changed(self, index: int) -> None:
+        """Swap the workspace to the state of the tab at *index*.
+
+        The dose influence of a plan tab is dropped when leaving it, to save memory;
+        it can be recalculated in the tab's workflow.
+        """
+        if self._switching_tabs or index < 0 or index == self._current_tab:
+            return
+        if self._is_busy():
+            # The disabled tab bar does not stop keyboard navigation (Ctrl+Tab), and the
+            # running computation works on the workspace of the current tab
+            self._switching_tabs = True
+            try:
+                self._agent_tabs.setCurrentIndex(self._current_tab)
+            finally:
+                self._switching_tabs = False
+            return
+        ws = self.workspace
+        state = {key: getattr(ws, key) for key in ("cst", "pln", "stf", "dij")}
+        state.update(results=ws.results, active_result=ws.active_result)
+        if self._current_tab > 0:
+            state.update(stf=None, dij=None)
+        self._tab_states[self._current_tab] = state
+        new_state, self._tab_states[index] = self._tab_states[index], None
+        self._current_tab = index
+        self._switching_tabs = True
+        try:
+            ws.set_many(**new_state)
+        finally:
+            self._switching_tabs = False
+        self._place_widgets()
+
+    def _add_plan_tabs(self, plans: list) -> None:
+        """Add a tab per plan; a plan that has a tab already keeps it, under the new label."""
+        for plan in plans:
+            key = plan.get("key")
+            if key is not None and key in self._tab_keys:
+                index = self._tab_keys.index(key)
+                self._agent_tabs.setTabText(index, plan["label"])
+                self._agent_tabs.setTabToolTip(index, plan["tooltip"])
+                continue
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            index = self._agent_tabs.addTab(page, plan["label"])
+            self._agent_tabs.setTabToolTip(index, plan["tooltip"])
+            self._tab_states.append(plan["state"])
+            self._tab_keys.append(key)
+
+    def _show_plan_tab(self, plan: dict) -> None:
+        """Switch to the tab of *plan*'s optimization, adding the tab if there is none."""
+        key = plan.get("key")
+        if key is None or key not in self._tab_keys:
+            self._add_plan_tabs([plan])
+            index = self._agent_tabs.count() - 1
+        else:
+            index = self._tab_keys.index(key)
+        self._agent_tabs.setCurrentIndex(index)
+
+    def _clear_plan_tabs(self) -> None:
+        """Remove the plan tabs; the workspace's current state becomes the Agent tab's."""
+        if self._agent_tabs.count() <= 1:
+            return
+        self._switching_tabs = True
+        try:
+            self._agent_tabs.setCurrentIndex(0)
+        finally:
+            self._switching_tabs = False
+        self._current_tab = 0
+        self._place_widgets()  # moves the classic column out of the plan tab
+        while self._agent_tabs.count() > 1:
+            page = self._agent_tabs.widget(1)
+            self._agent_tabs.removeTab(1)
+            page.deleteLater()
+        self._tab_states = [None]
+        self._tab_keys = [None]
+
+    def _on_workspace_changed(self, keys: list) -> None:
+        # Plans of another patient are meaningless
+        if "ct" in keys and not self._switching_tabs:
+            self._clear_plan_tabs()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Confirm quitting during a computation and stop the worker thread.
@@ -155,7 +321,7 @@ class MainWindow(QMainWindow):
         Without this, closing the window would destroy a still-running QThread,
         which aborts the whole process (Qt fatal).
         """
-        if self.workflow_widget.is_busy:
+        if self._is_busy():
             answer = QMessageBox.question(
                 self,
                 "Computation running",
@@ -166,7 +332,10 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+            self.hide()  # stopping can take a few seconds
             self.workflow_widget.shutdown()
+            if self.agent_panel is not None:
+                self.agent_panel.shutdown()
         close_analysis_windows(self._viewer)
         # The log handler outlives the widget otherwise, and logging into a
         # destroyed QObject bridge would crash on interpreter shutdown.
@@ -208,7 +377,7 @@ class MainWindow(QMainWindow):
         # so the user can resize or fully collapse any panel (helpful on small or
         # oddly proportioned displays).
         self._main_splitter = QSplitter(Qt.Horizontal)
-        self._main_splitter.addWidget(self._build_left_column())
+        self._main_splitter.addWidget(self._build_left_stack())
         self._main_splitter.addWidget(self._build_center_column())
         self._main_splitter.addWidget(self._build_right_column())
         # The left control column gets the most room; the center viewer is kept
@@ -231,14 +400,31 @@ class MainWindow(QMainWindow):
             split.setStretchFactor(index, stretch)
         return split
 
+    def _build_left_stack(self) -> QWidget:
+        # Page 0: the classic column; page 1: the agentic tabs. The classic column
+        # moves into a plan tab while that is shown (see _place_widgets).
+        self._classic_column = self._build_left_column()
+        self._classic_page = QWidget()
+        lay = QVBoxLayout(self._classic_page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._classic_column)
+        self._agent_tabs = QTabWidget()
+        self._agent_tabs.currentChanged.connect(self._on_agent_tab_changed)
+        self._left_stack = QStackedWidget()
+        self._left_stack.addWidget(self._classic_page)
+        self._left_stack.addWidget(self._agent_tabs)
+        self._left_stack.setMinimumWidth(330)
+        return self._left_stack
+
     def _build_left_column(self) -> QWidget:
         # Fixed control panels keep their natural height; the objectives table
         # takes most of the column's slack (mirrors matRad's tall objectives
         # panel), with the log console growing at half its rate below it.
         self._log_panel = _group("Log", self.log_console)
+        self._plan_group = _group("Plan", self.plan_widget)
         col = self._vsplit(
             (_group("Workflow", self.workflow_widget), 0),
-            (_group("Plan", self.plan_widget), 0),
+            (self._plan_group, 0),
             (_group("Objectives && constraints", self.optimization_widget), 2),
             (self._log_panel, 1),
         )

@@ -118,5 +118,5 @@ class SimpleLeastSquaresFluenceOptimization(NonLinearPlanningProblem):
     def _solve(self) -> tuple[np.ndarray, dict]:
         """Solve the problem."""
 
-        x0 = np.zeros((self._dij.total_num_of_bixels,), dtype=np.float64)
+        x0 = self._initial_point()
         return self.solver.solve(x0)
