@@ -1,23 +1,44 @@
-"""# Planning agent on the matRad head-and-neck phantom (needs an Anthropic API key).
+# %% [markdown]
+"""# Planning Agent on the matRad Head-and-Neck Phantom."""
+# %% [markdown]
+# This example lets the planning agent of `pyRadPlan.ai.agents` plan a simultaneous
+# integrated boost (70 Gy to PTV70 and 63 Gy to PTV63 in 35 fractions) and then compares the
+# plans it produced. The goals use clinical names (`SpinalCord`, `Parotid_L`, ...); the agent
+# maps them to the phantom's matRad names (`SPINAL_CORD`, `PAROTID_LT`, ...).
+#
+# Afterwards the GUI shows the two best plans that trade off differently, next to a plot of
+# how every goal developed over the optimizations.
+#
+# **Scope and limitations.** The planning agent is a research feature and **not for clinical
+# use**. Its results depend on the model, and two runs of the same case can differ.
+#
+# The basics of the agent are introduced in `utils_ai_planning_agent.py`.
 
-A simultaneous integrated boost (70 Gy to PTV70, 63 Gy to PTV63 in 35 fractions) with
-a locked protocol. The goals use clinical names (``SpinalCord``, ``Parotid_L``, ...);
-the agent maps them to the phantom's matRad names (``SPINAL_CORD``, ``PAROTID_LT``, ...).
-
-Afterwards the GUI shows the two best plans that trade off differently, next to a plot
-of how every goal developed over the optimizations.
-"""
+# %% [markdown]
+# ## Prerequisites
+#
+# 1. The head-and-neck phantom of matRad (`HEAD_AND_NECK.mat` in `matRad/phantoms`). Set the
+#    environment variable `MATRAD_PHANTOMS` to that folder.
+# 2. A language model that supports tool calls. The example uses an Anthropic model, which
+#    needs `ANTHROPIC_API_KEY` in the environment or a `.env` file. Other providers work as
+#    well, and so does a local [Ollama](https://ollama.com) server (set `OLLAMA_BASE_URL`,
+#    e.g. `http://localhost:11434/v1`, and `MODEL = "ollama:<model name>"`).
+#
+# **What is sent to the model provider.** Dose calculation and optimization run on your
+# computer. The model receives text only: the task, the goals, the structure names, and
+# summaries in numbers (structure volumes and positions, beam angles, objectives, dose
+# metrics). The CT, the contours and the dose distributions are not sent, and neither is a
+# patient name or ID. With a local Ollama server nothing is sent to a cloud provider.
 
 # %%
 import logging
 import os
 from pathlib import Path
 
-from pydantic_ai.exceptions import AgentRunError
-
 from pyRadPlan import PhotonPlan, load_patient
 from pyRadPlan.ai.agents import (
     Goal,
+    PlanningRunError,
     PlanningState,
     Protocol,
     load_ai_env,
@@ -28,16 +49,19 @@ from pyRadPlan.gui import GUI_AVAILABLE, launch_viewer
 
 logging.basicConfig(level=logging.WARNING)
 
-# The phantom ships with matRad (matRad/phantoms); MATRAD_PHANTOMS points to that folder
 HN_PATH = Path(os.environ.get("MATRAD_PHANTOMS", "matRad/phantoms")) / "HEAD_AND_NECK.mat"
 
-load_ai_env()  # ANTHROPIC_API_KEY from .env
+load_ai_env()  # reads API keys and settings from a .env file, if there is one
 MODEL = "anthropic:claude-sonnet-5-5"
 
 # %% [markdown]
 # ## Patient, plan and protocol
 # The phantom ships with matRad objectives, which are dropped so the agent starts from
-# scratch. Doses are total course doses (`dose_convention="total"`).
+# scratch.
+#
+# All doses in this example are total doses of the course: the plan uses
+# `dose_convention="total"`, and the goals are written accordingly. A goal is hard (it must
+# be met) unless it is created with `hard=False`.
 
 # %%
 ct, cst = load_patient(HN_PATH)
@@ -64,10 +88,13 @@ state = PlanningState(ct=ct, cst=cst, pln=pln, protocol=protocol)
 
 # %% [markdown]
 # ## Run
-# Each dose influence calculation (at most `state.max_dij_calcs`, default 3) and
-# optimization (at most `max_optimizations`) runs locally; `request_limit` caps the
-# number of model requests and with it the cost. Every optimized plan is kept in
-# `state.plans`, also when the run stops early (e.g. at the request limit).
+# Dose influence calculations (at most `state.max_dij_calcs`, default 3) and optimizations
+# (at most `max_optimizations`) run locally. `request_limit` caps the number of model
+# requests and with it the cost.
+#
+# Every optimized plan is kept in `state.plans`, also when the run stops early: a run that
+# reaches the request limit or fails at the provider raises a `PlanningRunError`, and
+# `continue_planning_agent(state, err)` would resume it.
 
 # %%
 try:
@@ -81,27 +108,29 @@ try:
         max_optimizations=8,
         request_limit=40,
     )
-except AgentRunError as e:  # e.g. request limit reached
-    result = None
-    print(f"Agent stopped: {e}")
+    usage = result.usage
+except PlanningRunError as err:
+    result, usage = None, err.usage
+    print(f"Agent stopped: {err}")
 
+print(
+    f"requests: {usage.requests}, tool calls: {usage.tool_calls}, input: {usage.input_tokens} "
+    f"(cache read {usage.cache_read_tokens}, cache write {usage.cache_write_tokens}), "
+    f"output: {usage.output_tokens}"
+)
 if result is not None:
-    u = result.usage
-    print(
-        f"requests: {u.requests}, tool calls: {u.tool_calls}, input: {u.input_tokens} "
-        f"(cache read {u.cache_read_tokens}, cache write {u.cache_write_tokens}), "
-        f"output: {u.output_tokens}"
-    )
     print(result.output.model_dump_json(indent=2))
 for step in state.history:  # what the agent did, step by step
     print(step)
 
 # %% [markdown]
 # ## The two best plans that trade off differently
-# Plans are ranked by (all hard goals passed, score). The score is the weighted mean of
-# each goal's margin relative to its limit, clipped to [-100 %, +20 %]: higher is
-# better, >= 0 when every goal passes. Plan 2 must beat plan 1 by >= 5 % of a goal's
-# limit on at least one goal, so it is not just a slightly worse copy of plan 1.
+# Each plan is kept as a plan record with its dose, beams and goal evaluation.
+# `select_distinct_plans` ranks the plans by (all hard goals passed, score). The score is
+# the weighted mean of each goal's margin relative to its limit, clipped to
+# [-100 %, +20 %]: higher is better, and it is zero or more when every goal passes. Plan 2
+# must beat plan 1 by at least 5 % of a goal's limit on at least one goal, so it is not just
+# a slightly worse copy of plan 1.
 
 # %%
 picks = select_distinct_plans(state.plans, n=2)
@@ -121,9 +150,10 @@ elif picks:
 
 # %% [markdown]
 # ## GUI: progress plot and result viewer
-# The plot shows every goal's margin per optimization (above the 0 line it is met) and
-# the score; the viewer's quantity list holds one dose per selected plan. The main GUI
-# shows the same in its agentic UI mode (`pyRadPlan.settings.gui.ui_mode = "agentic"`).
+# The plot shows every goal's margin per optimization (above the 0 line the goal is met) and
+# the score. The viewer's quantity list holds one dose per selected plan. The main GUI shows
+# the same in its agentic UI mode (File > UI Mode, or
+# `pyRadPlan.settings.gui.ui_mode = "agentic"`).
 
 # %%
 if not picks:

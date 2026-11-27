@@ -10,6 +10,7 @@ optimization.objectives
     EUD
     MaxDVH
     MeanDose
+    MeanOverdosing
     MinDVH
     SquaredDeviation
     SquaredMimicking
