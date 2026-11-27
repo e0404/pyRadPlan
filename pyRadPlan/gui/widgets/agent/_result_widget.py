@@ -170,7 +170,9 @@ class AgentResultWidget(QWidget):
             parts.append(f"<p><b>{met}.</b> {html.escape(report.summary)}</p>")
             parts.append(_section("Trade-offs", report.trade_offs))
             parts.append(_section("Suggestions for the planner", report.suggestions_for_planner))
-        parts.append(_section("Goals not evaluated (structure not found)", unresolved_goals))
+        parts.append(
+            _section("Goals not evaluated (structure not found or empty)", unresolved_goals)
+        )
         if summary:
             parts.append(f"<p>{html.escape(summary)}</p>")
         if usage:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import html
 import logging
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -43,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 #: Longest tool argument / error text shown in the agent log.
 _MAX_LOG_TEXT = 160
+#: Lines kept in the agent log.
+_MAX_LOG_LINES = 5000
 
 _PHASES = (("thinking", "Thinking"), ("dij", "Calculating D_ij"), ("optimize", "Optimizing"))
 
@@ -112,6 +116,87 @@ def _pareto_line(result: dict) -> str:
     )
 
 
+def _usage_line(usage: Any) -> Optional[str]:
+    """One line on the requests and tokens of a run that failed (a pydantic-ai usage)."""
+    requests = getattr(usage, "requests", None)
+    if requests is None:
+        return None
+    parts = [f"{requests} request(s)"]
+    for attr, label in (
+        ("tool_calls", "tool call(s)"),
+        ("input_tokens", "input tokens"),
+        ("output_tokens", "output tokens"),
+    ):
+        value = getattr(usage, attr, None)
+        if value:
+            parts.append(f"{value} {label}")
+    return "Usage so far: " + ", ".join(parts)
+
+
+def _is_resumable(exc: Any) -> bool:
+    """Whether *exc* carries the conversation of the failed run (``PlanningRunError``)."""
+    return callable(getattr(exc, "all_messages", None)) and hasattr(exc, "usage")
+
+
+class _DetachableCall:
+    """Makes a blocking call in a daemon thread and waits for it until detached.
+
+    A model request cannot be interrupted, and a ``QThread`` must not be destroyed while
+    it runs. The run's ``QThread`` therefore only waits for a daemon thread making the
+    call: :meth:`detach` ends that wait, so the ``QThread`` finishes at once, while the
+    daemon thread ends on its own or with the interpreter. Events and reports of the
+    call reach Qt only through :meth:`send_event` / :meth:`send_report`, which forward
+    nothing (and hold no Qt object) once detached.
+    """
+
+    def __init__(self, fn: Callable, on_event: Callable, on_report: Callable) -> None:
+        self._fn = fn
+        self._sinks: dict[str, Callable] = {"event": on_event, "report": on_report}
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self._outcome: Optional[tuple] = None
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        context = contextvars.copy_context()  # the report observers and the control
+
+        def job() -> None:
+            try:
+                outcome = (context.run(self._fn, *args, **kwargs), None)
+            except BaseException as exc:  # noqa: BLE001 - raised again in the waiting thread
+                outcome = (None, exc)
+            self._outcome = outcome
+            self._done.set()
+
+        threading.Thread(target=job, name="pyRadPlan-agent", daemon=True).start()
+        self._done.wait()
+        if self._outcome is None:
+            raise ComputeCancelledError("The agent run was detached.")
+        result, exc = self._outcome
+        if exc is not None:
+            raise exc
+        return result
+
+    def _send(self, sink: str, *args: Any) -> None:
+        with self._lock:  # detach() waits for a signal that is being emitted
+            emit = self._sinks.get(sink)
+            if emit is not None:
+                emit(*args)
+
+    def send_event(self, event: str, **data: Any) -> None:
+        """Forward an agent event (the ``PlanningState`` listener)."""
+        self._send("event", event, data)
+
+    def send_report(self, report: object) -> None:
+        """Forward a progress or status report of a computation."""
+        self._send("report", report)
+
+    def detach(self) -> None:
+        """Stop waiting for the call and forward nothing more."""
+        with self._lock:
+            self._sinks.clear()
+        self._done.set()
+
+
 class AgentPanel(WorkspaceWidget):
     """Runs the planning agent and shows what it does.
 
@@ -159,13 +244,17 @@ class AgentPanel(WorkspaceWidget):
         self._thread: Optional[QThread] = None
         self._worker: Optional[Worker] = None
         self._control: Optional[ComputeControl] = None
+        self._call: Optional[_DetachableCall] = None
         self._state: Any = None
+        self._ct: Any = None  # the CT the last run belongs to
         self._result_before: Any = None  # the workspace's active result before the run
+        self._shown_result: Any = None  # the plan of the run that replaced the active result
         self._last_state: Any = None  # PlanningState of the last run, for Load plan
         self._picks: list = []  # PlanRecords of the last run's selected plans
         self._agent_doses: dict = {}  # the picks as workspace results, by result name
         self._summary = ""
-        self._session: Optional[tuple] = None  # (PlanningState, last result) to continue
+        # (PlanningState, last result or the error of a failed run) to continue
+        self._session: Optional[tuple] = None
         self._disabled_reason = ai_disabled_reason()
 
         tools: dict[str, str] = {}
@@ -217,6 +306,7 @@ class AgentPanel(WorkspaceWidget):
         log_lay.setContentsMargins(4, 4, 4, 4)
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
+        self._log.setMaximumBlockCount(_MAX_LOG_LINES)
         self._log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         log_lay.addWidget(self._log)
         log_lay.addWidget(self._build_feedback_box())
@@ -259,19 +349,34 @@ class AgentPanel(WorkspaceWidget):
             return
         from pydantic_ai import DeferredToolRequests  # noqa: PLC0415
 
-        paused = isinstance(self._session[1].output, DeferredToolRequests)
-        self._lbl_feedback.setText(
-            "The agent waits for you. Continue (your text, if any, goes to the agent with "
-            "the next result), Redirect (skip the next step, the agent reads your text) or "
-            "Finish. Goals, budgets and tools of Agentic Plan can be changed now."
-            if paused
-            else "Continue the conversation with a new instruction."
-        )
+        previous = self._session[1]
+        paused = isinstance(getattr(previous, "output", None), DeferredToolRequests)
+        failed = isinstance(previous, BaseException)
+        if paused:
+            text = (
+                "The agent waits for you. Continue (your text, if any, goes to the agent with "
+                "the next result), Redirect (skip the next step, the agent reads your text) or "
+                "Finish. Goals, budgets and tools of Agentic Plan can be changed now."
+            )
+        elif failed:
+            text = (
+                "The run stopped early. Continue resumes it where it stopped, with a new "
+                "request budget (your text, if any, goes to the agent); Finish asks for the "
+                "final report."
+            )
+            if getattr(previous, "limit_exceeded", False):
+                text += (
+                    " A limit was reached: raise Requests or Optimizations in Agentic Plan "
+                    "if the agent needs more."
+                )
+        else:
+            text = "Continue the conversation with a new instruction."
+        self._lbl_feedback.setText(text)
         self._txt_feedback.setPlaceholderText(
-            "Feedback for the agent (optional)" if paused else "Next instruction"
+            "Feedback for the agent (optional)" if paused or failed else "Next instruction"
         )
         self._btn_redirect.setVisible(paused)
-        self._btn_finish.setVisible(paused)
+        self._btn_finish.setVisible(paused or failed)
         self._feedback_box.show()
 
     def _build_workflow_box(self) -> QGroupBox:
@@ -337,8 +442,12 @@ class AgentPanel(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     def _do_update(self, changed_keys: list) -> None:
-        if "ct" in changed_keys:
-            self._summary = ""
+        ct = self._ws.ct
+        # A refresh reports the same CT again; another one is another patient, whose
+        # workspace the plans and the conversation of the last run must not reach
+        if ct is not self._ct and not self.is_busy:
+            self._ct = ct
+            self.clear_run()
         self._update_buttons()
         if not self.is_busy:
             self._lbl_status.setText(self._idle_status())
@@ -411,13 +520,9 @@ class AgentPanel(WorkspaceWidget):
         pop_last_run_usage()  # drop the usage of an earlier run
         ws = self._ws
         self._session = None
-        self._result_before = ws.result
+        self._result_before, self._shown_result = ws.result, None
         state = PlanningState(
-            ct=ws.ct,
-            cst=ws.cst,
-            pln=ws.pln.model_copy(deep=True),
-            protocol=protocol,
-            listener=lambda event, **data: self._event_received.emit(event, data),
+            ct=ws.ct, cst=ws.cst, pln=ws.pln.model_copy(deep=True), protocol=protocol
         )
         self._apply_limits(state)
         task = panel.task
@@ -469,15 +574,17 @@ class AgentPanel(WorkspaceWidget):
             dot.set_state("idle")
         self._set_phase("thinking")
         self.settings_tabs.setCurrentWidget(self.progress_plot)
+        self._call = _DetachableCall(fn, self._event_received.emit, self._report_received.emit)
+        state.listener = self._call.send_event
         self._worker = Worker(
-            fn,
+            self._call,
             state,
             *args,
             model=panel.model,
             request_limit=panel.request_limit,
             compact_after=panel.compact_after,
             tools=panel.tools(),
-            report_cb=self._report_received.emit,
+            report_cb=self._call.send_report,
             control=self._control,
             **kwargs,
         )
@@ -508,8 +615,9 @@ class AgentPanel(WorkspaceWidget):
             return
         state, previous = self._session
         text = self._txt_feedback.toPlainText().strip()
-        paused = isinstance(previous.output, DeferredToolRequests)
-        if not paused and not text:
+        paused = isinstance(getattr(previous, "output", None), DeferredToolRequests)
+        failed = isinstance(previous, BaseException)  # resumes without an instruction
+        if not paused and not failed and not text:
             QMessageBox.warning(self, "Continue", "Enter an instruction for the agent first.")
             return
         try:
@@ -519,7 +627,7 @@ class AgentPanel(WorkspaceWidget):
             return
         if not paused:  # the report's plan tabs and doses are replaced at the next report
             self.run_started.emit()
-            self._result_before = self._ws.result
+            self._result_before, self._shown_result = self._ws.result, None
         self._log_line(f"Planner: {action}" + (f": {_short(text)}" if text else ""), "#2980b9")
         self._txt_feedback.clear()
         self._apply_limits(state)
@@ -574,6 +682,7 @@ class AgentPanel(WorkspaceWidget):
             self.progress_plot.set_plans(self._state.plans)
             self.result_widget.add_plan(plan)
             self._ws.result = plan.result
+            self._shown_result = self._ws.result
         elif event == "pareto":
             self._log_line(f"  {_pareto_line(data['result'])}", "#8e44ad")
         elif event == "review":
@@ -617,7 +726,14 @@ class AgentPanel(WorkspaceWidget):
         state, self._state = self._state, None
         report, status = None, ""
         paused = result is not None and isinstance(result.output, DeferredToolRequests)
-        self._session = (state, result) if result is not None else None
+        usage = pop_last_run_usage()
+        if result is not None:
+            self._session = (state, result)
+        elif _is_resumable(exc):  # it holds the conversation so far: the run can go on
+            self._session = (state, exc)
+            usage = usage or _usage_line(exc.usage)
+        else:
+            self._session = None
         if paused:
             reasons = {m.get("reason") for m in result.output.metadata.values()} - {None}
             status = "Waiting for the planner: " + ", ".join(
@@ -629,7 +745,9 @@ class AgentPanel(WorkspaceWidget):
             status = "Aborted on request."
             self._log_line(status, "#e67e22")
         else:
-            status = f"Agent stopped: {type(exc).__name__}: {exc}"
+            # The error of a run that can go on names its cause itself
+            name = "" if self._session is not None else f"{type(exc).__name__}: "
+            status = f"Agent stopped: {name}{exc}"
             self._log_line(status, "#e74c3c")
 
         picks = select_distinct_plans(state.plans, n=self.agentic_plan_widget.num_plans)
@@ -650,7 +768,7 @@ class AgentPanel(WorkspaceWidget):
             self._summary = "The agent produced no plan"
         unresolved = state.plans[-1].evaluation.get("unresolved_goals", []) if state.plans else []
         self.result_widget.set_report(
-            report, status, unresolved, usage=pop_last_run_usage(), summary=self._summary
+            report, status, unresolved, usage=usage, summary=self._summary
         )
         self._set_busy(False)
         if paused:
@@ -679,7 +797,7 @@ class AgentPanel(WorkspaceWidget):
             doses[name] = p.result
         self._agent_doses = doses
         ws.set_many(results={**results, **doses}, active_result=active)
-        self._result_before = None
+        self._result_before = self._shown_result = None
         self.plans_selected.emit(
             [self._plan_tab(state, p, f"Plan {i}") for i, p in enumerate(picks, start=1)]
         )
@@ -741,7 +859,12 @@ class AgentPanel(WorkspaceWidget):
             self.clear_everything()
 
     def clear_run(self) -> None:
-        """Forget the last run: log, progress, results, its doses and plan tabs."""
+        """Forget the last run: log, progress, results, its doses and plan tabs.
+
+        Of the workspace results, only those the run put there go: its selected plans,
+        and the plan a paused run shows in place of the active result, which is the one
+        before the run again.
+        """
         if self.is_busy:
             return
         from pyRadPlan.ai.agents import pop_last_run_usage  # noqa: PLC0415
@@ -757,9 +880,21 @@ class AgentPanel(WorkspaceWidget):
         for dot in self._phases.values():
             dot.set_state("idle")
         self.run_cleared.emit()
-        for name in self._agent_doses:
-            self._ws.remove_result(name)
-        self._agent_doses = {}
+        doses, self._agent_doses = self._agent_doses, {}
+        before, self._result_before = self._result_before, None
+        shown, self._shown_result = self._shown_result, None
+        ws = self._ws
+        active = ws.active_result
+        current = ws.results
+        results = {n: r for n, r in current.items() if doses.get(n) is not r}
+        if shown is not None and results.get(active) is shown:
+            if before is None:
+                del results[active]
+            else:
+                results[active] = before
+            ws.set_many(results=results, active_result=active)
+        elif len(results) != len(current):
+            ws.set_many(results=results, active_result=active)
         self._lbl_status.setText(self._idle_status())
 
     def clear_everything(self) -> None:
@@ -779,18 +914,24 @@ class AgentPanel(WorkspaceWidget):
             self._ws.clear(["pln", "stf", "dij", "result"])
 
     def _cleanup_thread(self) -> None:
+        if self._call is not None:
+            self._call.detach()  # drops its Qt signals here, not in the daemon thread
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait()
+            self._thread.deleteLater()
         if self._worker is not None:
             self._worker.deleteLater()
-        self._thread = self._worker = self._control = None
+        self._thread = self._worker = self._control = self._call = None
 
     def shutdown(self, timeout_ms: int = 5000) -> None:
-        """Stop a running agent before the window closes.
+        """Stop a running agent before the window closes, within about *timeout_ms*.
 
-        A model request cannot be interrupted, so after *timeout_ms* the thread is
-        terminated; acceptable only because the application is exiting.
+        The agent is asked to stop, which it does after its current step. A model
+        request cannot be interrupted: if the run has not ended after *timeout_ms*, it
+        is detached. Its thread ends, and the request goes on in a daemon thread that
+        reaches neither this panel nor the workspace any more and ends with the request
+        or the interpreter. Acceptable only because the application is exiting.
         """
         if not self.is_busy:
             return
@@ -799,8 +940,9 @@ class AgentPanel(WorkspaceWidget):
         self._worker.error.disconnect()
         self._thread.quit()
         if not self._thread.wait(timeout_ms):
-            self._thread.terminate()
-            self._thread.wait()
+            self._call.detach()
+        self._state = None
+        self._cleanup_thread()
 
     # ------------------------------------------------------------------
     # Log

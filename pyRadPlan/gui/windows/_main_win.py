@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self.plan_widget.setEnabled(not busy)
         self.optimization_widget.setEnabled(not busy)
         self._file_menu.setEnabled(not busy)
+        self._settings_menu.setEnabled(not busy)  # the UI mode rebuilds the left column
         self._agent_tabs.tabBar().setEnabled(not busy)
 
     def _is_busy(self) -> bool:
@@ -240,6 +241,15 @@ class MainWindow(QMainWindow):
         """
         if self._switching_tabs or index < 0 or index == self._current_tab:
             return
+        if self._is_busy():
+            # The disabled tab bar does not stop keyboard navigation (Ctrl+Tab), and the
+            # running computation works on the workspace of the current tab
+            self._switching_tabs = True
+            try:
+                self._agent_tabs.setCurrentIndex(self._current_tab)
+            finally:
+                self._switching_tabs = False
+            return
         ws = self.workspace
         state = {key: getattr(ws, key) for key in ("cst", "pln", "stf", "dij")}
         state.update(results=ws.results, active_result=ws.active_result)
@@ -256,14 +266,21 @@ class MainWindow(QMainWindow):
         self._place_widgets()
 
     def _add_plan_tabs(self, plans: list) -> None:
+        """Add a tab per plan; a plan that has a tab already keeps it, under the new label."""
         for plan in plans:
+            key = plan.get("key")
+            if key is not None and key in self._tab_keys:
+                index = self._tab_keys.index(key)
+                self._agent_tabs.setTabText(index, plan["label"])
+                self._agent_tabs.setTabToolTip(index, plan["tooltip"])
+                continue
             page = QWidget()
             lay = QVBoxLayout(page)
             lay.setContentsMargins(0, 0, 0, 0)
             index = self._agent_tabs.addTab(page, plan["label"])
             self._agent_tabs.setTabToolTip(index, plan["tooltip"])
             self._tab_states.append(plan["state"])
-            self._tab_keys.append(plan.get("key"))
+            self._tab_keys.append(key)
 
     def _show_plan_tab(self, plan: dict) -> None:
         """Switch to the tab of *plan*'s optimization, adding the tab if there is none."""
@@ -315,6 +332,7 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+            self.hide()  # stopping can take a few seconds
             self.workflow_widget.shutdown()
             if self.agent_panel is not None:
                 self.agent_panel.shutdown()

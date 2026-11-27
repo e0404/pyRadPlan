@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 
 from pyRadPlan.gui.workspace import WorkspaceManager
 
-from .._base import WorkspaceWidget
+from .._base import CompactComboBox, WorkspaceWidget
+from ..ai import AI_MISSING_TIP, ai_available
 
 #: Tools the agent cannot plan without; always enabled.
 REQUIRED_TOOLS = ("set_objectives", "optimize")
@@ -90,6 +91,7 @@ class AgenticPlanWidget(WorkspaceWidget):
         super().__init__(workspace, parent)
         # Dose convention the goal values are in; they follow the plan's when it changes
         self._goal_convention: Optional[str] = None
+        self._ai_available = ai_available()
         self._setup_ui(tools or {}, models or [])
         self.initialize()
 
@@ -259,17 +261,22 @@ class AgenticPlanWidget(WorkspaceWidget):
         self._btn_export.clicked.connect(lambda _checked=False: self.export_goals())
         for w in (btn_add, btn_remove, self._btn_load, self._btn_import, self._btn_export):
             row.addWidget(w)
+            if not self._ai_available:  # goals are models of the planning agent
+                w.setEnabled(False)
+                w.setToolTip(AI_MISSING_TIP)
         row.addStretch()
         lay.addLayout(row)
         return box
 
     def _build_table_menu(self) -> QMenu:
+        menu = QMenu(self)
+        if not self._ai_available:
+            return menu
         from pyRadPlan.ai.agents import (  # noqa: PLC0415
             available_constraint_tables,
             load_constraint_table,
         )
 
-        menu = QMenu(self)
         for table_id, name in available_constraint_tables().items():
             sub = menu.addMenu(name)
             for site in load_constraint_table(table_id).sites:
@@ -320,7 +327,7 @@ class AgenticPlanWidget(WorkspaceWidget):
         structure.setData(Qt.ItemDataRole.UserRole, source)
         tbl.setItem(row, _STRUCTURE, structure)
         tbl.setItem(row, _METRIC, QTableWidgetItem(metric))
-        cmb_op = QComboBox()
+        cmb_op = CompactComboBox(2)
         cmb_op.addItems(["<=", ">="])
         cmb_op.setCurrentText(op)
         tbl.setCellWidget(row, _OP, cmb_op)
@@ -429,15 +436,14 @@ class AgenticPlanWidget(WorkspaceWidget):
     def _follow_dose_convention(self, pln: Any) -> None:
         """Convert the goal doses when the plan's dose convention changed.
 
-        Converted with the plan's number of fractions, as :func:`load_goals` does; a
-        change of the number of fractions alone keeps the values. Invalid rows stay as
-        they are.
+        Converted with the plan's number of fractions; a change of the number of
+        fractions alone keeps the values. Invalid rows stay as they are.
         """
+        before, self._goal_convention = self._goal_convention, pln.dose_convention
+        if before is None or before == pln.dose_convention or not self._tbl_goals.rowCount():
+            return
         from pyRadPlan.ai.agents._planning._constraints import _scale_goal  # noqa: PLC0415
 
-        before, self._goal_convention = self._goal_convention, pln.dose_convention
-        if before is None or before == pln.dose_convention:
-            return
         factor = (
             1.0 / pln.num_of_fractions
             if pln.dose_convention == "per_fraction"

@@ -885,11 +885,11 @@ def test_agentic_plan_goals_import_export(qapp, tmp_path, monkeypatch):
     assert widget.goals() == goals and not shown
 
     ws.set_many(pln=PhotonPlan(num_of_fractions=19, dose_convention="per_fraction"))
-    widget.import_goals(str(path))
-    assert widget.goals()[0].value == 3.0 and "20 fractions" in shown.pop()
+    widget.import_goals(str(path))  # converted with the file's 20 fractions
+    assert widget.goals()[0].value == 2.85 and "20 fractions" in shown.pop()
     path.write_text("not json")
     widget.import_goals(str(path))
-    assert "Cannot read" in shown.pop() and widget.goals()[0].value == 3.0
+    assert "Cannot read" in shown.pop() and widget.goals()[0].value == 2.85
 
 
 def test_agentic_plan_goals_follow_the_dose_convention(qapp, monkeypatch):
@@ -983,3 +983,148 @@ def test_agent_pause_and_continue(qapp, agentic, test_data_photons, monkeypatch)
 
     panel.clear_run()
     assert panel._session is None and panel._feedback_box.isHidden()
+
+
+def _plan_tab(key, label, ws, dose):
+    state = {
+        "cst": ws.cst,
+        "pln": ws.pln,
+        "stf": None,
+        "dij": None,
+        "results": {"current": {"physical_dose": dose}},
+        "active_result": "current",
+    }
+    return {"key": key, "label": label, "tooltip": f"tip {label}", "state": state}
+
+
+def test_busy_locks_the_settings_menu_and_the_plan_tabs(
+    qapp, agentic, test_data_photons, monkeypatch
+):
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    win._add_plan_tabs([_plan_tab(1, "Opt 1", ws, result["physicalDose"])])
+    pln = ws.pln
+
+    workflow = type(win.workflow_widget)
+    monkeypatch.setattr(workflow, "is_busy", property(lambda self: True))
+    win._on_busy_changed(True)
+    # the UI mode of the settings dialog would rebuild the left column mid-run
+    assert not win._settings_menu.isEnabled() and not win._file_menu.isEnabled()
+    win._agent_tabs.setCurrentIndex(1)  # as Ctrl+Tab does despite the disabled tab bar
+    assert win._agent_tabs.currentIndex() == 0 and win._current_tab == 0
+    assert ws.pln is pln and not ws.results and win._tab_states[1] is not None
+
+    monkeypatch.setattr(workflow, "is_busy", property(lambda self: False))
+    win._on_busy_changed(False)
+    assert win._settings_menu.isEnabled()
+    win._agent_tabs.setCurrentIndex(1)
+    assert win._current_tab == 1 and list(ws.results) == ["current"]
+
+
+def test_published_plan_reuses_the_tab_loaded_during_a_pause(qapp, agentic, test_data_photons):
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    dose = result["physicalDose"]
+    win._show_plan_tab(_plan_tab(3, "Opt 3", ws, dose))
+    win._agent_tabs.setCurrentIndex(0)
+
+    win._add_plan_tabs([_plan_tab(3, "Plan 1", ws, dose), _plan_tab(5, "Plan 2", ws, dose)])
+
+    tabs = win._agent_tabs
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Agent", "Plan 1", "Plan 2"]
+    assert tabs.tabToolTip(1) == "tip Plan 1" and win._tab_keys == [None, 3, 5]
+    assert len(win._tab_states) == 3
+
+
+def test_another_patient_drops_the_run_and_its_plan_tabs(qapp, agentic, test_data_photons):
+    from types import SimpleNamespace
+
+    from pyRadPlan.ai.agents import PlanningReport
+
+    ct, cst, result = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    panel = win.agent_panel
+    plans = [_agent_plan(1, cst, result["physicalDose"])]
+    panel._state = SimpleNamespace(plans=plans, pln=ws.pln, num_optimizations=1)
+    panel._on_agent_event("plan", {"plan": plans[0]})
+    report = PlanningReport(all_hard_goals_met=True, summary="Done.")
+    panel._on_run_done(SimpleNamespace(output=report), None)
+    win._agent_tabs.setCurrentIndex(1)  # the plan tab of the old patient is open
+    assert win._agent_tabs.count() == 2 and panel._session is not None
+
+    ws.set_many(ct=ct.model_copy(), cst=cst, stf=None, dij=None, result=None)
+
+    assert win._agent_tabs.count() == 1 and win._tab_states == [None]
+    assert panel._session is None and panel._last_state is None and not panel._picks
+    assert panel.result_widget.table.rowCount() == 0 and panel._feedback_box.isHidden()
+    assert not ws.results
+    panel._on_load_requested(1)  # nothing of the old patient can be loaded
+    assert win._agent_tabs.count() == 1
+
+
+def test_agentic_mode_without_pydantic_ai(qapp, monkeypatch, test_data_photons):
+    import sys
+
+    from pyRadPlan._settings import get_settings
+    from pyRadPlan.gui.widgets.ai import AI_MISSING_TIP
+
+    monkeypatch.setitem(sys.modules, "pydantic_ai", None)
+    monkeypatch.setattr(get_settings().gui, "ui_mode", "agentic")
+    ct, cst, _ = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    panel = win.agent_panel
+    failures = []
+    panel.update_failed.connect(failures.append)
+    panel.agentic_plan_widget.update_failed.connect(failures.append)
+    ws.set_many(ct=ct, cst=cst)
+
+    assert win._agent_tabs.tabText(0) == "Agent" and not failures
+    assert not panel._btn_run.isEnabled() and panel._btn_run.toolTip() == AI_MISSING_TIP
+    assert not panel.agentic_plan_widget._btn_load.isEnabled()
+    panel.clear_run()
+    assert not failures
+
+
+def test_closing_during_an_agent_run_stops_it(qapp, agentic, test_data_photons, monkeypatch):
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QMessageBox
+
+    import pyRadPlan.ai.agents as agents
+
+    ct, cst, _ = test_data_photons
+    ws = WorkspaceManager()
+    win = MainWindow(ws)
+    ws.set_many(ct=ct, cst=cst)
+    panel = win.agent_panel
+    panel.agentic_plan_widget._cmb_model.setEditText("test")
+    release = threading.Event()
+    entered = threading.Event()
+
+    def blocked(state, task, **kwargs):
+        entered.set()
+        release.wait(30)
+
+    monkeypatch.setattr(agents, "run_planning_agent", blocked)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    shutdown = type(panel).shutdown
+    monkeypatch.setattr(type(panel), "shutdown", lambda self: shutdown(self, timeout_ms=200))
+    panel.run_agent()
+    assert entered.wait(10) and not win._settings_menu.isEnabled()
+    try:
+        start = time.monotonic()
+        assert win.close()
+        assert time.monotonic() - start < 5.0 and not panel.is_busy
+    finally:
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == "pyRadPlan-agent":
+                thread.join(10)
