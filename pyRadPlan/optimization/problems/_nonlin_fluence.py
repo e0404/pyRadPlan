@@ -1,4 +1,4 @@
-from typing import Union, cast
+from typing import Literal, Union
 import logging
 
 import numpy as np
@@ -11,7 +11,8 @@ from ...core.xp_utils.typing import Array
 from ...plan import Plan
 from ._optiprob import NonLinearPlanningProblem
 from ..solvers import NonLinearOptimizer
-from ..objectives import Objective
+from ..robustness import RobustnessOptions, RobustTerm
+from ..robustness._utils import scenario_value
 from ...core import xp_utils
 
 logger = logging.getLogger(__name__)
@@ -32,13 +33,20 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         Whether to bypass the objective jacobian calculation. This is useful for scalarized
         optimization (e.g. weighted sum of objectives) as it will minimize storage to only a single
         gradient vector per quantity.
+    max_approximation : {"logsumexp", "pnorm", "none"}, default="logsumexp"
+        Smooth approximation of the maximum over scenarios used by the worst-case robustness
+        operators (``"none"``: exact maximum).
+    p_norm : float, default=30.0
+        Exponent of the ``"pnorm"`` maximum approximation.
     """
 
-    name = "Non-Linear Fluence Planning Problem"
+    name = "Fluence (nonlinear)"
     short_name = "nonlin_fluence"
     records_obj_history = True
 
     bypass_objective_jacobian: bool = True
+    max_approximation: Literal["logsumexp", "pnorm", "none"] = "logsumexp"
+    p_norm: float = 30.0
 
     def __init__(self, pln: Union[Plan, dict] = None):
         self._target_voxels = None
@@ -46,6 +54,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._grad_cache_intermediate = None
         self._grad_cache = None
+        self._voxel_indices = {}
         self._obj_times = []
         self._deriv_times = []
         self._solve_time = None
@@ -56,6 +65,11 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         """Initialize this problem."""
         super()._initialize()
 
+        # Their shapes follow the terms' scenarios and quantities, which can change between runs
+        self._grad_cache_intermediate = None
+        self._grad_cache = None
+        self._voxel_indices = {}
+
         # Check if the solver is adequate to solve this problem
         # TODO: check that it can do constraints
         if not isinstance(self.solver, NonLinearOptimizer):
@@ -64,9 +78,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 f"but solver '{getattr(self.solver, 'short_name', self.solver)}' is not one."
             )
 
-        # Propagate device from quantities to solver and problem
         self._device = getattr(self._quantities[0], "device", None)
-        self.solver.device = self._device
 
         # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
         # quantities using them; computing them here would cost an extra matrix product.
@@ -75,40 +87,64 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             for key, q in self._quantities_by_key.items()
             if self._objectives_per_quantity[key]
         }
+        # Position of each flat scenario index in a quantity's cotangent blocks.
+        self._scenario_positions = {
+            key: {int(s): pos for pos, s in enumerate(q.scenarios)}
+            for key, q in self._objective_quantities.items()
+        }
 
         self.solver.objective = self._objective_function
         self.solver.gradient = self._objective_gradient
         self.solver.bounds = (0.0, float("inf"))
 
+    def _robustness_options(self) -> RobustnessOptions:
+        return RobustnessOptions(max_approximation=self.max_approximation, p_norm=self.p_norm)
+
+    def _mask_indices(self, xp, mask: NDArray) -> Array:
+        """
+        Device indices of a mask's voxels, converted once per solve.
+
+        The entry keeps the mask alive, so its ``id`` cannot be recycled by another mask.
+        """
+        entry = self._voxel_indices.get(id(mask))
+        if entry is None:
+            indices = xp_utils.from_numpy(xp, np.flatnonzero(mask), device=self._device)
+            entry = self._voxel_indices[id(mask)] = (mask, indices)
+        return entry[1]
+
+    def _term_values(self, xp, q_vectors: dict, term: RobustTerm) -> tuple[list, list]:
+        """
+        Device voxel indices of the term's items per scenario and the items' values.
+
+        The values are stacked over the term's scenarios, or a list per scenario if the
+        contours differ between them.
+        """
+        indices = []
+        values = []
+        for item, item_masks in zip(term.items, term.scenario_masks):
+            item_ix = [self._mask_indices(xp, m) for m in item_masks]
+            scenario_values = [
+                xp.take(q_vectors[item.quantity].flat[s], ix, axis=0)
+                for s, ix in zip(term.scenario_indices, item_ix)
+            ]
+            indices.append(item_ix)
+            shared = len({id(m) for m in item_masks}) == 1
+            values.append(xp.stack(scenario_values) if shared else scenario_values)
+        return indices, values
+
     def _objective_functions(self, x: Array) -> Array:
-        """Define the objective functions."""
+        """Define the objective functions: one value per robust term."""
 
         xp = array_api_compat.array_namespace(x)
 
-        q_vectors = {}
-        q_scenarios = {}
-
-        # Check & get Caches
-        for key, q in self._objective_quantities.items():
-            q_vectors[key] = q(x)
-            q_scenarios[key] = q.scenarios
-
-        # Loop over all objectives
+        q_vectors = {key: q(x) for key, q in self._objective_quantities.items()}
 
         f_vals = xp.zeros(self._num_objectives, dtype=x.dtype, device=self._device)
 
-        obj_ix = 0
-        for obj_info in self._objective_list:
-            ix = xp_utils.from_numpy(xp, obj_info[0], device=self._device)
-            tmp_obj_list = cast(list[Objective], obj_info[1])
-            for obj in tmp_obj_list:
-                key = self._objective_keys[obj_ix]
-                f_tmp_scen = [
-                    obj.priority * obj.compute_objective(q_vectors[key].flat[scen_ix][ix])
-                    for scen_ix in q_scenarios[key]
-                ]
-                f_vals[obj_ix] = xp.sum(xp.stack(f_tmp_scen))
-                obj_ix += 1
+        for term_ix, term in enumerate(self._terms):
+            _, values = self._term_values(xp, q_vectors, term)
+            value = xp.asarray(term.operator.evaluate(term.entries, values))
+            f_vals = xp_utils.scatter(f_vals, term_ix, xp.astype(value, f_vals.dtype))
 
         return f_vals
 
@@ -135,8 +171,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         xp = self._array_backend
 
-        # Check & get Caches
-        for key in self._objective_quantities:
+        # One cotangent block per scenario the quantity evaluates, so that each scenario's
+        # objective gradient is back-projected through its own influence matrix.
+        for key, q in self._objective_quantities.items():
             if initialize_cache:
                 if self.bypass_objective_jacobian:
                     cache_rows = 1
@@ -145,6 +182,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
                 self._grad_cache_intermediate[key] = xp.zeros(
                     (
+                        len(q.scenarios),
                         cache_rows,
                         self._dij.dose_grid.num_voxels,
                     ),
@@ -153,7 +191,9 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 )
             else:
                 # The trailing ellipsis here is needed for array_api compatibility
-                self._grad_cache_intermediate[key][:, ...] = 0.0
+                self._grad_cache_intermediate[key] = xp_utils.scatter(
+                    self._grad_cache_intermediate[key], (slice(None), ...), 0.0
+                )
 
     def _update_objective_grad_cache(self, x: Array, num_objectives: int, q_scenarios: dict):
         """Update the objective gradient / jacobian cache by computing the chain rule."""
@@ -173,7 +213,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 device=self._device,
             )
         else:
-            self._grad_cache[:, ...] = 0.0
+            self._grad_cache = xp_utils.scatter(self._grad_cache, (slice(None), ...), 0.0)
 
         for key, q in self._objective_quantities.items():
             if self.bypass_objective_jacobian:
@@ -181,13 +221,22 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
             else:
                 cache_ix = self._objectives_per_quantity[key]
 
-            for scen_ix in q_scenarios[key]:
-                derivative = q.compute_chain_derivative(
-                    self._grad_cache_intermediate[key], x
-                ).flat[scen_ix]
+            cotangents = np.empty_like(q._q_cache)
+            for pos, scen_ix in enumerate(q_scenarios[key]):
+                cotangents.flat[scen_ix] = self._grad_cache_intermediate[key][pos, ...]
+            # Derived scenarios are folded onto their basis slots by the quantity, so the
+            # non-empty slots sum to the full derivative.
+            derivatives = q.compute_chain_derivative(cotangents, x)
+            for derivative in derivatives.flat:
+                if derivative is None:
+                    continue
                 # Row by row, as the Array API has no integer-array (scatter) indexing.
                 for row, obj_ix in enumerate(cache_ix):
-                    self._grad_cache[obj_ix, :] += derivative[row, :]
+                    self._grad_cache = xp_utils.scatter(
+                        self._grad_cache,
+                        (obj_ix, slice(None)),
+                        self._grad_cache[obj_ix, :] + derivative[row, :],
+                    )
 
     def _objective_jacobian(self, x: Array) -> Array:
         """Define the objective jacobian."""
@@ -199,25 +248,32 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         q_vectors = {key: q(x) for key, q in self._objective_quantities.items()}
         q_scenarios = {key: q.scenarios for key, q in self._objective_quantities.items()}
 
-        cnt = 0
-        for obj_info in self._objective_list:
-            ix = xp_utils.from_numpy(xp, obj_info[0], device=self._device)
-            tmp_obj_list = cast(list[Objective], obj_info[1])
-            for obj in tmp_obj_list:
-                if self.bypass_objective_jacobian:
-                    q_cache_index = 0
-                else:
-                    q_cache_index = self._q_cache_index[cnt]
-                key = self._objective_keys[cnt]
-                for scen_ix in q_scenarios[key]:
-                    self._grad_cache_intermediate[key][q_cache_index, ...][ix] += xp.astype(
-                        obj.priority * obj.compute_gradient(q_vectors[key].flat[scen_ix][ix]),
-                        self._grad_cache_intermediate[key][q_cache_index, ...][ix].dtype,
-                        copy=False,
-                    )
-                cnt += 1
+        for term_ix, term in enumerate(self._terms):
+            indices, values = self._term_values(xp, q_vectors, term)
+            grads = term.operator.gradient(term.entries, values)
+            for item, item_ix, item_grad in zip(term.items, indices, grads):
+                row = (
+                    0
+                    if self.bypass_objective_jacobian
+                    else self._q_cache_index[term_ix][item.quantity]
+                )
+                positions = self._scenario_positions[item.quantity]
+                cache = self._grad_cache_intermediate[item.quantity]
+                for k, scen_ix in enumerate(term.scenario_indices):
+                    pos = positions[scen_ix]
+                    ix = item_ix[k]
+                    grad = xp.astype(scenario_value(item_grad, k), cache.dtype, copy=False)
+                    # A view on mutable backends, so the scatter below writes through to cache;
+                    # where it cannot (JAX, out-of-place fallback) the block is written back.
+                    block = cache[pos, row, ...]
+                    updated = xp_utils.scatter(block, ix, xp.take(block, ix, axis=0) + grad)
+                    if updated is not block:
+                        cache = xp_utils.scatter(cache, (pos, row, ...), updated)
+                self._grad_cache_intermediate[item.quantity] = cache
 
-        self._update_objective_grad_cache(x, num_objectives=cnt, q_scenarios=q_scenarios)
+        self._update_objective_grad_cache(
+            x, num_objectives=self._num_objectives, q_scenarios=q_scenarios
+        )
 
         return self._grad_cache
 

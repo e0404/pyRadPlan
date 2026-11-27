@@ -12,7 +12,8 @@ install pyRadPlan.
 | Path | Purpose |
 |---|---|
 | `pyproject.toml` | The Briefcase project (app metadata, requirements, per-platform settings). Separate from the repository's root `pyproject.toml`, which describes the library. |
-| `src/pyradplan_app/` | The app package Briefcase launches. It only calls `pyRadPlan.gui.main()`; the icons live in `resources/`. |
+| `src/pyradplan_app/` | The app package Briefcase launches. It adds the app's `data/` folder to the shared base data folders and calls `pyRadPlan.gui.main()`; the icons live in `resources/`. |
+| `scripts/fetch_matrad_phantoms.py` | Downloads the phantoms of matRad into `src/pyradplan_app/data/` (git-ignored), see below. Also used by the container image. |
 | `tests/pyradplan_app/__main__.py` | Smoke test that runs inside the built bundle (`briefcase run --test`). |
 | `scripts/sync_version.py` | Copies the version from the root `pyproject.toml` into the Briefcase project, and the root `CHANGELOG.md` next to it (git-ignored; Briefcase needs a changelog there for the Linux package). |
 | `scripts/collect_licenses.py` | Writes the third-party license notices into the bundle. |
@@ -35,12 +36,13 @@ test keeps them equal). The requirements are installed into the bundle's
 ## Building locally
 
 Briefcase picks the Python support package matching the interpreter that runs it; CI uses
-Python 3.12. Install it with `pip install briefcase` (CI pins `briefcase==0.4.5`) and run
+Python 3.12. Install it with `pip install briefcase` (CI pins `briefcase==0.4.7`) and run
 everything from this directory:
 
 ```bash
 cd packaging/briefcase
 python scripts/sync_version.py            # or --check
+python scripts/fetch_matrad_phantoms.py src/pyradplan_app/data   # optional, ~160 MB
 briefcase create <platform> <format>      # scaffold + install requirements
 briefcase build <platform> <format>
 briefcase run <platform> <format> --test  # smoke test inside the bundle
@@ -61,7 +63,9 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
 `<platform> <format>` is one of:
 
 - **Windows:** `windows app`, run on Windows. Produces `dist/pyRadPlan-<version>.msi`, a
-  per-user installer (`system_installer = false`, no admin rights). Briefcase downloads the WiX
+  per-user installer (`system_installer = false`, no admin rights) that creates a Start menu
+  entry, offers a desktop shortcut (`create_desktop_shortcut`) and launches the app from its
+  final page (`installer_completion_launch_app`). Briefcase downloads the WiX
   toolset on first use. Without `--identity` the MSI is unsigned (Briefcase prints a warning).
 - **macOS:** `macOS app`, run on macOS. Produces `dist/pyRadPlan-<version>.dmg` for the
   architecture of the build machine (`universal_build = false`), so Apple silicon and Intel
@@ -69,7 +73,8 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
   name. `--adhoc-sign` is required for an unsigned build and skips notarization. Several
   dependencies have no Intel Mac wheels in their latest releases, so the Intel app bundles
   older ones. The GUI dependencies follow the root project's `gui` extra on both
-  architectures.
+  architectures. The app needs macOS 14 or later (`min_os_version`), which makes Briefcase
+  bundle the NumPy and SciPy wheels linked against Apple's Accelerate instead of OpenBLAS.
 - **Linux:** `linux system`, run on the target distribution. Produces
   `dist/pyradplan-app_<version>-1~<distro>-<codename>_<arch>.deb` (or an RPM/pkg on other
   families). Briefcase must run under the distribution's `/usr/bin/python3` (a venv created
@@ -80,11 +85,26 @@ own console and aborts the smoke test with a `UnicodeEncodeError` on a cp1252 co
 
 The packages are only built for the platform they are built on; there is no cross-compilation.
 
+### Phantoms of matRad
+
+Besides pyRadPlan's TG119, the app ships the phantoms of matRad: the patient cases of the
+[CORT dataset](https://doi.org/10.1186/2047-217X-3-37) (`HEAD_AND_NECK`, `LIVER`,
+`PROSTATE`), with the CT images downsampled by matRad, and `BOXPHANTOM`, about 160 MB together.
+They are not part of this repository: `scripts/fetch_matrad_phantoms.py` downloads them from
+the matRad release pinned in the script and checks them against its SHA-256 hashes, into
+`src/pyradplan_app/data/phantoms` with matRad's license and a README on the origin of the data
+next to them. Briefcase copies the folder into the bundle with the app's sources, and the app
+searches it after the shared base data folders the user configured
+(`PYRADPLAN_BASE_DATA_PATH`), so the phantoms are listed under File → Open Example Phantom.
+Without the download the app builds and runs as before, with TG119 only. For a newer matRad
+release, change `MATRAD_RELEASE` and the hashes in the script.
+
 ### Smoke test
 
 `briefcase run <platform> <format> --test` starts `tests/pyradplan_app/__main__.py` inside the
 bundle instead of the GUI. It imports pyRadPlan, loads the bundled TG119 phantom, runs a small
-photon dose calculation and optimization and builds the main window offscreen
+photon dose calculation and optimization, loads the `HEAD_AND_NECK` phantom of matRad if the
+bundle has the phantoms and builds the main window offscreen
 (`QT_QPA_PLATFORM=offscreen` is the default in the test). The result is reported through the
 `>>>>>>>>>> EXIT <code> <<<<<<<<<<` line Briefcase looks for, so no test framework is bundled.
 Test mode copies `tests/` into the bundle; a following `briefcase build ... --update`
@@ -123,11 +143,11 @@ shipped in the bundle.
 
 ## CI: building the installers
 
-The installers are built on GitHub (all three platforms) and on the internal GitLab (the Linux
-package only). Both build on `main`, on the release candidate branches `rc/*`, on `devops/*`
-branches (for trying out changes to the pipelines) and for `v*` tags;
-GitHub also builds pull requests into `main`, so the release PR from `rc/X.Y.Z` shows a broken
-installer before the release.
+The installers are built on GitHub, for all three platforms, on `main`, on the release candidate
+branches `rc/*`, on `devops/*` branches (for trying out changes to the pipelines), for `v*` tags
+and for pull requests into `main`, so the release PR from `rc/X.Y.Z` shows a broken installer
+before the release. The internal GitLab only builds the Linux package, for branches that do not
+reach GitHub.
 
 ### GitHub: the "Desktop installers" workflow
 
@@ -159,14 +179,12 @@ On failure the Briefcase logs (`packaging/briefcase/logs/`) are uploaded as
 ### GitLab: the `installer-linux` job
 
 The job `installer-linux` of `.gitlab-ci.yml` (stage `package`, so it runs once the tests pass)
-builds the Linux `.deb` in an `ubuntu:24.04` container with the same Briefcase steps, for
-`main`, `rc/*` and `devops/*` branches and tags. The runners are Docker runners, so the Windows MSI and the
-macOS DMG are only built on GitHub. The package is not kept as a job artifact (the runners
-limit their size and the `.deb` is almost 300 MB): the job only shows that the installer
-builds, and keeps the Briefcase logs for a week when it fails. A merge request from `rc/X.Y.Z` into `main` shows the pipeline of its source
-branch, which includes this job; the job has no `merge_request_event` rule on purpose, as
-that would create a second, installer-only pipeline which GitLab then reports as the merge
-request's pipeline in place of the one that runs the tests.
+builds the Linux `.deb` in a `debian:trixie` container (for its system Python 3.13) with the
+same Briefcase steps, for `devops/*` branches, and when started by hand on `internal/*` branches.
+The runners are Docker runners, so the Windows MSI and the macOS DMG are only built on GitHub.
+The package is not kept as a job artifact (the runners limit their size and the `.deb` is almost
+300 MB): the job only shows that the installer builds, and keeps the Briefcase logs for a week
+when it fails.
 
 ## Code signing (not yet done)
 
@@ -177,7 +195,7 @@ corresponding warnings when installing.
   from a CA, or Azure Trusted Signing). Briefcase signs with `signtool` from the Windows SDK:
   `briefcase package windows app --identity <SHA-1 thumbprint of the certificate>`, optionally
   with `--cert-store`, `--use-local-machine-stores`, `--file-digest` and `--timestamp-url`
-  (Briefcase 0.4.5 has no `pyproject.toml` key for the identity; it is a command line option). Unsigned MSIs trigger a Microsoft Defender SmartScreen warning; even signed
+  (Briefcase has no `pyproject.toml` key for the identity; it is a command line option). Unsigned MSIs trigger a Microsoft Defender SmartScreen warning; even signed
   ones do until the certificate has built up reputation (EV certificates are trusted at
   once).
 - **macOS:** a "Developer ID Application" certificate from an Apple Developer account,

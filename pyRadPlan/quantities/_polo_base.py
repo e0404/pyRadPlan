@@ -76,6 +76,8 @@ class POLOBase(FluenceDependentQuantity):
     """
 
     required_dependencies = ("physical_dose", "let_dose")
+    # A probability for the whole course: it does not scale with the number of fractions.
+    fraction_exponent = 0.0
 
     # Logistic regression coefficients of the POLO model, from Bahn et al. ([1], Table 2) and
     # restated as Equation 1 in Ortkamp et al. ([2]).
@@ -226,7 +228,7 @@ class POLOBase(FluenceDependentQuantity):
         Course dose for one scenario, in the quantity's namespace and dtype.
 
         *fluence* is passed in rather than read from a cache: the forward pass must evaluate
-        at ``self._w_cache`` and the chain derivative at ``self._w_grad_cache``, and those are
+        at ``self._w_cache`` and the chain derivative at ``self._grad_fluence``, and those are
         not guaranteed to hold the same vector.
         """
         return self.num_of_fractions * self.array_backend.asarray(

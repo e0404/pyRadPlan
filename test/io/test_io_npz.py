@@ -117,7 +117,7 @@ def test_npz_roundtrip_preserves_apply_overlap(tmp_path):
     reloaded = {v.name: v.apply_overlap for v in cst2.vois}
     assert reloaded[cst.vois[0].name] is None
     assert reloaded[cst.vois[1].name] is False
-    assert reloaded[cst.vois[2].name] is True
+    assert reloaded[cst.vois[2].name] == "auto"
 
     kept = next(v for v in cst2.vois if v.apply_overlap is None)
     before = set(cst.vois[0].indices_numpy.tolist())

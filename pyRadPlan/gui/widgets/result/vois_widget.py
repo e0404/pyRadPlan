@@ -33,12 +33,37 @@ from PySide6.QtWidgets import (
 )
 
 from pyRadPlan.biology.models import TissueComparison, apply_provenance_fixes
-from pyRadPlan.cst import VOI, create_voi
+from pyRadPlan.cst import VOI, recreate_voi
 from pyRadPlan.biology.tissues import TissueProperties
 
 from .._tissue_params import (
+    apply_derived_reference,
+    ask_tissue_issues,
+    ask_unapplied_pick,
+    combo_value,
+    current_pick,
+    fill_tissue_picker,
+    make_derive_button,
+    make_param_combo,
+    make_param_spin,
+    make_reference_radiation_combo,
+    param_source,
+    reference_radiation_value,
+    reference_source_of,
+    select_pick,
+    set_base_tooltip,
+    set_editor_mismatch,
+    show_comparison,
+    spin_value,
+    write_tissue,
+)
+from pyRadPlan.biology._editing import (
     APPLY_ANYWAY,
+    APPLY_PICK,
     DERIVE_REFERENCE_TOOLTIP,
+    KEEP_EDITING,
+    TissuePick,
+    current_pick_position,
     MATCH_BASE_DATA_TEXT,
     MODEL_GROUP_TITLE,
     REFERENCE_GROUP_TITLE,
@@ -49,42 +74,26 @@ from .._tissue_params import (
     TISSUE_MODELS,
     adopt_preset,
     apply_base_data_class,
-    apply_derived_reference,
-    ask_tissue_issues,
     available_tissue_classes,
     bio_model_quietly,
     build_tissue_properties,
     cell_line_presets,
-    combo_value,
     compare_tissues_quietly,
     comparison_row_note,
-    current_pick,
     derives_reference_params,
-    fill_tissue_picker,
     machine_summary,
-    make_derive_button,
-    make_param_combo,
-    make_param_spin,
-    make_reference_radiation_combo,
     model_label_name,
     model_param_fields,
     param_field,
     param_label,
-    param_source,
     picker_title,
     ranked_tissue_picks,
     reference_group_note,
     reference_param_fields,
     reference_radiation_fields,
-    reference_radiation_value,
-    reference_source_of,
     reference_sources,
     relabel_issues,
     relabel_text,
-    set_base_tooltip,
-    set_editor_mismatch,
-    show_comparison,
-    spin_value,
     target_provenance,
     tissue_choice_fields,
     tissue_class,
@@ -93,7 +102,6 @@ from .._tissue_params import (
     tissue_issue_text,
     tissue_issues_quietly,
     tissue_model_label,
-    write_tissue,
 )
 from ._labels import TruncatedCheckBox
 
@@ -116,7 +124,7 @@ _TISSUE_COMBO_TOOLTIP = "RBE model whose tissue parameters are edited below"
 COMPARISON_DELAY_MS = 150
 
 _GROUPBOX_STYLE = (
-    "QGroupBox { font-size: 10pt; font-weight: 600; margin-top: 6px; "
+    "QGroupBox { font-weight: 600; margin-top: 6px; "
     "border: 1px solid palette(mid); border-radius: 4px; padding: 4px 6px 4px 6px; }"
     "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
 )
@@ -164,7 +172,7 @@ def _picker_row(*widgets: QWidget, stretch: int = 0) -> QWidget:
 class VOIMetadataDialog(QDialog):
     """Small popup to edit the basic metadata of a single VOI.
 
-    On accept the VOI is recreated from the edited values through ``create_voi``, so
+    On accept the VOI is recreated from the edited values through ``recreate_voi``, so
     everything is validated together, and the result is exposed via
     :attr:`updated_voi` (the input VOI is left untouched). Both the VOI type and the
     tissue model are bound to a model class, hence the recreation.
@@ -231,17 +239,7 @@ class VOIMetadataDialog(QDialog):
         self.tissue_combo.setCurrentText(tissue_model_label(voi.tissue_properties))
         form.addRow("Tissue model:", self.tissue_combo)
 
-        self._target_provenance = target_provenance(machine, self._bio_model, engine)
-        self._presets = cell_line_presets()
-        self._machine_tissues = available_tissue_classes(machine, self._bio_model, engine)
-        self._picks = ranked_tissue_picks(
-            self._machine_tissues, self._presets, self._target_provenance
-        )
-        self.preset_combo: QComboBox | None = None
-        if self._picks:
-            form.addRow(
-                "Tissue:", self._build_picker(picker_title(machine, self._bio_model, engine))
-            )
+        self._add_picker_row(form, machine, engine)
 
         # Tissue the cell line and model name of the edited properties are taken from,
         # replaced by a preset or tissue class when one is applied.
@@ -318,6 +316,7 @@ class VOIMetadataDialog(QDialog):
         form.addRow(buttons)
 
         self.refresh_comparison()
+        self._sync_picker()
 
     @property
     def alpha_spin(self) -> QDoubleSpinBox:
@@ -328,6 +327,24 @@ class VOIMetadataDialog(QDialog):
     def beta_spin(self) -> QDoubleSpinBox:
         """Spin box for ``beta_x``, present for every tissue model."""
         return self._tissue_spins["beta_x"]
+
+    def _add_picker_row(self, form: QFormLayout, machine: object, engine: object) -> None:
+        """Add the tissue picker if the base data and the presets offer picks."""
+        self._target_provenance = target_provenance(machine, self._bio_model, engine)
+        self._presets = cell_line_presets()
+        self._machine_tissues = available_tissue_classes(machine, self._bio_model, engine)
+        self._picks = ranked_tissue_picks(
+            self._machine_tissues, self._presets, self._target_provenance
+        )
+        self.preset_combo: QComboBox | None = None
+        # Position (in _picks) of the pick the tissue was last known to correspond to: the one
+        # preselected on opening or last applied, None for none. A different selection of the
+        # picker is one not applied yet.
+        self._applied_pick: int | None = None
+        if self._picks:
+            form.addRow(
+                "Tissue:", self._build_picker(picker_title(machine, self._bio_model, engine))
+            )
 
     def _build_picker(self, title: str) -> QWidget:
         """Build the row picking a tissue class of the base data or a cell line preset."""
@@ -351,6 +368,36 @@ class VOIMetadataDialog(QDialog):
 
         return _picker_row(self.preset_combo, apply_button)
 
+    def _show_applied_pick(self, kind: str, index: int) -> None:
+        """Show the pick of the given kind and index as the applied one."""
+        if self.preset_combo is None:
+            return
+        position = next(
+            (i for i, pick in enumerate(self._picks) if (pick.kind, pick.index) == (kind, index)),
+            None,
+        )
+        select_pick(self.preset_combo, position)
+        self._applied_pick = position
+
+    def _sync_picker(self) -> None:
+        """Select the pick the tissue of the form corresponds to, none if it matches none."""
+        if self.preset_combo is None:
+            return
+        position = current_pick_position(
+            self._picks, self._current_tissue(), self._comparison, self._target_provenance
+        )
+        select_pick(self.preset_combo, position)
+        self._applied_pick = position
+
+    def _unapplied_pick(self) -> TissuePick | None:
+        """Pick selected in the picker that differs from the applied one, None if none."""
+        if self.preset_combo is None:
+            return None
+        position = self.preset_combo.currentData()
+        if not isinstance(position, int) or position == self._applied_pick:
+            return None
+        return self._picks[position]
+
     def _on_apply_pick(self) -> None:
         pick = current_pick(self.preset_combo, self._picks) if self.preset_combo else None
         if pick is None:
@@ -371,6 +418,7 @@ class VOIMetadataDialog(QDialog):
         """
         tissue, note = adopt_preset(self._presets[index][1], self._target_provenance)
         self._write_tissue(tissue)
+        self._show_applied_pick("preset", index)
         self.status_label.setText(note)
         return note
 
@@ -386,6 +434,7 @@ class VOIMetadataDialog(QDialog):
         tissue_class = self._machine_tissues[index]
         tissue, class_name = apply_base_data_class(self._current_tissue(), tissue_class)
         self._write_tissue(tissue, class_name)
+        self._show_applied_pick("class", index)
         self.status_label.setText(
             f"Applied the base data class {tissue_class.cell_line or tissue_class.display_name}"
         )
@@ -400,6 +449,7 @@ class VOIMetadataDialog(QDialog):
         self._write_tissue(tissue, class_name)
         self.status_label.setText("Matched the closest base data class")
         self.refresh_comparison()
+        self._sync_picker()
         return True
 
     def _current_tissue(self) -> TissueProperties:
@@ -681,6 +731,7 @@ class VOIMetadataDialog(QDialog):
         self._write_tissue(fixed)
         self.status_label.setText(f"Relabelled as the base data's model ({fixed.display_name})")
         self.refresh_comparison()
+        self._sync_picker()
         return True
 
     def accept(self) -> None:
@@ -689,12 +740,23 @@ class VOIMetadataDialog(QDialog):
         An edited VOI is recreated rather than mutated: it mirrors ``alpha_x`` /
         ``beta_x`` of its tissue properties and rejects any assignment that leaves the
         two inconsistent, so tissue edits cannot be applied field by field. Without any
-        edit, :attr:`updated_voi` stays the input VOI itself. An edited tissue the
+        edit, :attr:`updated_voi` stays the input VOI itself. A tissue selected in the picker
+        but not applied is asked about first: it is applied, discarded or the dialog kept
+        open. An edited tissue the
         biological model cannot be evaluated for (errors) is only taken over if the user
         chooses to apply it anyway; otherwise the dialog stays open for editing. Warnings,
         e.g. a model label differing from the base data's, never ask.
         """
         new_type = self.type_combo.currentText()
+        unapplied = self._unapplied_pick()
+        if unapplied is not None:
+            answer = ask_unapplied_pick(self, unapplied)
+            if answer == KEEP_EDITING:
+                return
+            if answer == APPLY_PICK:
+                self._on_apply_pick()
+            else:
+                select_pick(self.preset_combo, self._applied_pick)
         try:
             tissue = self.tissue_properties()
             if tissue != self._voi.tissue_properties:
@@ -709,24 +771,12 @@ class VOIMetadataDialog(QDialog):
                 self.updated_voi = self._voi
                 super().accept()
                 return
-            data = dict(self._voi)
-            data.update(
+            self.updated_voi = recreate_voi(
+                self._voi,
                 voi_type=new_type,
                 tissue_properties=tissue,
-                alpha_x=tissue.alpha_x,
-                beta_x=tissue.beta_x,
                 overlap_priority=self.priority_spin.value(),
             )
-            # An auto-assigned color is left unset (StructureSet.set_colors() keeps it that
-            # way); an explicit pick stays.
-            auto_color = "color" not in self._voi.model_fields_set
-            if auto_color and new_type != self._voi.voi_type:
-                # Let the new type's default_factory supply its own color
-                data.pop("color", None)
-            self.updated_voi = create_voi(data)
-            if auto_color:
-                # Recreating marks a copied color as set; keep it reading as auto-assigned
-                self.updated_voi.model_fields_set.discard("color")
         except (ValidationError, ValueError, TypeError) as exc:
             QMessageBox.warning(self, "Invalid value", str(exc))
             return
@@ -741,7 +791,7 @@ class VOIsWidget(QWidget):
     selection_changed = Signal(list)  # list[str] of selected VOIs
     color_changed = Signal(str, tuple)  # voi name, new RGB tuple
     metadata_changed = Signal(str)  # voi name whose metadata was edited
-    voi_replaced = Signal(str, object)  # voi name, new VOI instance (after a type change)
+    voi_replaced = Signal(object, object)  # edited VOI, new VOI instance (after a type change)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -755,6 +805,7 @@ class VOIsWidget(QWidget):
         self._machine_provider: Optional[Callable[[], object]] = None
         self._bio_model_provider: Optional[Callable[[], object]] = None
         self._engine_provider: Optional[Callable[[], object]] = None
+        self._color_writer: Optional[Callable[[VOI, tuple[int, int, int]], None]] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -814,6 +865,23 @@ class VOIsWidget(QWidget):
         Resolved when the editor opens, like the machine provider, and for the same reason.
         """
         self._engine_provider = provider
+
+    def set_color_writer(
+        self, writer: Optional[Callable[[VOI, tuple[int, int, int]], None]]
+    ) -> None:
+        """
+        Set a callable writing a picked colour to the listed VOI, e.g. through a session.
+
+        Without one, the picked colour is set on the listed VOI itself.
+        """
+        self._color_writer = writer
+
+    def replace_voi(self, name: str, voi: VOI) -> None:
+        """Hold *voi* as the VOI named *name* (e.g. the one stored after an edit)."""
+        old = self._voi_by_name.get(name)
+        self._vois = [voi if v is old else v for v in self._vois]
+        self._voi_by_name[name] = voi
+        self._render(set(self.selected_vois()))
 
     def set_vois(self, vois: list[VOI], checked: Optional[Iterable[str]] = None) -> None:
         """Populate the VOIs section with a variable number of checkboxes."""
@@ -991,7 +1059,7 @@ class VOIsWidget(QWidget):
         cb.setChecked(voi.name in checked_set)
         cb.setToolTip(self._voi_tooltip(voi))
         cb.stateChanged.connect(lambda s, n=voi.name: self._on_voi_toggled(n, bool(s)))
-        cb.label_clicked.connect(lambda n=voi.name: self._edit_voi(n))
+        cb.label_clicked.connect(lambda v=voi: self._edit_voi(v))
 
         rgb = tuple(int(c) for c in voi.color)
         self._voi_colors[voi.name] = rgb
@@ -1003,7 +1071,7 @@ class VOIsWidget(QWidget):
             f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border: 1px solid #444;"
         )
         swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-        swatch.clicked.connect(lambda _, n=voi.name: self._pick_color(n))
+        swatch.clicked.connect(lambda _, v=voi, s=swatch: self._pick_color(v, s))
         self._voi_color_swatches[voi.name] = swatch
 
         row = QWidget()
@@ -1043,11 +1111,9 @@ class VOIsWidget(QWidget):
         lines.append("<i>Click the name to edit</i>")
         return "<br/>".join(lines)
 
-    def _edit_voi(self, name: str) -> None:
+    def _edit_voi(self, voi: VOI) -> None:
         """Open the metadata editor popup for the given VOI."""
-        voi = self._voi_by_name.get(name)
-        if voi is None:
-            return
+        name = voi.name
         machine = self._machine_provider() if self._machine_provider is not None else None
         bio_model = self._bio_model_provider() if self._bio_model_provider is not None else None
         engine = self._engine_provider() if self._engine_provider is not None else None
@@ -1060,20 +1126,22 @@ class VOIsWidget(QWidget):
             self._voi_by_name[name] = new_voi
         self._render(set(self.selected_vois()))
         if new_voi is not voi:
-            self.voi_replaced.emit(name, new_voi)
+            self.voi_replaced.emit(voi, new_voi)
         self.metadata_changed.emit(name)
 
-    def _pick_color(self, name: str) -> None:
+    def _pick_color(self, voi: VOI, swatch: Optional[QPushButton] = None) -> None:
         """Open a color dialog for the given VOI and apply the result."""
-        current = self._voi_colors.get(name, (128, 128, 128))
+        name = voi.name
+        current = tuple(int(c) for c in voi.color)
         color = QColorDialog.getColor(QColor(*current), self, f"Pick color for {name}")
         if color.isValid():
             rgb = (color.red(), color.green(), color.blue())
             self._voi_colors[name] = rgb
-            voi = self._voi_by_name.get(name)
-            if voi is not None:
+            if self._color_writer is not None:
+                self._color_writer(voi, rgb)
+            else:
                 voi.color = rgb
-            swatch = self._voi_color_swatches[name]
+            swatch = swatch or self._voi_color_swatches[name]
             swatch.setStyleSheet(
                 f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); border: 1px solid #444;"
             )

@@ -1,14 +1,16 @@
-"""Two-level result quantity selector: quantity (per saved result), then full / beam."""
+"""Two-level result quantity selector: quantity (per result), then full / beam / scenario."""
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Mapping
+from typing import Iterable, Optional, Sequence, Union
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QWidget
 
 from ._display_names import (
     FULL_COMPONENT,
+    SCENARIO_COMPONENT,
     ResultGroup,
     add_identified_item,
     group_result_keys,
@@ -19,10 +21,11 @@ from ._display_names import (
 class QuantitySelector(QWidget):
     """Pick a result key by quantity group and component.
 
-    The first combo box lists one entry per quantity and saved result (see
+    The first combo box lists one entry per quantity and result (see
     :func:`~pyRadPlan.gui.widgets._display_names.group_result_keys`), the
-    second one the total (``"full"``) and the individual beam contributions
-    of the selected group.
+    second one the total (``"full"``), the individual beam contributions and
+    the individual uncertainty scenarios of the selected group.  Scenario
+    entries show the labels given to :meth:`set_scenario_labels`.
 
     Parameters
     ----------
@@ -40,6 +43,10 @@ class QuantitySelector(QWidget):
         super().__init__(parent)
         self._none_label = none_label
         self._groups: list[ResultGroup] = []
+        #: Scenario labels by result tag; ``None`` holds labels given for all results.
+        self._scenario_labels: dict[Optional[str], list[str]] = {}
+        #: Group whose components the component combo box lists.
+        self._shown_group: Optional[ResultGroup] = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -47,7 +54,10 @@ class QuantitySelector(QWidget):
         self.quantity_combo = QComboBox()
         self.component_combo = QComboBox()
         self.component_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.component_combo.setToolTip("Total of all beams or a single beam contribution")
+        self.component_combo.setToolTip(
+            "Total of all beams, a single beam contribution or the result of a single "
+            "uncertainty scenario"
+        )
         for combo in (self.quantity_combo, self.component_combo):
             show_identifiers_when_open(combo)
         layout.addWidget(self.quantity_combo, 1)
@@ -78,6 +88,32 @@ class QuantitySelector(QWidget):
         self._select_group(group)
         self.quantity_combo.blockSignals(False)
         self._fill_components(group, component)
+
+    def set_scenario_labels(
+        self, labels: Union[Sequence[str], Mapping[str, Sequence[str]]]
+    ) -> None:
+        """Label the scenario components by flat scenario index, e.g. ``"setup (...) mm"``.
+
+        Scenario entries then read ``"scenario <i>: <label>"``; indices without a label
+        keep ``"scenario <i>"``.  A mapping gives the labels of each result by its tag
+        (``""`` for the active result), a sequence labels the scenarios of every result.
+        Keeps the selection and does not emit :attr:`key_changed`.
+        """
+        if isinstance(labels, Mapping):
+            labels = {tag: list(values) for tag, values in labels.items()}
+        else:
+            labels = {None: list(labels)}
+        if labels == self._scenario_labels:
+            return
+        self._scenario_labels = labels
+        group, component = self._locate(self.current_key())
+        if group is not None:
+            self._fill_components(group, component)
+
+    def scenario_keys(self) -> tuple[str, ...]:
+        """Keys of the scenario components of the selected group (empty if none)."""
+        group = self._current_group()
+        return () if group is None else group.keys_of(SCENARIO_COMPONENT)
 
     def current_key(self) -> str:
         """Return the selected result key, or ``""`` if nothing is selected."""
@@ -125,17 +161,37 @@ class QuantitySelector(QWidget):
     def _fill_components(self, group: Optional[ResultGroup], component: str) -> None:
         self.component_combo.blockSignals(True)
         self.component_combo.clear()
+        self._shown_group = group
         components = group.components if group is not None else ()
-        for label, key in components:
-            add_identified_item(self.component_combo, label, key, key)
+        kinds = group.kinds if group is not None and group.kinds else ("",) * len(components)
+        for (label, key), kind in zip(components, kinds):
+            text = self._component_text(label, kind, group.tag)
+            add_identified_item(self.component_combo, text, key, key)
         labels = [label for label, _ in components]
         self.component_combo.setCurrentIndex(labels.index(component) if component in labels else 0)
         self.component_combo.setEnabled(len(components) > 1)
         self.component_combo.blockSignals(False)
 
+    def _component_text(self, label: str, kind: str, tag: str) -> str:
+        if kind != SCENARIO_COMPONENT:
+            return label
+        names = self._scenario_labels.get(tag, self._scenario_labels.get(None, []))
+        index = int(label.rpartition(" ")[2]) if label[-1:].isdigit() else -1
+        if 0 <= index < len(names) and names[index]:
+            return f"{label}: {names[index]}"
+        return label
+
+    def _current_component(self) -> str:
+        """Component label (e.g. ``"beam 1"``) of the selected key."""
+        index = self.component_combo.currentIndex()
+        group = self._shown_group
+        if group is None or not 0 <= index < len(group.components):
+            return ""
+        return group.components[index][0]
+
     def _on_group_changed(self, _index: int) -> None:
         # Keep the chosen component (e.g. "beam 1") when the new group has it.
-        self._fill_components(self._current_group(), self.component_combo.currentText())
+        self._fill_components(self._current_group(), self._current_component())
         self._emit_key()
 
     def _emit_key(self, *_: object) -> None:

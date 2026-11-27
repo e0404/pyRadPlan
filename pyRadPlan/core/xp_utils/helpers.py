@@ -264,6 +264,35 @@ def is_host_device(device: Any) -> bool:
     return dlpack_device is None or dlpack_device[0] == DLPACK_CPU
 
 
+def device_string(device: Any) -> Optional[str]:
+    """Backend-neutral ``"cpu"`` / ``"cuda:<n>"`` name of a device.
+
+    The backends name their devices differently (``str(cupy.cuda.Device(0))`` is
+    ``"<CUDA Device 0>"``), so a device object cannot simply be stringified for a
+    consumer outside its own backend, such as the ML framework a model is loaded into.
+
+    Parameters
+    ----------
+    device : Any
+        A backend device object, a device string, a DLPack tuple, or ``None``.
+
+    Returns
+    -------
+    str or None
+        ``"cpu"`` or ``"cuda:<index>"``; ``None`` for ``None`` and for devices with no
+        DLPack equivalent (namespaces without a device concept), leaving the choice to
+        the caller.
+    """
+    try:
+        dlpack_device = _parse_device_to_dlpack(device)  # None only for device=None
+    except ValueError:
+        logger.debug("Device %r has no DLPack equivalent.", device)
+        return None
+    if dlpack_device is None:
+        return None
+    return "cpu" if dlpack_device[0] == DLPACK_CPU else f"cuda:{dlpack_device[1]}"
+
+
 def device_cache_key(arr: Any) -> Any:
     """
     Hashable identity of the device an array lives on, usable as a dict key.
@@ -1611,6 +1640,13 @@ def _rebuild_scipy_csc_in_namespace(
 
     if array_api_compat.is_torch_namespace(xp_new) and torch is not None:
         return torch.sparse_csc_tensor(indptr, indices, data, size=shape)
+
+    jsparse = loaded_backend("jax.experimental.sparse")
+    if array_api_compat.is_jax_namespace(xp_new) and jsparse is not None:
+        jnp = loaded_backend("jax.numpy")
+        return jsparse.CSC(
+            (data, indices.astype(jnp.int32), indptr.astype(jnp.int32)), shape=shape
+        )
 
     raise TypeError(
         f"Rebuilding a CSC sparse matrix in namespace '{xp_new.__name__}' is not yet supported."

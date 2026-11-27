@@ -44,7 +44,7 @@ class POLO(POLOBase):
 
     def _compute_chain_derivative_single_scenario(self, d_quantity, scenario_index: int) -> Array:
         xp = self.array_backend
-        eta, d = self._linear_predictor(self._w_grad_cache, scenario_index)
+        eta, d = self._linear_predictor(self._grad_fluence, scenario_index)
         p = 1.0 / (1.0 + xp.exp(-eta))
 
         # Numerically stable gradient of the volume-scaled probability w.r.t. eta:

@@ -14,8 +14,8 @@ services:
       XPRA_PASSWORD: ${XPRA_PASSWORD:-}
       # Show only the basic controls, for teaching.
       PYRADPLAN_GUI_UI_MODE: educational
-      # Phantoms, machines, ... of the course: ./shared/phantoms/*.mat, ./shared/machines/*.mat
-      PYRADPLAN_BASE_DATA_PATH: /shared
+    # Phantoms, machines, ... of the course: ./shared/phantoms/*.mat, ./shared/machines/*.mat
+    # (the image searches /shared before its phantoms of matRad).
     volumes:
       - ./shared:/shared:ro
     # A dose calculation needs memory; this keeps one session from taking the whole host.

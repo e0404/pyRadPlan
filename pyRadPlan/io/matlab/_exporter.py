@@ -7,12 +7,12 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.result import PlanResult, validate_result
 
-from ..base import BaseExporter
+from ..base import ANY_OBJECT, BaseExporter
 from . import _matfile
 
 
-# TODO: This will be deprecated as soon as result object is done!!!
 def _dose_to_matrad_cube(dose: sitk.Image) -> np.ndarray:
     """Convert a dose SimpleITK image to a matRad cube (y, x, z)."""
     # SimpleITK array is (z, y, x); matRad expects (y, x, z).
@@ -26,6 +26,7 @@ class MatlabExporter(BaseExporter):
     name: ClassVar[str] = "MATLAB Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".mat",)
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({ANY_OBJECT})
 
     def save(
         self,
@@ -33,6 +34,7 @@ class MatlabExporter(BaseExporter):
         ct: Optional[CT] = None,
         cst: Optional[StructureSet] = None,
         dose: Optional[sitk.Image] = None,
+        result: Optional[PlanResult] = None,
         **extra,
     ) -> None:
         mdict = {}
@@ -43,7 +45,10 @@ class MatlabExporter(BaseExporter):
         if cst is not None:
             mdict["cst"] = cst.to_matrad(context="mat-file")
 
-        if dose is not None:
+        # matRad stores the result under "resultGUI"; a full result wins over a bare dose.
+        if result is not None:
+            mdict["resultGUI"] = validate_result(result).to_matrad(context="mat-file")
+        elif dose is not None:
             mdict["resultGUI"] = {"physicalDose": _dose_to_matrad_cube(dose)}
 
         for key, value in extra.items():
@@ -55,6 +60,6 @@ class MatlabExporter(BaseExporter):
                 mdict[key] = value
 
         if not mdict:
-            raise ValueError("Nothing to export: no ct, cst, dose or extra data provided.")
+            raise ValueError("Nothing to export: no ct, cst, dose, result or extra data provided.")
 
         _matfile.save(self.path, mdict)

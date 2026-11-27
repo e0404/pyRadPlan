@@ -10,6 +10,7 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
+from ._variance import Variance
 from ._ntcp_polo import NTCPPOLO
 from ._hellinger_polo import HellingerPOLO
 from ._logsumexp_convpolo import LogSumExpConvPOLO
@@ -31,6 +32,7 @@ register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
 register_objective(DoseUniformity)
+register_objective(Variance)
 register_objective(NTCPPOLO)
 register_objective(HellingerPOLO)
 register_objective(LogSumExpConvPOLO)
@@ -47,6 +49,7 @@ __all__ = [
     "SquaredMimicking",
     "SquaredOverdosing",
     "SquaredUnderdosing",
+    "Variance",
     "NTCPPOLO",
     "HellingerPOLO",
     "LogSumExpConvPOLO",

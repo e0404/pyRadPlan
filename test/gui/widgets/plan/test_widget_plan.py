@@ -3,6 +3,7 @@ from typing import get_args
 
 import numpy as np
 import pytest
+import SimpleITK as sitk
 
 pytest.importorskip("PySide6")
 
@@ -12,6 +13,7 @@ from PySide6.QtTest import QTest
 from pyRadPlan._settings import GuiUiMode, get_settings
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.gui.widgets.plan import PlanWidget, UIMode
+from pyRadPlan.gui.widgets._display_names import select_identifier
 from pyRadPlan.machines import get_available_machines
 from pyRadPlan.plan import IonPlan, PhotonPlan, Plan
 from pyRadPlan.io import load_tg119
@@ -27,6 +29,16 @@ def _make_widget():
     return PlanWidget(workspace=ws), ws
 
 
+def _form_plan(widget):
+    """The plan Apply would write: the session's build of the form's changes."""
+    from pyRadPlan.app._planform import changes_from_form
+
+    ws = widget.workspace
+    return ws.session._build_plan_checked(
+        ws.pln, changes_from_form(ws.pln, widget._form_changes())
+    )
+
+
 def _answer_message_boxes(monkeypatch, button_text=None):
     """
     Answer every message box by clicking the button labelled `button_text`.
@@ -40,7 +52,7 @@ def _answer_message_boxes(monkeypatch, button_text=None):
     def exec_(box):
         shown.append(f"{box.text()}\n{box.informativeText()}")
         assert button_text is not None, f"unexpected message box: {shown[-1]}"
-        next(b for b in box.buttons() if b.text() == button_text).click()
+        next(b for b in box.buttons() if b.text().replace("&", "") == button_text).click()
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", exec_)
@@ -251,11 +263,17 @@ def test_editing_fields_and_apply_writes_valid_pln(qapp):
 def test_scenario_combo_wired_to_mult_scen(qapp):
     widget, ws = _make_widget()
 
-    items = [widget._cmb_scenario.itemText(i) for i in range(widget._cmb_scenario.count())]
+    items = [widget._cmb_scenario.itemData(i) for i in range(widget._cmb_scenario.count())]
     assert items[0] == "nomScen"
     assert {"wcScen", "impScen", "rndScen"} <= set(items)
-    # unimplemented scenario models are listed but not selectable
-    assert not widget._cmb_scenario.model().item(items.index("wcScen")).isEnabled()
+    assert len(items) == len(set(items))
+    # implemented scenario models are selectable
+    for name in ("wcScen", "impScen", "rndScen"):
+        assert widget._cmb_scenario.model().item(items.index(name)).isEnabled()
+    # listed by their names, the identifiers are shown faintly in the open popup
+    assert widget._cmb_scenario.itemText(items.index("wcScen")) == "Worst-case Grid"
+    assert widget._cmb_scenario.itemText(items.index("impScen")) == "Importance Grid"
+    assert widget._cmb_scenario.itemText(items.index("rndScen")) == "Random Samples"
 
     widget._on_apply()
     assert ws.pln.mult_scen.short_name == "nomScen"
@@ -377,10 +395,10 @@ def test_mode_switch_from_carbon_kernels_to_photons_selects_none(qapp):
 def test_engine_switch_disables_kernel_formalisms_and_replaces_the_selection(qapp):
     widget, ws = _make_widget()
     widget._cmb_radiation.setCurrentText("carbon")
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert widget._cmb_bio_model.currentText() == "α/β kernels · LEM IV"
 
-    widget._cmb_engine.setCurrentText("FRED")
+    select_identifier(widget._cmb_engine, "FRED")
 
     entries = {label: (enabled, tooltip) for label, enabled, tooltip in _bio_entries(widget)}
     enabled, tooltip = entries["α/β kernels · LEM IV"]
@@ -397,7 +415,7 @@ def test_engine_switch_disables_kernel_formalisms_and_replaces_the_selection(qap
     assert ws.pln.prop_dose_calc["engine"] == "FRED"
 
     # Back on the pencil-beam engine the kernels are offered again; the choice stays
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     entries = {label: enabled for label, enabled, _tooltip in _bio_entries(widget)}
     assert entries["α/β kernels · LEM IV"]
     assert not entries["Linear scaling (LET)"]
@@ -409,13 +427,13 @@ def test_engine_switch_keeps_a_model_the_engine_supports(qapp):
     widget._cmb_radiation.setCurrentText("protons")
     widget._select_bio_model("WED")
     widget._lbl_status.setText("")
-    widget._cmb_engine.setCurrentText("FRED")
+    select_identifier(widget._cmb_engine, "FRED")
     assert widget._bio_model_name() == "WED"
     assert _selected_entry_enabled(widget)
     assert "not available" not in widget._lbl_status.text()
 
     # TOPAS scores the LET of protons itself
-    widget._cmb_engine.setCurrentText("TOPAS")
+    select_identifier(widget._cmb_engine, "TOPAS")
     assert widget._bio_model_name() == "WED"
     assert "not available" not in widget._lbl_status.text()
 
@@ -429,7 +447,7 @@ def test_restoring_a_plan_the_engine_cannot_run_keeps_its_model(qapp):
     )
 
     combo = widget._cmb_bio_model
-    assert widget._cmb_engine.currentText() == "FRED"
+    assert widget._cmb_engine.currentData() == "FRED"
     assert combo.currentText() == "α/β kernels (not supported by the dose engine FRED)"
     assert not _selected_entry_enabled(widget)
     tooltip = combo.itemData(combo.currentIndex(), Qt.ItemDataRole.ToolTipRole)
@@ -440,7 +458,7 @@ def test_restoring_a_plan_the_engine_cannot_run_keeps_its_model(qapp):
     assert ws.pln.bio_model.model == "alpha_beta_kernels"
 
     # Switching to an engine that can run it selects its regular entry
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert combo.currentText() == "α/β kernels · LEM IV"
     assert _selected_entry_enabled(widget)
 
@@ -457,13 +475,13 @@ def test_tissue_indicator_follows_the_engine(qapp, tg119):
     assert not widget._lbl_tissue_warning.isHidden()
     assert "TOPAS does not use the machine's α/β kernels" in widget._lbl_tissue_warning.toolTip()
 
-    widget._cmb_engine.setCurrentText("HongPB")
+    select_identifier(widget._cmb_engine, "HongPB")
     assert widget._lbl_tissue_warning.isHidden()
 
 
 def test_tissue_editor_follows_the_engine(qapp, test_data_protons):
     from pyRadPlan.dose.engines import ParticleTOPASMCEngine
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -482,11 +500,11 @@ def test_plan_widget_passes_the_engine_to_the_tissue_editor(qapp, monkeypatch, t
     widget, ws = _make_widget()
     ws.set_many(ct=ct, cst=cst)
     widget._cmb_radiation.setCurrentText("oxygen")
-    widget._cmb_engine.setCurrentText("TOPAS")
+    select_identifier(widget._cmb_engine, "TOPAS")
     opened = {}
 
     class _Dialog:
-        def __init__(self, cst, machine, bio_model, parent, engine=None):
+        def __init__(self, cst, machine, bio_model, parent, engine=None, apply=None):
             opened["engine"] = engine
 
         def exec(self):
@@ -596,6 +614,36 @@ def test_tissue_dialog_edits_cst(qapp, test_data_protons):
     dialog = TissueParametersDialog(cst)
     dialog.accept()
     assert not dialog.changed
+
+
+def test_tissue_parameters_are_written_through_the_session(qapp, monkeypatch, test_data_protons):
+    from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
+
+    ct, cst, _ = test_data_protons
+    widget, ws = _make_widget()
+    ws.set_many(ct=ct, cst=cst)
+    applied = []
+    tissue_apply = ws.session.tissue_apply
+    monkeypatch.setattr(
+        ws.session,
+        "tissue_apply",
+        lambda rows, **kw: applied.append(rows) or tissue_apply(rows, **kw),
+    )
+    changes = []
+    ws.workspace_changed.connect(changes.append)
+
+    def exec_(dialog):
+        dialog.set_values(0, 0.2, 0.04)
+        dialog.accept()
+        return 1
+
+    monkeypatch.setattr(TissueParametersDialog, "exec", exec_)
+    widget._on_tissue_parameters()
+
+    ((row,),) = applied
+    assert (row["structure"], row["voi_index"]) == (cst.vois[0].name, 0)
+    assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.2)
+    assert changes == [["cst"]]
 
 
 def test_tissue_dialog_keeps_auto_assigned_color(qapp, test_data_protons):
@@ -716,7 +764,7 @@ def test_tissue_dialog_derives_reference_params(qapp, test_data_protons):
 def test_machine_summary_is_reread_after_base_data_changes(monkeypatch, tmp_path):
     """Files replaced through pyRadPlan keep size and mtime within a clock tick; reread them."""
     from pyRadPlan.core import add_base_data_file, base_data_generation
-    from pyRadPlan.gui.widgets import _tissue_params
+    from pyRadPlan.biology import _editing as _tissue_params
 
     monkeypatch.setenv("PYRADPLAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(_tissue_params, "_MACHINE_SUMMARY_CACHE", {})
@@ -734,7 +782,7 @@ def test_machine_summary_is_reread_after_base_data_changes(monkeypatch, tmp_path
 
 def test_machine_base_data_is_read_once_per_file(monkeypatch):
     """The editors keep what they read off a machine, so opening one does not re-read it."""
-    from pyRadPlan.gui.widgets import _tissue_params
+    from pyRadPlan.biology import _editing as _tissue_params
 
     key = ("protons", "Generic")
     monkeypatch.setattr(_tissue_params, "_MACHINE_SUMMARY_CACHE", {})
@@ -1042,8 +1090,15 @@ def test_tissue_dialog_edit_marks_dose_influence_stale(qapp, test_data_protons):
     ws = WorkspaceManager()
     widget = PlanWidget(workspace=ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
-    assert not workflow._dij_stale
+    ws.set_many(
+        ct=ct,
+        cst=cst,
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
+    assert not workflow.session.tracker.dij_stale
 
     def fake_exec(self):
         self.set_values(0, 0.42, 0.04)
@@ -1055,7 +1110,7 @@ def test_tissue_dialog_edit_marks_dose_influence_stale(qapp, test_data_protons):
         widget._on_tissue_parameters()
 
     assert ws.cst.vois[0].tissue_properties.alpha_x == pytest.approx(0.42)
-    assert workflow._dij_stale
+    assert workflow.session.tracker.dij_stale
     assert "recalculate" in workflow._lbl_status.text().lower()
 
 
@@ -1218,11 +1273,11 @@ def test_invalid_iso_center_rejected(qapp):
 def test_engine_combo_follows_radiation_mode(qapp):
     widget, ws = _make_widget()
 
-    photon_engines = [widget._cmb_engine.itemText(i) for i in range(widget._cmb_engine.count())]
+    photon_engines = [widget._cmb_engine.itemData(i) for i in range(widget._cmb_engine.count())]
     assert "SVDPB" in photon_engines
 
     widget._cmb_radiation.setCurrentText("protons")
-    proton_engines = [widget._cmb_engine.itemText(i) for i in range(widget._cmb_engine.count())]
+    proton_engines = [widget._cmb_engine.itemData(i) for i in range(widget._cmb_engine.count())]
     assert "SVDPB" not in proton_engines
     assert proton_engines  # Hong PB, FRED, TOPAS register for protons
 
@@ -1230,7 +1285,7 @@ def test_engine_combo_follows_radiation_mode(qapp):
 def test_apply_writes_engine_and_config_to_prop_dose_calc(qapp):
     widget, ws = _make_widget()
 
-    widget._cmb_engine.setCurrentText("SVDPB")
+    select_identifier(widget._cmb_engine, "SVDPB")
     # simulate values confirmed in the [...] config popup
     widget._engine_props["SVDPB"] = {"random_seed": 42, "kernel_cutoff": 60.0}
     widget._on_apply()
@@ -1250,7 +1305,7 @@ def test_do_update_restores_engine_and_config_from_pln(qapp):
         prop_dose_calc={"engine": "SVDPB", "random_seed": 7},
     )
 
-    assert widget._cmb_engine.currentText() == "SVDPB"
+    assert widget._cmb_engine.currentData() == "SVDPB"
     assert widget._engine_props["SVDPB"] == {"random_seed": 7}
 
 
@@ -1258,13 +1313,35 @@ def test_engine_config_dialog_round_trip(qapp):
     from pyRadPlan.gui.widgets import ConfigFormDialog
 
     widget, ws = _make_widget()
-    widget._cmb_engine.setCurrentText("SVDPB")
+    select_identifier(widget._cmb_engine, "SVDPB")
 
     engine_cls = widget._engines["SVDPB"]
     dialog = ConfigFormDialog(engine_cls.config_model(), initial={"random_seed": 3})
     assert "kernel_cutoff" in dialog.form._editors
     dialog.form._set_value("enable_dij_sampling", False)
     assert dialog.values() == {"random_seed": 3, "enable_dij_sampling": False}
+
+
+def test_ai_engine_config_dialog_exposes_model(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.dose.engines import AIBeamletEngine
+
+    dialog = ConfigFormDialog(
+        AIBeamletEngine.config_model(),
+        initial={"model": "org/my_model"},
+        choices={"model": ["org/my_model", "org/another_model"]},
+    )
+    combo = dialog.form._editors["model"]
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "",
+        "org/my_model",
+        "org/another_model",
+    ]
+    assert combo.currentText() == "org/my_model"
+
+    # a model outside the list can still be typed
+    combo.setCurrentText("other_org/other_model")
+    assert dialog.values()["model"] == "other_org/other_model"
 
 
 def test_invalid_gantry_does_not_crash(qapp):
@@ -1717,7 +1794,7 @@ def test_discard_restores_engine_overrides_including_defaults(qapp, overrides, e
     widget, ws = _make_widget()
     prop_dose_calc = {"engine": "SVDPB", **overrides} if explicit_engine else dict(overrides)
     ws.pln = PhotonPlan(prop_dose_calc=prop_dose_calc)
-    original = widget._build_plan().prop_dose_calc
+    original = _form_plan(widget).prop_dose_calc
 
     # Simulate accepting edits in the engine configuration dialog.
     widget._engine_props["SVDPB"] = {"kernel_cutoff": 50.0, "random_seed": 7}
@@ -1726,7 +1803,7 @@ def test_discard_restores_engine_overrides_including_defaults(qapp, overrides, e
     widget._btn_discard.click()
 
     assert not widget.has_pending_changes()
-    assert widget._build_plan().prop_dose_calc == original
+    assert _form_plan(widget).prop_dose_calc == original
     widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
     widget._on_apply()
     assert ws.pln.prop_dose_calc == original
@@ -1737,7 +1814,7 @@ def test_discard_restores_engine_overrides_including_defaults(qapp, overrides, e
 def test_discard_restores_implicit_geometry(qapp, plan_cls, dose_grid):
     widget, ws = _make_widget()
     ws.pln = plan_cls(prop_dose_calc={"dose_grid": dose_grid})
-    original = widget._build_plan()
+    original = _form_plan(widget)
     applied = ws.pln
     widget._txt_gantry.setText("45 135")
     widget._txt_couch.setText("10 20")
@@ -1753,8 +1830,8 @@ def test_discard_restores_implicit_geometry(qapp, plan_cls, dose_grid):
     assert ws.pln is applied
     assert not widget.has_pending_changes()
     assert not widget._btn_discard.isEnabled()
-    assert widget._build_plan().prop_stf == original.prop_stf
-    assert widget._build_plan().prop_dose_calc == original.prop_dose_calc
+    assert _form_plan(widget).prop_stf == original.prop_stf
+    assert _form_plan(widget).prop_dose_calc == original.prop_dose_calc
     assert edited[-1] == (original.prop_stf["gantry_angles"], original.prop_stf["couch_angles"])
 
     # A later unrelated edit must not apply any discarded geometry.
@@ -1826,7 +1903,7 @@ def test_voi_editor_accept_keeps_unapplied_plan_edits(qapp, test_data_protons):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(VOIMetadataDialog, "exec", fake_exec)
-        viewing.vois_widget._edit_voi(cst.vois[0].name)
+        viewing.vois_widget._edit_voi(cst.vois[0])
 
     assert ws.cst.vois[0].alpha_x == pytest.approx(0.42)
     assert widget._bio_model_name() == chosen
@@ -1850,7 +1927,14 @@ def test_tissue_dialog_unchanged_ok_keeps_exact_values(qapp, test_data_protons):
     ws = WorkspaceManager()
     widget = PlanWidget(workspace=ws)
     workflow = WorkflowWidget(ws)
-    ws.set_many(ct=ct, cst=cst, pln=object(), stf=object(), dij=object(), result={})
+    ws.set_many(
+        ct=ct,
+        cst=cst,
+        pln=object(),
+        stf=object(),
+        dij=object(),
+        result={"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)},
+    )
     changes = []
     ws.workspace_changed.connect(changes.append)
 
@@ -1865,7 +1949,7 @@ def test_tissue_dialog_unchanged_ok_keeps_exact_values(qapp, test_data_protons):
     assert changes == []
     assert cst.vois[0].alpha_x == 0.123456
     assert cst.vois[0].beta_x == 0.054321
-    assert not workflow._dij_stale and not workflow._result_stale
+    assert not workflow.session.tracker.dij_stale and not workflow.session.tracker.result_stale
 
 
 def test_tissue_dialog_drops_the_cell_line_after_a_model_switch(qapp, test_data_protons):
@@ -2092,8 +2176,8 @@ def test_selecting_an_option_sets_its_base_data_parameters(qapp, monkeypatch):
 
     widget._cmb_bio_model.setCurrentIndex(labels.index("α/β kernels · mMKM"))
     assert widget.has_pending_changes()
-    assert widget._cmb_bio_model.styleSheet()  # marked modified
-    assert not widget._btn_bio_config.styleSheet()  # its parameters are unchanged
+    assert widget._is_field_modified(widget._cmb_bio_model)
+    assert not widget._is_field_modified(widget._btn_bio_config)
     widget._on_apply()
     assert ws.pln.bio_model.model == "alpha_beta_kernels"
     assert ws.pln.bio_model.data_model == "mMKM"
@@ -2186,7 +2270,7 @@ def test_tissue_indicator_follows_the_structures(qapp, tg119):
 
 
 def test_tissue_editor_ranks_the_provenance_of_the_selected_model_first(qapp, test_data_protons):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
     from pyRadPlan.biology.tissues import CELL_LINE_PRESETS
 
@@ -2225,7 +2309,7 @@ def test_tissue_editor_asks_before_applying_failing_tissues(
 ):
     from PySide6.QtWidgets import QDialog
 
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import ISSUE_BRUSH, TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -2249,7 +2333,7 @@ def test_tissue_editor_asks_before_applying_failing_tissues(
 def test_tissue_editor_accepts_matching_tissues_without_asking(
     qapp, monkeypatch, test_data_protons
 ):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     _, cst, _ = test_data_protons
@@ -2271,7 +2355,7 @@ def test_tissue_editor_accepts_matching_tissues_without_asking(
 
 
 def _oxygen_dialog(cst, bio_model="zstar_kernels"):
-    from pyRadPlan.gui.widgets._tissue_params import load_machine_quietly
+    from pyRadPlan.biology._editing import load_machine_quietly
     from pyRadPlan.gui.widgets.plan._tissue_dialog import TissueParametersDialog
 
     return TissueParametersDialog(cst, load_machine_quietly("oxygen", "Generic"), bio_model)
@@ -2432,7 +2516,11 @@ def test_tissue_table_updates_the_highlighting_while_editing(qapp, test_data_pro
     _set_mkm_row(dialog, 0, "mMKM", r_domain=0.3)
     assert dialog._comparison_timer.isActive()  # debounced, nothing blocks
 
-    QTest.qWait(dialog._comparison_timer.interval() + 100)
+    # Until the timer has fired: on a loaded CI runner it may fire well after its interval.
+    for _ in range(100):
+        QTest.qWait(50)
+        if not dialog._comparison_timer.isActive():
+            break
     assert editor_mismatch(dialog._spins[0]["r_domain"])
 
 
@@ -2796,7 +2884,9 @@ def test_tissue_dialog_preset_selects_its_reference_radiation(
 
 def test_optimization_row_restores_and_keeps_prop_opt(qapp):
     widget, ws = _make_widget()
-    assert widget._cmb_problem.currentText() == "nonlin_fluence"
+    assert widget._cmb_problem.currentData() == "nonlin_fluence"
+    assert widget._cmb_problem.currentText() == "Fluence (nonlinear)"
+    assert widget._cmb_engine.currentText() == "SVD Pencil Beam"
     ws.pln = PhotonPlan(prop_opt={"solver": "scipy"})
     assert widget._problem_props["nonlin_fluence"] == {"solver": "scipy"}
     widget._on_apply()
@@ -2847,9 +2937,381 @@ def test_optimization_keeps_a_live_solver_instance(qapp):
     solver = get_solver("scipy")
     ws.pln = PhotonPlan(prop_opt={"solver": solver, "prescription": {"dose": 2.0}})
     assert widget._problem_props["nonlin_fluence"]["solver"] is solver
-    copied = widget._form_prop_opt()
+    copied = widget._form_changes()["problem"]["values"]
     copied["prescription"]["dose"] = 3.0
     assert ws.pln.prop_opt["prescription"]["dose"] == 2.0
     widget._txt_gantry.setText("0 90")
     widget._on_apply()
     assert ws.pln.prop_opt["solver"] is solver
+
+
+# ----------------------------------------------------------------------
+# Scenario model configuration ("…" button next to the scenario model)
+# ----------------------------------------------------------------------
+
+
+def test_scenario_config_dialog_round_trip(qapp):
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    dialog = ConfigFormDialog(
+        WorstCaseScenarioModel, initial={"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    )
+    assert dialog.windowTitle() == "Configure"
+    assert dialog.form._editors["setup.sd"].text() == "1 1 1"
+    assert {"range.rel_sd", "range.abs_sd", "ct_phase.phases", "combinations"} <= set(
+        dialog.form._editors
+    )
+    dialog.form._editors["range.rel_sd"].setValue(0.0)
+    dialog.form._set_value("num_setup_grid_points", 1)
+    assert dialog.values() == {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 1.0, 1.0)},
+        "range": {"rel_sd": 0.0},
+        "num_setup_grid_points": 1,
+    }
+
+
+def test_apply_writes_the_scenario_model_configuration(qapp):
+    widget, ws = _make_widget()
+    select_identifier(widget._cmb_scenario, "wcScen")
+    # simulate values confirmed in the [...] config popup
+    widget._scenario_props["wcScen"] = {
+        "wc_sigma": 2.0,
+        "setup": {"sd": (1.0, 2.0, 3.0)},
+        "range": {"rel_sd": 0.0},
+    }
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+
+    model = ws.pln.scenarios
+    assert model.short_name == "wcScen"
+    assert model.wc_sigma == 2.0
+    assert model.setup.sd == (1.0, 2.0, 3.0)
+    assert model.range.rel_sd == 0.0
+    assert model.range.abs_sd == 1.0  # untouched parameters keep their defaults
+    assert not widget.has_pending_changes()
+
+    # Re-applying without edits keeps the plan's model (and its generated set)
+    first = ws.pln.scenarios
+    first.scenarios()
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+    assert ws.pln.scenarios == first
+    assert ws.pln.scenarios.scenarios() is not None
+
+
+def test_do_update_restores_the_scenario_configuration_from_pln(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(
+        scenarios={"model": "wcScen", "wc_sigma": 2.0, "shift_sd": (1.0, 1.0, 1.0)}
+    )
+
+    assert widget._cmb_scenario.currentData() == "wcScen"
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0, "setup": {"sd": (1.0, 1.0, 1.0)}}
+    assert not widget.has_pending_changes()
+
+    ws.pln = PhotonPlan(scenarios="wcScen")
+    assert widget._scenario_props["wcScen"] == {}
+    assert not widget.has_pending_changes()
+
+
+def test_discard_restores_the_scenario_configuration(qapp):
+    widget, ws = _make_widget()
+    ws.pln = PhotonPlan(scenarios={"model": "wcScen", "wc_sigma": 2.0})
+
+    widget._scenario_props["wcScen"] = {"wc_sigma": 3.0}
+    widget._update_dirty_state()
+    assert widget.has_pending_changes()
+    assert widget._is_field_modified(widget._btn_scenario_config)
+
+    widget._btn_discard.click()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert not widget.has_pending_changes()
+    assert not widget._is_field_modified(widget._btn_scenario_config)
+
+
+def test_modified_border_leaves_the_field_rendering_untouched(qapp):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QSpinBox
+
+    spin = QSpinBox()
+    spin.resize(80, 24)
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert all(type(c).__name__ != "_ModifiedFrame" for c in spin.children())
+
+    PlanWidget._set_field_modified(spin, True)
+    assert PlanWidget._is_field_modified(spin)
+    assert spin.styleSheet() == ""
+
+    # The frame follows the field when it is resized.
+    spin.resize(120, 30)
+    marked = spin.grab().toImage()
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+    assert frame.geometry() == spin.rect()
+    orange = QColor("#e67e22")
+    assert marked.pixelColor(0, marked.height() // 2) == orange
+    assert marked.pixelColor(marked.width() // 2, 0) == orange
+
+    # Inside the outline the field, including its arrows, is drawn as without the mark.
+    inner = QRect(3, 3, 114, 24)
+    marked_inner = spin.grab(inner).toImage()
+    PlanWidget._set_field_modified(spin, False)
+    assert not PlanWidget._is_field_modified(spin)
+    assert spin.grab(inner).toImage() == marked_inner
+    assert spin.grab().toImage().pixelColor(0, marked.height() // 2) != orange
+
+
+@pytest.mark.parametrize("dpr", [1.0, 1.25, 1.5, 1.75, 2.0])
+def test_modified_border_shows_every_edge_off_the_pixel_grid(qapp, dpr):
+    # With fractional display scaling a field can start in the middle of a device
+    # pixel; a border drawn as a logical 1 px line on its edge then lost its left side.
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    spin = QDoubleSpinBox()
+    spin.resize(94, 26)
+    PlanWidget._set_field_modified(spin, True)
+    frame = next(c for c in spin.children() if type(c).__name__ == "_ModifiedFrame")
+
+    image = QImage(int(140 * dpr), int(50 * dpr), QImage.Format.Format_ARGB32)
+    image.setDevicePixelRatio(dpr)
+    image.fill(QColor("black"))
+    origin = 10 + 0.5 / dpr
+    painter = QPainter(image)
+    painter.translate(origin, origin)
+    frame.render(painter, QPoint(0, 0))
+    painter.end()
+
+    orange = QColor("#e67e22")
+    x0, y0 = origin * dpr, origin * dpr
+    x1, y1 = x0 + 94 * dpr, y0 + 26 * dpr
+    mid_x, mid_y = int((x0 + x1) / 2), int((y0 + y1) / 2)
+
+    def hits(coords, pixel):
+        return [c for c in coords if pixel(c) == orange]
+
+    edges = {
+        "left": hits(range(int(x0) - 1, int(x0) + 3), lambda x: image.pixelColor(x, mid_y)),
+        "right": hits(range(int(x1) - 3, int(x1) + 2), lambda x: image.pixelColor(x, mid_y)),
+        "top": hits(range(int(y0) - 1, int(y0) + 3), lambda y: image.pixelColor(mid_x, y)),
+        "bottom": hits(range(int(y1) - 3, int(y1) + 2), lambda y: image.pixelColor(mid_x, y)),
+    }
+    assert all(edges.values()), edges
+    assert len({len(px) for px in edges.values()}) == 1, edges
+
+
+def test_scenario_config_button_is_advanced(qapp):
+    widget, _ = _make_widget()
+    widget.set_ui_mode(UIMode.EDUCATIONAL)
+    assert _locked(widget._btn_scenario_config)
+    widget.set_ui_mode(UIMode.DEFAULT)
+    assert not _locked(widget._btn_scenario_config)
+
+
+def test_engine_dialog_hides_the_settings_the_plan_sets_elsewhere(qapp, monkeypatch, tg119):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.app._planform import ENGINE_FORM_EXCLUDE
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    widget, ws = _make_widget()
+    ws.set_many(ct=tg119[0], cst=tg119[1])
+    hidden = {"select_voxels_in_scenarios": False, "voxel_sub_ix": [1, 2, 3]}
+    ws.pln = PhotonPlan(
+        prop_stf={"gantry_angles": [0.0], "couch_angles": [0.0], "bixel_width": 5.0},
+        prop_dose_calc={"engine": "SVDPB", "kernel_cutoff": 60.0, **hidden},
+    )
+    assert widget._engine_props["SVDPB"] == {"kernel_cutoff": 60.0}
+
+    shown = {}
+
+    def accept(self):
+        shown["editors"] = set(self.form._editors)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", accept)
+    widget._on_engine_config()
+    assert not shown["editors"] & ENGINE_FORM_EXCLUDE
+    assert "kernel_cutoff" in shown["editors"]
+    assert widget._engine_props["SVDPB"] == {"kernel_cutoff": 60.0}
+    assert not widget.has_pending_changes()
+
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"kernel_cutoff": 40.0})
+    widget._on_engine_config()
+    assert widget.has_pending_changes()
+    widget._on_apply()
+    assert not widget._status_is_error, widget._lbl_status.text()
+    prop = ws.pln.prop_dose_calc
+    assert prop["kernel_cutoff"] == 40.0
+    assert {k: prop[k] for k in hidden} == hidden
+
+
+def test_scenario_config_button_stores_the_dialog_values(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    widget, _ = _make_widget()
+    select_identifier(widget._cmb_scenario, "wcScen")
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 2.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+    assert widget.has_pending_changes()
+
+    # cancelling keeps the stored values
+    monkeypatch.setattr(ConfigFormDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(ConfigFormDialog, "values", lambda self: {"wc_sigma": 9.0})
+    widget._on_scenario_config()
+    assert widget._scenario_props["wcScen"] == {"wc_sigma": 2.0}
+
+    # a model name without a class has nothing to configure
+    widget._cmb_scenario.addItem("noSuchModel", "noSuchModel")
+    select_identifier(widget._cmb_scenario, "noSuchModel")
+    widget._on_scenario_config()
+    assert "noSuchModel" not in widget._scenario_props
+
+
+def test_scenario_overrides_drop_dimensions_without_parameters():
+    from pyRadPlan.scenarios import WorstCaseScenarioModel
+
+    model = WorstCaseScenarioModel(setup={}, range={"rel_sd": 0.0}, wc_sigma=2.0)
+    assert PlanWidget._scenario_overrides(model) == {"wc_sigma": 2.0, "range": {"rel_sd": 0.0}}
+
+
+def _explicit_scenario_plan():
+    from pyRadPlan.scenarios import ScenarioSet, SetupUncertainty
+
+    scenario_set = ScenarioSet.from_points(
+        dimensions=[SetupUncertainty()], points={"setup": [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]}
+    )
+    return PhotonPlan(scenarios=scenario_set), scenario_set
+
+
+def test_apply_keeps_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    pln, scenario_set = _explicit_scenario_plan()
+    ws.pln = pln
+
+    assert widget._cmb_scenario.currentData() == "explicit"
+    assert not widget._btn_scenario_config.isEnabled()
+    assert not widget.has_pending_changes()
+
+    widget._spn_fractions.setValue(widget._spn_fractions.value() + 1)
+    widget._on_apply()
+
+    assert ws.pln.scenarios.short_name == "explicit"
+    assert ws.pln.scenarios.scenario_set == scenario_set
+    assert ws.pln.num_of_fractions == widget._spn_fractions.value()
+    assert widget._cmb_scenario.currentData() == "explicit"
+
+
+def test_selecting_another_model_replaces_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+
+    select_identifier(widget._cmb_scenario, "wcScen")
+    assert widget._btn_scenario_config.isEnabled()
+    assert widget.has_pending_changes()
+
+    widget._on_apply()
+    assert ws.pln.scenarios.short_name == "wcScen"
+    assert widget._cmb_scenario.findData("explicit") < 0
+
+
+def test_discard_returns_to_an_explicit_scenario_set(qapp):
+    widget, ws = _make_widget()
+    ws.pln, scenario_set = _explicit_scenario_plan()
+
+    select_identifier(widget._cmb_scenario, "wcScen")
+    widget._btn_discard.click()
+
+    assert widget._cmb_scenario.currentData() == "explicit"
+    assert not widget.has_pending_changes()
+    assert ws.pln.scenarios.scenario_set == scenario_set
+
+
+def test_explicit_scenario_entry_leaves_with_its_plan(qapp):
+    widget, ws = _make_widget()
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = PhotonPlan()
+    assert widget._cmb_scenario.currentData() == "nomScen"
+    assert widget._cmb_scenario.findData("explicit") < 0
+    assert widget._btn_scenario_config.isEnabled()
+
+    ws.pln, _ = _explicit_scenario_plan()
+    ws.pln = None
+    assert widget._cmb_scenario.currentData() == "nomScen"
+    assert widget._cmb_scenario.findData("explicit") < 0
+    assert _form_plan(widget).scenarios.short_name == "nomScen"
+
+
+def test_engine_dialog_does_not_wait_for_the_engine_suggestions(qapp, monkeypatch):
+    """``config_choices`` may go online: it runs off the GUI thread, the dialog opens at once."""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QDialog
+
+    from pyRadPlan.dose.engines import AIBeamletEngine
+    from pyRadPlan.gui.widgets import ConfigFormDialog
+
+    release = threading.Event()
+    calls = []
+
+    class _SlowEngine(AIBeamletEngine):
+        @classmethod
+        def config_choices(cls, radiation_mode=None):
+            calls.append((threading.current_thread(), radiation_mode))
+            release.wait(10)
+            return {"model": ["org/a", "org/b"]}
+
+    def pump(predicate, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        return predicate()
+
+    widget, _ = _make_widget()
+    widget._cmb_radiation.setCurrentText("protons")
+    select_identifier(widget._cmb_engine, "AIBeamlet")
+    widget._engines["AIBeamlet"] = _SlowEngine
+    shown = []
+
+    def first_exec(self):
+        model = self.form._editors["model"]
+        shown.append(type(model).__name__)
+        assert pump(lambda: bool(calls))
+        assert calls[0][0] is not threading.main_thread()
+        assert calls[0][1] == "protons"
+        release.set()
+        assert pump(lambda: self.form._editors["model"].property("suggestions") is True)
+        self.form._editors["model"].setCurrentText("org/b")
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", first_exec)
+    widget._on_engine_config()
+    assert shown == ["QLineEdit"]
+    assert widget._engine_props["AIBeamlet"] == {"model": "org/b"}
+
+    # reopened, the dialog shows the suggestions found before, while it looks up new ones
+    release.clear()
+
+    def second_exec(self):
+        combo = self.form._editors["model"]
+        items = [combo.itemText(i) for i in range(combo.count())]
+        shown.append((items, combo.currentText()))
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(ConfigFormDialog, "exec", second_exec)
+    widget._on_engine_config()
+    release.set()
+    assert shown[1] == (["", "org/a", "org/b"], "org/b")
+    assert pump(lambda: len(calls) == 2)

@@ -597,3 +597,68 @@ def test_cancelled_drag_snaps_back(qapp, test_data_photons, monkeypatch):
     assert widget.ref_vols_edit.text() == before
     assert widget.dvh_widget.highlighted() == (name, "D98")
     assert widget.dvh_widget.parameter_line.value() == 98.0
+
+
+def _scenario_widget(scenario_labels=None):
+    """Dose of a nominal and two perturbed scenarios (index 2 left out) in two structures."""
+    base = np.linspace(0.0, 2.0, 64).reshape(4, 4, 4)
+    quantities = {"physical_dose": base, "physical_dose_beam 0": base}
+    for i, scale in ((0, 1.0), (1, 0.9), (3, 1.1)):
+        quantities[f"physical_dose_scenario {i}"] = scale * base
+    quantities["let"] = base
+    masks = {"PTV": base > 1.0, "OAR": base <= 1.0}
+    widget = AnalysisWidget()
+    widget.set_data(
+        quantities=quantities,
+        masks=masks,
+        voi_colors={"PTV": (255, 0, 0), "OAR": (0, 0, 255)},
+        initial_quantity="physical_dose",
+        scenario_labels=scenario_labels,
+    )
+    return widget
+
+
+def test_all_scenarios_overlays_one_curve_per_scenario_and_structure(qapp):
+    widget = _scenario_widget()
+    checkbox = widget.all_scenarios_checkbox
+    assert not checkbox.isHidden() and not checkbox.isChecked()
+    assert widget.dvh_widget.band_items == []
+
+    checkbox.setChecked(True)
+
+    band = widget.dvh_widget.band_items
+    assert len(band) == 3 * 2
+    primary = {curve.name: curve.color for curve in widget.dvh_widget.shown_plot.curves}
+    assert all(curve.color == primary[curve.name] for curve, _ in band)
+    assert all(item.zValue() < 0 for _, item in band)
+    assert len(widget.dvh_widget.curve_items) == 2
+
+    checkbox.setChecked(False)
+    assert widget.dvh_widget.band_items == []
+
+
+def test_all_scenarios_is_offered_for_quantities_with_scenarios_only(qapp):
+    widget = _scenario_widget()
+    widget.all_scenarios_checkbox.setChecked(True)
+
+    widget.quantity_selector.set_current_key("let")
+    assert widget.all_scenarios_checkbox.isHidden()
+    assert widget.dvh_widget.band_items == []
+
+    # A single scenario as primary still shows the band of its quantity.
+    widget.quantity_selector.set_current_key("physical_dose_scenario 1")
+    assert not widget.all_scenarios_checkbox.isHidden()
+    assert len(widget.dvh_widget.band_items) == 3 * 2
+
+
+def test_analysis_widget_labels_scenarios(qapp):
+    widget = _scenario_widget(["nominal", "setup (+3.0, 0.0, 0.0) mm"])
+    combo = widget.quantity_selector.component_combo
+    items = [combo.itemText(i) for i in range(combo.count())]
+    assert items == [
+        "full",
+        "beam 0",
+        "scenario 0: nominal",
+        "scenario 1: setup (+3.0, 0.0, 0.0) mm",
+        "scenario 3",
+    ]

@@ -211,3 +211,17 @@ def test_union_with_dict_stays_dict():
     a.apply_config({"legacy_attr": {"resolution": {"x": 1}}})
     assert isinstance(a.legacy_attr, dict)
     assert a.legacy_attr["resolution"] == {"x": 1}
+
+
+def test_replace_nested_rejects_unknown_fields_and_type_objects():
+    from pydantic import BaseModel
+
+    from pyRadPlan.core._configurable import is_nested_instance, replace_nested
+
+    class Opts(BaseModel):
+        a: int = 1
+
+    assert replace_nested(Opts(), {"a": 2}).a == 2
+    with pytest.raises(TypeError, match="no field"):
+        replace_nested(Opts(), {"b": 2})
+    assert not is_nested_instance(Opts)

@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+from collections.abc import Mapping
 from typing import Any, Iterable, Optional
 
 from pyRadPlan.dij import Dij
@@ -39,6 +40,18 @@ class QuantityResolver:
     - Otherwise mode is ``"indirect"``; both ``required_dependencies`` and
       ``optional_dependencies`` are resolved recursively.
     - If neither path is available, a ``ValueError`` is raised.
+
+    Parameters
+    ----------
+    dij : Dij
+        The dose influence data.
+    scenarios : sequence of int or mapping of str to sequence of int, optional
+        Scenario indices every resolved quantity computes, or per requested instance key (see
+        :meth:`key`; the bare identifier for an unparameterized quantity) the indices that
+        quantity computes. With a mapping, :meth:`resolve` widens every
+        dependency to the union of its consumers' scenarios (plus its own entry), so that a
+        consumer never reads a scenario its dependency did not evaluate; quantities neither
+        listed nor used by a listed one compute their default scenarios.
     """
 
     def __init__(
@@ -124,7 +137,11 @@ class QuantityResolver:
             mode = self._choose_mode(cls, identifier)
             deps = self._resolve_dependencies(cls, mode)
             inst = cls(
-                self._dij, mode=mode, dependencies=deps, scenarios=self._scenarios, **kwargs
+                self._dij,
+                mode=mode,
+                dependencies=deps,
+                scenarios=self._scenarios_of(key),
+                **kwargs,
             )
         finally:
             self._resolving.discard(identifier)
@@ -132,9 +149,56 @@ class QuantityResolver:
         self._instances[key] = inst
         return inst
 
-    def resolve(self, identifiers: Iterable[str]) -> list[FluenceDependentQuantity]:
-        """Resolve every identifier and return them in input order."""
-        return [self.get(i) for i in identifiers]
+    @property
+    def scenarios(self):
+        """Scenario indices for all quantities, or a mapping of instance key to indices."""
+        return self._scenarios
+
+    @scenarios.setter
+    def scenarios(self, value) -> None:
+        self._scenarios = value
+
+    def resolve(
+        self,
+        identifiers: Iterable[str],
+        params: Optional[Iterable[Optional[dict[str, Any]]]] = None,
+    ) -> list[FluenceDependentQuantity]:
+        """
+        Resolve every identifier and return them in input order.
+
+        *params* optionally gives, per identifier, the objective parameters passed to
+        :meth:`get`.
+        """
+        identifiers = list(identifiers)
+        params = [None] * len(identifiers) if params is None else list(params)
+        resolved = [self.get(i, p) for i, p in zip(identifiers, params, strict=True)]
+        if isinstance(self._scenarios, Mapping):
+            self._propagate_scenarios()
+        return resolved
+
+    def _scenarios_of(self, key: str):
+        if isinstance(self._scenarios, Mapping):
+            return self._scenarios.get(key)
+        return self._scenarios
+
+    def _propagate_scenarios(self) -> None:
+        """Give each dependency the union of its consumers' scenarios and its own entry."""
+        needed = {
+            identifier: {int(i) for i in self._scenarios[identifier]}
+            for identifier in self._instances
+            if identifier in self._scenarios
+        }
+        # Instances are stored after their dependencies, so consumers come first in reverse.
+        for identifier, quantity in reversed(self._instances.items()):
+            if identifier not in needed:
+                continue
+            for dep_id in quantity.dependencies:
+                needed.setdefault(dep_id, set()).update(needed[identifier])
+        for identifier, indices in needed.items():
+            quantity = self._instances[identifier]
+            scenarios = sorted(indices)
+            if quantity.scenarios.tolist() != scenarios:
+                quantity.scenarios = scenarios
 
     def reachable(
         self, roots: Iterable[FluenceDependentQuantity]

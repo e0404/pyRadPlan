@@ -17,6 +17,7 @@ in :ref:`quickstart`.
     patient_data
     steering
     dose_calculation
+    uncertainty
     optimization
     quantities
     visualization
@@ -31,8 +32,7 @@ in :ref:`quickstart`.
     IonPlan / PhotonPlan    →  Plan                  (plan)
     generate_stf()          →  SteeringInformation   (steering)
     calc_dose_influence()   →  Dij                   (dose_calculation)
-    fluence_optimization()  →  fluence array         (optimization)
-    dij.compute_result_*()  →  dose result dict      (quantities)
+    fluence_optimization()  →  PlanResult            (optimization)
     plot_slice()            →  figure                (visualization)
 
     # optional AI-assisted steps

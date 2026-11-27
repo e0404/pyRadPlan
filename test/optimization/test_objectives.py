@@ -89,6 +89,58 @@ def test_get_objective_matrad_dict_not_mutated():
     assert desc["parameters"] == [30.0]  # caller's input untouched
 
 
+def test_get_objective_matrad_eud_without_f_diff():
+    """The matRad EUD stores only ``EUD^{ref}`` and ``k``; ``f_diff`` keeps its default."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_EUD", "parameters": [0, 5], "penalty": 100}
+    )
+    assert isinstance(obj, EUD)
+    assert obj.eud_ref == 0.0
+    assert obj.k == 5.0
+    assert obj.f_diff == "quadratic"
+    assert obj.priority == 100.0
+
+
+@pytest.mark.parametrize(
+    "f_diff, expected",
+    [(1, "linear"), (2.0, "quadratic"), (np.uint8(2), "quadratic"), ("Linear", "linear")],
+)
+def test_get_objective_matrad_choice_parameter(f_diff, expected):
+    """Choice parameters are stored by matRad as one-based indices into their options."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_MeanDose", "parameters": [0, f_diff], "penalty": 1}
+    )
+    assert obj.f_diff == expected
+
+
+@pytest.mark.parametrize(
+    "params, d_ref, f_diff",
+    [
+        ([-5.0, 1], 0.0, "linear"),
+        ([2.0, 3], 2.0, "quadratic"),
+        ([2.0, 1.5], 2.0, "quadratic"),
+        ([2.0, "cubic"], 2.0, "quadratic"),
+        (["abc", 1], 0.0, "linear"),
+    ],
+)
+def test_get_objective_matrad_invalid_parameter_uses_default(params, d_ref, f_diff, caplog):
+    """An invalid matRad parameter value falls back to the field default with a warning."""
+    obj = get_objective(
+        {"className": "DoseObjectives.matRad_MeanDose", "parameters": params, "penalty": 1}
+    )
+    assert (obj.d_ref, obj.f_diff) == (d_ref, f_diff)
+    assert "invalid value" in caplog.text
+
+
+@pytest.mark.parametrize("f_diff, index", [("linear", 1), ("quadratic", 2)])
+def test_to_matrad_choice_parameter_roundtrip(f_diff, index):
+    """Choice parameters export as matRad indices and import back unchanged."""
+    obj = MeanDose(d_ref=1.0, f_diff=f_diff)
+    exported = obj.to_matrad()
+    assert exported["parameters"] == [1.0, index]
+    assert get_objective(exported).f_diff == f_diff
+
+
 def test_get_objective_numpy_struct_scalar():
     """A scipy-loaded numpy structured scalar validates like a dict."""
     desc = np.array(
@@ -385,6 +437,69 @@ def test_MaxDVH_compute_gradient():
     grad_expected2 = xp.ones(100) * 0.4
     assert xp.all(max_dvh.compute_gradient(dose) == grad_expected)
     assert xp.all(max_dvh.compute_gradient(dose_2) == grad_expected2)
+
+
+@pytest.mark.skipif(not xp_utils.cupy_available(), reason="CuPy / CUDA is not available.")
+@pytest.mark.parametrize(
+    "objective",
+    [
+        SquaredDeviation(d_ref=1.0),
+        SquaredOverdosing(d_max=0.5),
+        SquaredUnderdosing(d_min=1.5),
+        MeanDose(),
+        EUD(),
+        MinDVH(),
+        MaxDVH(),
+        DoseUniformity(),
+    ],
+    ids=lambda obj: obj.name,
+)
+def test_objectives_keep_float32_on_cupy(objective):
+    """cupy promotes ``float32 / <large int>`` to float64 (NumPy does not); normalize by floats."""
+    import cupy as cp
+
+    values = cp.linspace(0.0, 2.0, 200_000, dtype=cp.float32)
+    assert objective.compute_objective(values).dtype == cp.float32
+    assert objective.compute_gradient(values).dtype == cp.float32
+
+
+@pytest.mark.skipif(not xp_utils.cupy_available(), reason="CuPy / CUDA is not available.")
+def test_variance_keeps_float32_on_cupy():
+    import cupy as cp
+
+    from pyRadPlan.optimization.objectives import Variance
+
+    values = cp.stack([cp.linspace(0.0, 2.0, 200_000, dtype=cp.float32) * s for s in (1, 2, 3)])
+    assert Variance().compute_objective(values).dtype == cp.float32
+    assert Variance().compute_gradient(values).dtype == cp.float32
+
+
+@pytest.mark.parametrize("dtype", [xp.float32, xp.float64])
+def test_SquaredOverdosing_value_gradient_and_dtype(dtype):
+    dose = xp.asarray([10.0, 30.0, 35.0, 50.0], dtype=dtype)
+    obj = SquaredOverdosing(d_max=30.0)
+
+    value = obj.compute_objective(dose)
+    gradient = obj.compute_gradient(dose)
+
+    assert value.dtype == dtype
+    assert gradient.dtype == dtype
+    assert float(value) == pytest.approx((25.0 + 400.0) / 4)
+    np.testing.assert_allclose(np.asarray(gradient), [0.0, 0.0, 2.5, 10.0])
+
+
+@pytest.mark.parametrize("dtype", [xp.float32, xp.float64])
+def test_SquaredUnderdosing_value_gradient_and_dtype(dtype):
+    dose = xp.asarray([10.0, 55.0, 60.0, 80.0], dtype=dtype)
+    obj = SquaredUnderdosing(d_min=60.0)
+
+    value = obj.compute_objective(dose)
+    gradient = obj.compute_gradient(dose)
+
+    assert value.dtype == dtype
+    assert gradient.dtype == dtype
+    assert float(value) == pytest.approx((2500.0 + 25.0) / 4)
+    np.testing.assert_allclose(np.asarray(gradient), [-25.0, -2.5, 0.0, 0.0])
 
 
 def test_polo_objectives():

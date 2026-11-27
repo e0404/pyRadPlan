@@ -3,8 +3,10 @@
 Briefcase starts this module instead of the app and reads the result from the
 ``>>>>>>>>>> EXIT <code> <<<<<<<<<<`` line, so no test framework is needed in
 the bundle. The test exercises the pieces most likely to break when pyRadPlan
-runs from an installed, read-only bundle: importing the package, loading the
-bundled TG119 phantom, a small photon dose calculation, a short optimization and
+runs from an installed, read-only bundle: on Windows, the C++ runtime shipped next to
+the executable being the one in use, importing the package, loading the
+bundled TG119 phantom, a small photon dose calculation, a short optimization,
+loading a phantom of matRad that the app ships (when the build downloaded them) and
 constructing the main window offscreen.
 """
 
@@ -22,6 +24,30 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("TQDM_DISABLE", "1")
 
 
+def _check_msvc_runtime():
+    # Runs first: SimpleITK links msvcp140.dll by name, which must resolve to the copy that
+    # scripts/run_briefcase.py places next to the executable, not to the system's.
+    if sys.platform != "win32":
+        print("not on Windows, skipped")
+        return
+    import ctypes
+    from pathlib import Path
+
+    import SimpleITK  # noqa: F401
+
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel32.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
+    handle = kernel32.GetModuleHandleW("msvcp140.dll")
+    assert handle, "msvcp140.dll not loaded by SimpleITK"
+    buf = ctypes.create_unicode_buffer(1024)
+    kernel32.GetModuleFileNameW(handle, buf, 1024)
+    loaded = Path(buf.value).resolve()
+    assert loaded.parent == Path(sys.executable).resolve().parent, loaded
+    print(f"msvcp140.dll from {loaded}")
+
+
 def _check_import():
     import pyRadPlan
 
@@ -35,6 +61,7 @@ def _check_import():
 
 def _check_dose_and_optimization():
     import numpy as np
+    import SimpleITK as sitk
     from pyRadPlan import (
         PhotonPlan,
         calc_dose_influence,
@@ -58,14 +85,38 @@ def _check_dose_and_optimization():
     print(f"dij: {dij.num_of_voxels} voxels x {dij.total_num_of_bixels} bixels")
 
     opt_info = {}
-    weights = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
-    dose = np.asarray(dij.compute_result_ct_grid(weights)["physical_dose"])
+    result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+    dose = sitk.GetArrayFromImage(result["physical_dose"].values)
     assert np.isfinite(dose).all() and dose.max() > 0
     print(f"optimized {opt_info.get('num_iter')} iterations: max dose {dose.max():.3g} Gy")
 
 
+MATRAD_PHANTOMS = ["BOXPHANTOM", "HEAD_AND_NECK", "LIVER", "PROSTATE"]
+
+
+def _check_matrad_phantoms():
+    from pyradplan_app.app import BASE_DATA, add_bundled_base_data
+
+    if not BASE_DATA.is_dir():
+        print(f"no matRad phantoms in the bundle ({BASE_DATA}), skipped")
+        return
+    add_bundled_base_data()
+
+    from pyRadPlan import validate_cst, validate_ct
+    from pyRadPlan.io import available_phantoms, load_data, phantom_path
+
+    names = available_phantoms()
+    assert set(MATRAD_PHANTOMS) <= set(names), names
+    data = load_data(phantom_path("HEAD_AND_NECK"))
+    ct = validate_ct(data["ct"])
+    cst = validate_cst(data["cst"], ct=ct)
+    print(f"HEAD_AND_NECK: CT {ct.size}, {len(cst.vois)} structures")
+
+
 def _check_main_window():
     from PySide6.QtWidgets import QApplication
+
+    from pyradplan_app.app import BASE_DATA
 
     from pyRadPlan.gui.windows._main_win import MainWindow
     from pyRadPlan.gui.workspace import WorkspaceManager
@@ -80,6 +131,8 @@ def _check_main_window():
 
     phantoms = {a.text(): a for a in win._file_menu._phantom_menu.actions()}
     assert "TG119" in phantoms, list(phantoms)
+    if BASE_DATA.is_dir():
+        assert set(MATRAD_PHANTOMS) <= set(phantoms), list(phantoms)
     phantoms["TG119"].trigger()
     deadline = time.monotonic() + 120
     while not workspace.has("ct", "cst") and time.monotonic() < deadline:
@@ -94,7 +147,13 @@ def _check_main_window():
 
 def main() -> int:
     """Run each bundled check and return a failure status if any check raises."""
-    checks = [_check_import, _check_dose_and_optimization, _check_main_window]
+    checks = [
+        _check_msvc_runtime,
+        _check_import,
+        _check_dose_and_optimization,
+        _check_matrad_phantoms,
+        _check_main_window,
+    ]
     for check in checks:
         name = check.__name__.lstrip("_")
         print(f"--- {name}", flush=True)

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Annotated, Any, Optional, Union, ClassVar
 import logging
 
@@ -12,7 +13,7 @@ from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.stf import SteeringInformation, validate_stf
 from pyRadPlan.dij import Dij, validate_dij
-from pyRadPlan.scenarios import ScenarioModel
+from pyRadPlan.scenarios import NominalScenarioModel, ScenarioModel, ScenarioSet
 from pyRadPlan.quantities import (
     RBExDose,
     RTQuantity,
@@ -21,6 +22,14 @@ from pyRadPlan.quantities import (
 )
 
 from ..objectives import get_objective
+from ..robustness import (
+    RobustnessOptions,
+    RobustTerm,
+    build_robust_terms,
+    get_robustness_operator_class,
+    voi_linear_mask,
+    voi_phase_masks,
+)
 from ..solvers import get_available_solvers, get_solver, SolverBase
 from ...core import AlgorithmParameterMetadata, ConfigurableAlgorithm, ProgressReporter, xp_utils
 
@@ -62,6 +71,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         when the dose influence data carries a biological model, skipped when objectives
         already use a biological quantity. Set to ``False`` to use every objective's
         quantity literally.
+    evaluate_all_scenarios : bool, default=False
+        Evaluate every scenario of the dose influence data's set in every quantity. By default
+        a quantity evaluates only the scenarios its objectives need (a ``robustness="none"``
+        objective the nominal scenario, a worst-case objective all of them).
     """
 
     # Constant, Abstract properties are realized as ClassVars
@@ -97,22 +110,24 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     solver: Union[str, dict, SolverBase] = "ipopt"
     obj_history: Annotated[Optional[list], AlgorithmParameterMetadata(configurable=False)] = None
     convert_dose_objectives: bool = True
+    evaluate_all_scenarios: bool = False
 
     # Private properties
     _ct: CT
     _cst: StructureSet
     _stf: SteeringInformation
     _dij: Dij
-    _mult_scen: ScenarioModel
+    _scenarios: ScenarioModel
 
     _objective_list: list[tuple]
     _objective_voi_names: list[str]
     _constraint_list: list
+    _terms: list[RobustTerm]
+    _scenario_set: ScenarioSet
 
     _quantities: list[RTQuantity]
     _quantities_by_key: dict[str, RTQuantity]
-    _objective_keys: list[str]
-    _q_cache_index: list[int]
+    _q_cache_index: list[dict[str, int]]
     _objectives_per_quantity: dict[str, list[int]]
     _num_objectives: int
     _solver_explicit: bool
@@ -125,7 +140,6 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     def __init__(self, pln: Union[Plan, dict] = None):
         super().__init__()
 
-        self._scenario_model = None
         self._solver_explicit = False
         self._init_config_defaults()
 
@@ -212,7 +226,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         self._dose_convention = pln.dose_convention
 
         # Set Scenario Model
-        self._mult_scen = pln.mult_scen
+        self._scenarios = pln.scenarios
 
         # Assign Biologival Model
         if hasattr(pln, "bio_param"):
@@ -263,8 +277,20 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     def _solve(self) -> tuple[Array, dict]:
         """Solve the planning problem."""
 
-    def _collect_objectives(self) -> tuple[list[tuple], list[str]]:
-        """Parse VOI objectives into (mask, objectives) pairs and collect quantity identifiers."""
+    def _collect_objectives(self) -> tuple[list[tuple], list[tuple], list[str]]:
+        """
+        Parse the VOI objectives.
+
+        Returns
+        -------
+        voi_objectives : list[tuple]
+            ``(voi, objectives)`` pairs holding the problem's converted, preprocessed copies.
+        objectives : list[tuple]
+            The same as ``(mask, objectives)`` pairs, ``mask`` being the VOI's linear mask on
+            the dose grid.
+        quantity_ids : list[str]
+            The quantity of every objective.
+        """
         voi_objectives: list[tuple] = []
         for voi in self._cst.vois:
             valid_objectives = [
@@ -289,13 +315,18 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         objectives: list[tuple] = []
         quantity_ids: list[str] = []
         for voi, objs in voi_objectives:
-            cube_ix = voi.indices_numpy
-            linear_mask = np.zeros(voi.mask.GetNumberOfPixels(), dtype=np.bool_)
-            linear_mask[cube_ix] = True
+            cube_ix = voi.scenario_indices(0, order="numpy")
+            linear_mask = voi_linear_mask(voi)
             for obj in objs:
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
+                if obj._resampled_image_reference_cache and voi_phase_masks(voi):
+                    raise NotImplementedError(
+                        f"Objective {obj.name!r} on {voi.name!r} has an image reference, which "
+                        "is cached on one contour, but the structure's contours differ between "
+                        "the CT phases"
+                    )
             if self._dose_convention == "total":
                 for obj in objs:
                     obj.normalize_to_fraction_num(self._num_of_fractions)
@@ -303,7 +334,47 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             quantity_ids.extend([obj.quantity for obj in objs])
         self._objective_voi_names = [voi.name for voi, _ in voi_objectives]
 
-        return objectives, quantity_ids
+        return voi_objectives, objectives, quantity_ids
+
+    def _robustness_options(self) -> RobustnessOptions:
+        """Options handed to every robustness operator of the problem."""
+        return RobustnessOptions()
+
+    def _problem_scenarios(self, voi_objectives: list[tuple]) -> ScenarioSet:
+        """
+        Scenario set the robustness operators evaluate.
+
+        The dij's set; without one, an implicit nominal set whose single scenario is slot 0.
+        A dij with several scenario slots but no set is accepted only for non-robust
+        objectives, which then use slot 0 as their nominal scenario.
+        """
+        scenarios = getattr(self._dij, "scenarios", None)
+        if scenarios is not None:
+            return scenarios
+        slots = RTQuantity.default_scenarios(self._dij)
+        if len(slots) > 1:
+            names = {
+                get_robustness_operator_class(
+                    "scenario_stack" if obj.scenario_aware else obj.robustness
+                ).name
+                for _, objs in voi_objectives
+                for obj in objs
+            }
+            robust = sorted(names - {"none"})
+            if robust:
+                raise ValueError(
+                    f"The dose influence data has {len(slots)} scenario slots but no scenario "
+                    f"set, which the robust objectives ({', '.join(robust)}) need for the "
+                    "scenarios' meaning and weights. Attach one with Dij.attach_scenarios()."
+                )
+            message = (
+                f"The dose influence data has {len(slots)} scenario slots but no scenario set; "
+                "the non-robust objectives use slot 0 as the nominal scenario. Attach a set "
+                "with Dij.attach_scenarios() to optimize robustly."
+            )
+            logger.warning(message)
+            self.report_warning(message)
+        return NominalScenarioModel().scenarios()
 
     def _convert_dose_objectives(self, objectives: list) -> None:
         """Legacy plan-wide conversion of physical-dose objectives to the biological dose.
@@ -347,8 +418,61 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         logger.warning(message)
         self.report_warning(message)
 
+    def _dij_tissue_columns(self, values: np.ndarray) -> np.ndarray:
+        """Arrange per-CT-phase voxel parameters in the Dij's columns, like the dose engines."""
+        num_phases = self._ct.num_of_ct_scen
+        # a structure set without per-phase structures serves every CT phase
+        if num_phases > 1 and values.shape[1] == 1:
+            values = np.repeat(values, num_phases, axis=1)
+        scenarios = self._dij.scenarios
+        if scenarios is None:
+            return values
+        phases = scenarios.voxel_param_ct_phases()
+        if phases and max(phases) < values.shape[1]:
+            return values[:, phases]
+        return values
+
+    def _check_tissue_data_matches_dij(self) -> None:
+        """Raise if the Dij's reference alpha_x / beta_x differ from the structure set's.
+
+        The values are built with :meth:`StructureSet.get_tissue_data`, like the dose
+        engines do, so a Dij calculated with this structure set always matches.
+        """
+        if getattr(self._dij, "alphax", None) is None:
+            return
+        ax, bx, _, _ = self._cst.get_tissue_data(resample_grid=self._dij.dose_grid)
+        expected = {
+            "alphax": self._dij_tissue_columns(ax),
+            "betax": self._dij_tissue_columns(bx),
+        }
+        mismatched = []
+        for name, reference in expected.items():
+            stored = getattr(self._dij, name, None)
+            if stored is None:
+                continue
+            stored = xp_utils.to_numpy(stored)
+            # a Dij stored at lower precision holds the rounded structure set values
+            values = (
+                reference.astype(stored.dtype)
+                if np.issubdtype(stored.dtype, np.floating)
+                else reference
+            )
+            if stored.shape != values.shape:
+                mismatched.append(f"{name} (shape {stored.shape} vs {values.shape})")
+            elif not np.array_equal(stored, values):
+                num_voxels = int(np.any(stored != values, axis=1).sum())
+                mismatched.append(f"{name} ({num_voxels} voxels)")
+        if mismatched:
+            raise ValueError(
+                "Inconsistency between the biological tissue parameters of the structure set "
+                f"and the Dij: {', '.join(mismatched)} differ. Recalculate the Dij with this "
+                "structure set."
+            )
+
     def _initialize(self):
         """Initialize the data for the planning problem."""
+
+        self._check_tissue_data_matches_dij()
 
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)
@@ -362,18 +486,12 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             self._cst = self._cst.apply_overlap_priorities()
 
         self._cst = self._cst.resample_on_new_ct(self._ct)
-
-        # check consistency of bio models and dij
-        if getattr(self._dij, "alphax", None) is not None:
-            [ax, bx] = self._cst.get_reference_lq_params(True, self._dij.dose_grid)
-            if not np.array_equal(ax, self._dij.alphax) or not np.array_equal(bx, self._dij.betax):
-                logger.error(
-                    "Inconsistency found in bio parameters between biologocal reference alpha and beta parameters in CST and Dij."
-                )
         if self._dose_convention == "total":
             logger.info(
-                "Objective doses are interpreted as total-course doses (dose_convention='total'); "
-                "scaling reference doses by 1/%d for the per-fraction optimization.",
+                "Objective references are interpreted for the total course "
+                "(dose_convention='total'); converting them to one of %d fractions for the "
+                "per-fraction optimization (doses and effects / n, sqrt_beta_dose / sqrt(n), "
+                "LET unchanged).",
                 self._num_of_fractions,
             )
         else:
@@ -381,16 +499,20 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                 "Objective doses are interpreted per fraction (dose_convention='per_fraction')."
             )
         # sanitize objectives and constraints and manage required quantities
-        objectives, _ = self._collect_objectives()
+        voi_objectives, objectives, _ = self._collect_objectives()
         self._objective_list = objectives
+        self._scenario_set = self._problem_scenarios(voi_objectives)
+        self._terms = build_robust_terms(
+            voi_objectives,
+            self._scenario_set,
+            self._robustness_options(),
+        )
 
-        # Resolve all requested quantities (plus their transitive dependencies) through a
-        # shared resolver so that any quantity referenced by multiple roots is instantiated
-        # exactly once. Only the quantities the requested ones actually use are evaluated.
         # Quantities receive problem-level context (and parameters their objectives opt into)
         # through dependency injection on their ``__init__`` signature. Objectives setting
         # such parameters differently (e.g. NTCPPOLO with two risk structures) get independent
-        # instances, which still share their dependencies.
+        # instances, which still share their dependencies. Terms therefore address their
+        # quantities by instance key rather than by bare identifier.
         context = {
             "cst": cst_unmodified,
             "ct": self._ct,
@@ -398,15 +520,46 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             "num_of_fractions": self._num_of_fractions,
         }
         resolver = QuantityResolver(self._dij, context=context)
+        requests: dict[str, tuple[str, dict[str, Any]]] = {}
         voi_keys: list[list[str]] = []
-        roots = []
+        objective_keys: dict[int, str] = {}
         for _, objs in self._objective_list:
             voi_keys.append([])
             for obj in objs:
                 params = {p: getattr(obj, p) for p in type(obj).quantity_params}
-                voi_keys[-1].append(resolver.key(obj.quantity, params))
-                roots.append(resolver.get(obj.quantity, params))
-        self._objective_keys = [key for keys in voi_keys for key in keys]
+                key = resolver.key(obj.quantity, params)
+                requests.setdefault(key, (obj.quantity, params))
+                voi_keys[-1].append(key)
+                objective_keys[id(obj)] = key
+        for term in self._terms:
+            term.items = [
+                replace(item, quantity=objective_keys[id(item.objective)]) for item in term.items
+            ]
+
+        # Every quantity computes the scenarios its terms need (a dependency the union of its
+        # consumers'), so a non-robust objective evaluates the nominal scenario only.
+        quantity_scenarios: dict[str, set[int]] = {}
+        for term in self._terms:
+            for key in term.quantities:
+                quantity_scenarios.setdefault(key, set()).update(term.scenario_indices)
+        if self.evaluate_all_scenarios:
+            for indices in quantity_scenarios.values():
+                indices.update(range(len(self._scenario_set)))
+        if len(self._scenario_set) > 1:
+            logger.info(
+                "Scenarios evaluated per quantity: %s (set has %d scenario(s))",
+                {k: sorted(v) for k, v in quantity_scenarios.items()},
+                len(self._scenario_set),
+            )
+
+        # Resolve all requested quantities (plus their transitive dependencies) through a
+        # shared resolver so that any quantity referenced by multiple roots is instantiated
+        # exactly once. Only the quantities the requested ones actually use are evaluated.
+        resolver.scenarios = {k: sorted(v) for k, v in quantity_scenarios.items()}
+        roots = resolver.resolve(
+            [requests[key][0] for key in quantity_scenarios],
+            [requests[key][1] for key in quantity_scenarios],
+        )
         self._quantities = resolver.reachable(roots)
         self._quantities_by_key = {
             key: q
@@ -433,14 +586,18 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                 "Inconsistent array backends used in quantities. Decide on one (e.g. numpy)"
             )
 
-        # obtain cache info to match quantities with objectives
+        # Match quantities with terms: per quantity the terms reading it (one cache row each,
+        # also for a composite term with several items on it), per term its row per quantity.
         self._q_cache_index = []
         self._objectives_per_quantity = {key: [] for key in self._quantities_by_key}
-        for obj_ix, key in enumerate(self._objective_keys):
-            self._q_cache_index.append(len(self._objectives_per_quantity[key]))
-            self._objectives_per_quantity[key].append(obj_ix)
+        for term_ix, term in enumerate(self._terms):
+            rows = {}
+            for key in term.quantities:
+                rows[key] = len(self._objectives_per_quantity[key])
+                self._objectives_per_quantity[key].append(term_ix)
+            self._q_cache_index.append(rows)
 
-        self._num_objectives = len(self._objective_keys)
+        self._num_objectives = len(self._terms)
 
         # set solver options
         self.solver = get_solver(self.solver)

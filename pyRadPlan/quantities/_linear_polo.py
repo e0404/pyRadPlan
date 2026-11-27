@@ -40,7 +40,7 @@ class LinearPOLO(POLOBase):
         # d(eta)/d(dose) and d(eta)/d(let_dose) are the model coefficients, so the incoming
         # gradient only needs masking to the dose domain before back-propagation.
         d_quantity = self.array_backend.where(
-            self._in_dose_domain(self._dose(self._w_grad_cache, scenario_index)),
+            self._in_dose_domain(self._dose(self._grad_fluence, scenario_index)),
             d_quantity,
             self.array_backend.zeros_like(d_quantity),
         )

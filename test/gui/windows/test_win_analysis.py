@@ -80,7 +80,6 @@ def test_analysis_window_is_top_level(qapp, test_data_photons):
 
 def test_analysis_window_survives_without_caller_reference(qapp, test_data_photons):
     """Having no Qt parent must not let the window be garbage collected."""
-    import gc
     import weakref
 
     from pyRadPlan.gui.windows._analysis_win import _OPEN_WINDOWS
@@ -93,8 +92,9 @@ def test_analysis_window_survives_without_caller_reference(qapp, test_data_photo
     ref = weakref.ref(window)
     assert window in _OPEN_WINDOWS
 
+    # No gc.collect() here: a forced collection in the full suite makes PySide delete
+    # widgets of earlier tests twice (segfault). Dropping the last reference is enough.
     del window
-    gc.collect()
     assert ref() is not None, "window was collected while still open"
 
     ref().close()

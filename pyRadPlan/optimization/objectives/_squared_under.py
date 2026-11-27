@@ -30,13 +30,18 @@ class SquaredUnderdosing(Objective):
         ParameterMetadata(kind="reference"),
     ]
 
+    def _undervalues(self, xp, values: Array) -> Array:
+        # Not xp.clip, which masks and syncs on cupy; zeros_like as torch rejects a Python scalar
+        deficit = values - self.d_min
+        return xp.minimum(deficit, xp.zeros_like(deficit))
+
     def compute_objective(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
+        undervalues = self._undervalues(xp, values)
 
-        return (undervalues @ undervalues) / array_api_compat.size(values)
+        return (undervalues @ undervalues) / float(array_api_compat.size(values))
 
     def compute_gradient(self, values: Array) -> Array:
         xp = array_api_compat.array_namespace(values)
-        undervalues = xp.clip(values - self.d_min, min=None, max=0.0)
-        return 2.0 * undervalues / array_api_compat.size(undervalues)
+        undervalues = self._undervalues(xp, values)
+        return 2.0 * undervalues / float(array_api_compat.size(undervalues))

@@ -11,12 +11,14 @@ import logging
 import re
 import sys
 import types
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Union
 
 from pyRadPlan._settings import get_settings
 
-from ._resolve import resolve_model_dir
+from ._resolve import _resolve_model, resolve_model_dir
+from ._trust import _check_trust, _repo_id
 from ._preprocessor import BasePreprocessor
 
 logger = logging.getLogger(__name__)
@@ -173,6 +175,141 @@ def _find_preprocessor_class(module: types.ModuleType, name: Optional[str]) -> t
     )
 
 
+def model_facts(model_dir: Path) -> tuple[dict, Optional[str], list[str]]:
+    """Read a model's configuration and pull out what callers usually need.
+
+    Unlike the read :func:`load_model` performs, this one is tolerant: a caller that
+    only inspects a model -- is it usable, what was it trained for -- should not fail
+    on a repository that is broken or not fully downloaded.
+
+    Parameters
+    ----------
+    model_dir : Path
+        A model directory.
+
+    Returns
+    -------
+    tuple[dict, str or None, list[str]]
+        The raw configuration (``{}`` when unreadable), the radiation modality the
+        model was trained for (``metadata.training.modality``, falling back to the
+        older ``metadata.dose_calc.radiation_mode``), and the packages it declares
+        under ``metadata.requirements`` that are not installed. Which packages a
+        model needs (torch, onnxruntime, ...) is declared by the model itself, so a
+        caller can tell whether it is usable without importing its code.
+    """
+    try:
+        config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read the model config in %s: %s", model_dir, exc)
+        config = {}
+
+    metadata = config.get("metadata") or {}
+    modality = (metadata.get("training") or {}).get("modality") or (
+        metadata.get("dose_calc") or {}
+    ).get("radiation_mode")
+
+    required = metadata.get("requirements") or []
+    missing = []
+    for module in [required] if isinstance(required, str) else required:
+        try:
+            found = importlib.util.find_spec(str(module).split(".")[0]) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(str(module))
+
+    return config, modality, missing
+
+
+def local_model_dir(name: str) -> Optional[Path]:
+    """Directory of a model already on disk or in the HuggingFace cache.
+
+    Resolves *name* like :func:`load_model` does, but never touches the network and
+    reports failure instead of raising.
+
+    Parameters
+    ----------
+    name : str
+        A ``"<org>/<model>"`` repository id.
+
+    Returns
+    -------
+    Path or None
+        The model directory, or ``None`` if it is not available locally.
+    """
+    try:
+        return resolve_model_dir(repo_id=name, offline=True)
+    except Exception as exc:  # noqa: BLE001 - any failure means "not available locally"
+        logger.debug("Model '%s' not found locally: %s", name, exc)
+        return None
+
+
+@lru_cache(maxsize=None)
+def hub_config_dir(name: str, offline: bool = False) -> Optional[Path]:
+    """Fetch only a hub model's ``model_config.json``, never its weights.
+
+    Lets a caller judge a model it has not downloaded. Cached for the session, so
+    *offline* is part of the key rather than read from the settings.
+
+    Parameters
+    ----------
+    name : str
+        A ``"<org>/<model>"`` repository id.
+    offline : bool, optional
+        Skip the hub entirely; pass :attr:`AiSettings.modelhub_offline`.
+
+    Returns
+    -------
+    Path or None
+        The folder the config landed in, so it can be inspected like a local model's;
+        ``None`` when offline or when the file cannot be fetched.
+    """
+    if offline:
+        return None
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        cache_dir = get_settings().ai.modelhub_cache_dir
+        path = hf_hub_download(
+            name, "model_config.json", cache_dir=str(cache_dir) if cache_dir else None
+        )
+        return Path(path).parent
+    except Exception as exc:  # noqa: BLE001 - no hub client, no network, no such file
+        logger.debug("Could not read the config of '%s' from the hub: %s", name, exc)
+        return None
+
+
+@lru_cache(maxsize=None)
+def list_hub_models(org: str, offline: bool = False) -> tuple[str, ...]:
+    """List the models an organization offers on the hub.
+
+    The hub-side counterpart of :func:`list_local_models`, cached for the session, so
+    *offline* is part of the key and a model published meanwhile needs a restart.
+
+    Parameters
+    ----------
+    org : str
+        The hub organization.
+    offline : bool, optional
+        Skip the hub entirely; pass :attr:`AiSettings.modelhub_offline`.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``"<org>/<model>"`` ids, or ``()`` when offline and when the hub cannot be
+        reached.
+    """
+    if offline:
+        return ()
+    try:
+        from huggingface_hub import HfApi  # noqa: PLC0415
+
+        return tuple(m.id for m in HfApi().list_models(author=org))
+    except Exception as exc:  # noqa: BLE001 - no hub client, no network, unknown org
+        logger.debug("Could not list the models of '%s': %s", org, exc)
+        return ()
+
+
 def _read_config(model_dir: Path) -> dict:
     """Read and minimally validate a model folder's ``model_config.json``."""
     config_path = model_dir / "model_config.json"
@@ -230,11 +367,15 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     device : str, optional
         Device to place the model on. Defaults to :attr:`AiSettings.modelhub_device`.
     trust_remote_code : bool, optional
-        Allow executing the Python shipped with the model. Defaults to
-        :attr:`AiSettings.modelhub_trust_remote_code` (``False``), except for a
-        purely local load -- ``local_dir`` given without ``name``/``repo_id`` --
-        where the code is already under the caller's control and no opt-in is
-        needed. Loading fails if this resolves to ``False``.
+        Trust whatever code a downloaded model ships. Loading executes the model's
+        ``model.py`` and ``preprocessor.py``. A model folder you placed yourself --
+        one pyRadPlan did not download and that is not in the HuggingFace cache --
+        always runs. Downloaded code runs if it matches a
+        :func:`~pyRadPlan.ai.modelhub.trust_model` record or if this resolves to
+        ``True``; it defaults to :attr:`AiSettings.modelhub_trust_remote_code`
+        (``False``). Code trusted this way is recorded like by
+        :func:`~pyRadPlan.ai.modelhub.trust_model`, so it keeps running without the
+        opt-in until it changes.
 
     Returns
     -------
@@ -243,9 +384,56 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
 
     Raises
     ------
+    UntrustedModelError
+        If the model was downloaded and its code is not trusted (a
+        :class:`ValueError`); nothing from the model folder was executed then.
     ValueError
-        If ``trust_remote_code`` is disabled, or neither ``name``, ``repo_id``
-        nor a usable ``local_dir`` is provided.
+        If neither ``name``, ``repo_id`` nor a usable ``local_dir`` is provided.
+    FileNotFoundError
+        If the model can be neither found locally nor downloaded.
+    """
+    model, preprocessor, _ = load_model_with_dir(
+        name,
+        repo_id=repo_id,
+        revision=revision,
+        local_dir=local_dir,
+        offline=offline,
+        device=device,
+        trust_remote_code=trust_remote_code,
+    )
+    return model, preprocessor
+
+
+def load_model_with_dir(  # noqa: PLR0913 - the options of load_model
+    name: Optional[str] = None,
+    *,
+    repo_id: Optional[str] = None,
+    revision: Optional[str] = None,
+    local_dir: Optional[Union[str, Path]] = None,
+    offline: Optional[bool] = None,
+    device: Optional[str] = None,
+    trust_remote_code: Optional[bool] = None,
+) -> tuple[Any, BasePreprocessor, Path]:
+    """Load a model like :func:`load_model` and report the directory it came from.
+
+    For callers that read more of the repository than the loader does, e.g. the
+    ``metadata`` of its ``model_config.json``, without resolving it a second time.
+
+    Parameters
+    ----------
+    name, repo_id, revision, local_dir, offline, device, trust_remote_code
+        As for :func:`load_model`.
+
+    Returns
+    -------
+    tuple[Any, BasePreprocessor, Path]
+        The loaded model (in eval mode), its preprocessor and the resolved model
+        directory.
+
+    Raises
+    ------
+    UntrustedModelError, ValueError, FileNotFoundError
+        As for :func:`load_model`.
     """
     cfg = get_settings().ai
     if device is None:
@@ -254,27 +442,21 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     if name is not None and repo_id is None:
         # A name that already carries an organization is a full id; this is what
         # list_local_models() returns, so its output feeds straight back in.
-        repo_id = name if "/" in name else f"{cfg.modelhub_hf_org}/{name}"
+        repo_id = _repo_id(name)
 
-    from_hub = repo_id is not None
     if trust_remote_code is None:
-        trust_remote_code = cfg.modelhub_trust_remote_code or not from_hub
+        trust_remote_code = cfg.modelhub_trust_remote_code
 
-    # Checked before resolving: there is no reason to download code we refuse to run.
-    if not trust_remote_code:
-        source = f"'{repo_id}'" if from_hub else f"'{local_dir}'"
-        raise ValueError(
-            f"Loading the model in {source} executes code shipped with the model "
-            "(model.py, preprocessor.py). Pass trust_remote_code=True "
-            "(or set PYRADPLAN_AI_MODELHUB_TRUST_REMOTE_CODE=1) only for sources you trust."
-        )
-
-    model_dir = resolve_model_dir(
+    # Downloading never runs any of the model's code, so the check can follow it:
+    # downloaded code must be on disk to be hashed.
+    resolved = _resolve_model(
         repo_id=repo_id,
         revision=revision,
         local_dir=local_dir,
         offline=offline,
     )
+    _check_trust(resolved, trust_remote_code)
+    model_dir = resolved.path
 
     config = _read_config(model_dir)
     model_module, preprocessor_module = _load_model_modules(model_dir)
@@ -300,4 +482,4 @@ def load_model(  # noqa: PLR0913 - all but `name` are keyword-only options
     preprocessor = preprocessor_cls(config.get("model_preprocessing", {}))
 
     logger.info("Loaded model from %s onto device '%s'.", model_dir, device)
-    return model, preprocessor
+    return model, preprocessor, model_dir

@@ -27,11 +27,13 @@ from pyRadPlan.biology.models import (
     BioModelUnavailableError,
 )
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.scenarios import Scenario
 from pyRadPlan.biology.tissues._base import TissueProperties
 from ._base_pencilbeam import PencilBeamEngineAbstract
 
 from ...core.xp_utils.compat import interp1d as array_interp
-from ...core.xp_utils import to_namespace
+from ...core.xp_utils import ArrayBackend1DInterpolator, to_namespace, to_numpy
+from ._particle_cutoff import CutoffQuadrature, evaluate_cutoff
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         the dose drops to the requested cutoff
     """
 
+    # Charge z and mass number A of the radiation modes for which range shifter scattering is
+    # modeled (an ion is scaled to the proton with the same velocity profile)
+    rashi_scatter_ions: ClassVar[dict[str, tuple[int, int]]] = {
+        "protons": (1, 1),
+        "helium": (2, 4),
+        "carbon": (6, 12),
+        "oxygen": (8, 16),
+    }
+
     computes_bio_influence: ClassVar[bool] = True
     # Interpolates every biological kernel quantity of the machine (alpha/beta, z*, LET,
     # fluence spectra).
@@ -79,6 +90,12 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
     _dij_guarantee_canonical: ClassVar[bool]
     _dij_guarantee_nonzero: ClassVar[bool]
 
+    # "auto" / "fastest" resolve to the model the current machine supports
+    _per_calculation_settings: ClassVar[tuple[str, ...]] = (
+        *PencilBeamEngineAbstract._per_calculation_settings,
+        "lateral_model",
+    )
+
     def __init__(self, pln):
         # Protected properties with public get access
         self._v_alpha_x = None  # Reference photon alpha per voxel and CT scenario
@@ -90,6 +107,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         self._validated_bio_kernel_energies: set[float] = set()
 
         self._kernel_cache = {}
+        self._energy_index_cache = {}
+        self._depth_interpolator_cache = {}
+        self._focus_interpolator_cache = {}
 
         super().__init__(pln)
 
@@ -202,13 +222,15 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
         # Find energy index in base data
         energy = curr_ray["beamlets"][k]["energy"]
-        # TODO: This here has some overhead. Can be done faster!
-        energy_ix = self._machine.get_energy_index(energy, 4)
-
-        if energy_ix.size > 1:
-            raise ValueError("Multiple energies found in base data for one bixel!")
-
-        energy_ix = np.int64(energy_ix)
+        # Machine energies are immutable during a calculation. Keep exact energy
+        # keys and delegate rounding/ambiguity semantics to the machine once.
+        energy_ix = self._energy_index_cache.get(energy)
+        if energy_ix is None:
+            energy_ix = self._machine.get_energy_index(energy, 4)
+            if energy_ix.size > 1:
+                raise ValueError("Multiple energies found in base data for one bixel!")
+            energy_ix = np.int64(energy_ix)
+            self._energy_index_cache[energy] = energy_ix
 
         bixel["energy_ix"] = energy_ix
 
@@ -218,8 +240,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Determine namespace from ray data
         xp = array_api_compat.array_namespace(curr_ray["rad_depths"])
 
-        kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
-
         # NOTE: This here makes dosecalc way faster.
         # TODO: Maybe think of a better way then kernel_obj.to_namespace()
         # Get kernel and convert to namespace
@@ -227,6 +247,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         if cache_key in self._kernel_cache:
             bixel["kernel"] = self._kernel_cache[cache_key]
         else:
+            kernel_obj = tmp_machine.get_kernel_by_index(energy_ix)
             bixel["kernel"] = kernel_obj.to_namespace(xp, device=self.device)
             # kernel = cast(ParticlePencilBeamKernel, bixel["kernel"])
 
@@ -262,16 +283,22 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         return bixel
 
     def _interpolate_kernels_in_depth(self, bixel):
-        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
         kernel = bixel["kernel"]
-        depths = kernel["depths"]
+        with_bio = self._calc_bio_dose and "v_alpha_x" in bixel
+        key = (id(kernel), with_bio)
+        entry = self._depth_interpolator_cache.get(key)
+        if entry is None:
+            interpolator = self._prepare_depth_interpolator(bixel)
+            # Keep the source alive: Python must not reuse its id for another kernel.
+            self._depth_interpolator_cache[key] = (kernel, interpolator)
+        else:
+            _, interpolator = entry
+        return interpolator(bixel["rad_depths"], grid_offset=-bixel["rad_depth_offset"])
 
-        # xp = array_api_compat.array_namespace(bixel["rad_depths"])
-
-        # Add potential offset
-        # Ensure depths is on the correct device
-        # depths = xp.asarray(depths, dtype=bixel["rad_depths"].dtype)
-        depths = depths + kernel["offset"] - bixel["rad_depth_offset"]
+    def _prepare_depth_interpolator(self, bixel):
+        """Prepare immutable energy fields; ray-dependent offsets stay in evaluation."""
+        kernel = bixel["kernel"]
+        depths = kernel["depths"] + kernel["offset"]
 
         # Conversion factor from MeV cm^2/g per primary to Gy mm^2 per 1e6 primaries
         conversion_factor = 1.6021766208e-02
@@ -299,7 +326,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             used_kernels.update(bio_kernels)
 
         # Interpolate all fields in X
-        return array_interp(bixel["rad_depths"], depths, used_kernels)
+        return ArrayBackend1DInterpolator(depths, used_kernels)
 
     def _build_bio_context(
         self, bixel: dict[str, Any], kernels: dict[str, Any]
@@ -431,20 +458,24 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             raise ValueError("dosimetric_lateral_cutoff must be a value > 0 and <= 1!")
 
         # Apply mask
-        curr_bixel["ix"] = curr_ray["ix"][curr_ix]
+        # Compact once; take preserves trailing dimensions and works across Array API backends.
+        curr_ix = xp.nonzero(curr_ix)[0]
+        curr_bixel["ix"] = xp.take(curr_ray["ix"], curr_ix, axis=0)
 
         # Get quantities from ray and mask them
-        curr_bixel["radial_dist_sq"] = curr_ray["radial_dist_sq"][curr_ix]
-        curr_bixel["rad_depths"] = curr_ray["rad_depths"][curr_ix]
+        curr_bixel["radial_dist_sq"] = xp.take(curr_ray["radial_dist_sq"], curr_ix, axis=0)
+        curr_bixel["rad_depths"] = xp.take(curr_ray["rad_depths"], curr_ix, axis=0)
 
         # Propagate lateral distances if available (needed for singleXY focused model)
         if "lat_dists" in curr_ray:
-            curr_bixel["lat_dists"] = curr_ray["lat_dists"][curr_ix]
+            curr_bixel["lat_dists"] = xp.take(curr_ray["lat_dists"], curr_ix, axis=0)
 
         if self._calc_bio_dose:
-            curr_bixel["v_alpha_x"] = curr_ray["v_alpha_x"][curr_ix]
-            curr_bixel["v_beta_x"] = curr_ray["v_beta_x"][curr_ix]
-            curr_bixel["v_tissue_class_ix"] = curr_ray["v_tissue_class_ix"][curr_ix]
+            curr_bixel["v_alpha_x"] = xp.take(curr_ray["v_alpha_x"], curr_ix, axis=0)
+            curr_bixel["v_beta_x"] = xp.take(curr_ray["v_beta_x"], curr_ix, axis=0)
+            curr_bixel["v_tissue_class_ix"] = xp.take(
+                curr_ray["v_tissue_class_ix"], curr_ix, axis=0
+            )
 
         return curr_bixel
 
@@ -452,21 +483,17 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         add_sigma_sq = 0
         rad_depth_offset = 0
 
-        # Consider range shifter for protons if applicable
         if curr_bixel["range_shifter"]["eq_thickness"] > 0:
-            # TODO: We should do this check in dose calc initialization instead to spare some time
-            if self._machine["meta"]["radiationMode"] != "protons":
-                warnings.warn(
-                    "Range shifter not valid for irradiation with particle other than protons!"
+            if self._machine.radiation_mode in self.rashi_scatter_ions:
+                sigma_rashi = self._calc_sigma_rashi(
+                    curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
                 )
-
-            # Compute!
-            sigma_rashi = self._calc_sigma_rashi(
-                curr_bixel["kernel"], curr_bixel["range_shifter"], curr_bixel["SSD"]
-            )
-
-            # Add to initial sigma in quadrature
-            add_sigma_sq += sigma_rashi**2
+                add_sigma_sq += sigma_rashi**2
+            else:
+                warnings.warn(
+                    "Range shifter scattering not implemented for radiation mode "
+                    f"'{self._machine.radiation_mode}' and will be ignored!"
+                )
             rad_depth_offset += curr_bixel["range_shifter"]["eq_thickness"]
 
         curr_bixel["add_sigma_sq"] = add_sigma_sq
@@ -481,6 +508,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         pencil beam calculation and not for other engines.
         """
 
+        self._clear_kernel_cache()
+        self._energy_index_cache.clear()
+        self._focus_interpolator_cache.clear()
         dij = super()._init_dose_calc(ct, cst, stf)
 
         # Choose the lateral pencil beam model
@@ -677,6 +707,29 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         """
         return self._allocate_quantity_matrices(dij, ["let_dose"])
 
+    def _cutoff_dose_profile(self, depths, kernel, sigma_ini_sq, quadrature):
+        """Fallback for engines without a batched physical-profile implementation."""
+        xp = array_api_compat.array_namespace(depths)
+        device = array_api_compat.device(depths)
+        profiles = []
+        for j in range(depths.shape[0]):
+            bixel = {
+                "energy_ix": self._machine.get_energy_index(kernel["energy"], 4),
+                "kernel": kernel,
+                "radial_dist_sq": quadrature.radial_dist_sq,
+                "lat_dists": quadrature.lat_dists,
+                "sigma_ini_sq": sigma_ini_sq,
+                "rad_depths": (depths[j] + kernel["offset"])
+                * xp.ones_like(quadrature.radial_dist_sq),
+                "sub_ray_ix": xp.ones_like(quadrature.radial_dist_sq, dtype=xp.bool),
+                "ix": xp.arange(quadrature.radii.shape[0], device=device),
+                "rad_depth_offset": 0,
+                "add_sigma_sq": 0,
+            }
+            self._calc_particle_bixel(bixel)
+            profiles.append(bixel["physical_dose"])
+        return xp.stack(profiles, axis=0)
+
     def _calc_lateral_particle_cut_off(self, cut_off_level, stf_element):
         # Sanity Checks
         assert isinstance(self._machine, ParticleAccelerator)
@@ -696,50 +749,21 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             warnings.warn("Lateral cutoff is out of range - using default cut off of 0.99")
             cut_off_level = 0.99
 
+        # The cutoffs below depend on the SSDs of this beam and replace the kernels' previous
+        # ones, so namespace copies cached for an earlier beam are stale from here on
+        self._clear_kernel_cache()
+
         # conversion factor from kernel units (MeV cm^2/g per primary) to Gy mm^2 per 1e6 primaries
         # TODO: this factor should probably be in the machine data and translate to MU
         conversion_factor = 1.6021766208e-02
 
-        # Define some variables needed for the cutoff calculation
-        v_x = np.concatenate(([0], np.logspace(-1, 3, 1200)))  # [mm]
-
-        # Integration steps
-        r_mid = 0.5 * (v_x[:-1] + v_x[1:])  # [mm]
-        dr = np.diff(v_x)
-        radial_dist_sq = r_mid**2
-
-        # Handle different lateral models for integration
-        if self.lateral_model == "singleXY":
-            v_theta = np.linspace(0, 2 * np.pi, 361)
-            v_theta = v_theta[:-1]  # remove last to avoid duplication at 2*pi
-            # angular bin size
-            d_theta_angle = (v_theta[1] - v_theta[0]) * np.ones_like(v_theta)
-
-            # Store original radial mid vector length before expansion
-            n_radial_bins = r_mid.size  # equals numel(vR)-1 in MATLAB
-            n_angles = v_theta.size
-
-            r_mid_mesh, theta_mesh = np.meshgrid(r_mid, v_theta)
-
-            # Flatten r_mid_mesh
-            r_mid = r_mid_mesh.ravel(order="F")
-            radial_dist_sq = r_mid**2
-
-            # Expand dr /repeat
-            dr = np.repeat(dr, n_angles)
-
-            # Flatten theta
-            theta = theta_mesh.ravel(order="F")
-
-            # Expand d_theta: replicate angular step sequence for each radial bin
-            d_theta = np.tile(d_theta_angle, n_radial_bins)
-
-            # Lateral distances per sample point (vector of radii times unit vectors)
-            sqrt_r2 = np.sqrt(radial_dist_sq)
-            lat_dists = sqrt_r2[:, np.newaxis] * np.column_stack((np.cos(theta), np.sin(theta)))
-        else:
-            lat_dists = np.tile(np.sqrt(radial_dist_sq / 2)[:, np.newaxis], (1, 2))
-            d_theta = 2 * np.pi
+        # The small isotropic quadratures evaluate faster on the host than on a GPU.
+        cutoff_xp, cutoff_device = array_api_compat.array_namespace(np.empty(0)), None
+        quadrature = (
+            CutoffQuadrature.create(self.lateral_model, xp=cutoff_xp, device=cutoff_device)
+            if cut_off_level != 1
+            else None
+        )
 
         # Number of depth points for which a lateral cutoff is determined
         num_depth_val = 35
@@ -760,11 +784,14 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # TODO: these for loops can be simplified!
         for ray in stf_element["beam"]["rays"]:
             len_ray_energy = len([beamlet["energy"] for beamlet in ray["beamlets"]])
-            v_ssd[cnt : cnt + len_ray_energy] = ray["SSD"]
+            v_ssd[cnt : cnt + len_ray_energy] = ray["SSD"][self._reference_ct_phase]
             # TODO: what's the purpose of this? in matRad it counts the len(v_ssd)+1 for some reason
             cnt += len_ray_energy
 
-        # Setup energy, focus index, sigma look up table - only consider unique rows
+        beamlets = [beamlet for ray in stf_element["beam"]["rays"] for beamlet in ray["beamlets"]]
+
+        # Setup energy, focus index, sigma look up table - only consider unique rows. The range
+        # shifter is part of the row, so beamlets that differ only in it are kept apart
         energy_sigma_lut, ix_unique = np.unique(
             np.column_stack(
                 (
@@ -779,6 +806,8 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                         for beamlet in ray["beamlets"]
                     ],
                     v_ssd,
+                    [beamlet["range_shifter"]["eq_thickness"] for beamlet in beamlets],
+                    [beamlet["range_shifter"]["source_rashi_distance"] for beamlet in beamlets],
                 )
             ),
             axis=0,
@@ -790,12 +819,7 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
             (energy_sigma_lut, np.full((len(energy_sigma_lut), 1), np.nan))
         )
 
-        range_shifter_lut = [
-            beamlet["range_shifter"]
-            for ray in stf_element["beam"]["rays"]
-            for beamlet in ray["beamlets"]
-        ]
-        range_shifter_lut = [range_shifter_lut[i] for i in ix_unique]
+        range_shifter_lut = [beamlets[i]["range_shifter"] for i in ix_unique]
 
         # Find the largest initial beam width considering focus index, SSD and range shifter
         # for each individual energy
@@ -814,20 +838,16 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
 
             sigma_ini_sq = sigma_ini**2
 
-            # Consider range shifter for protons if applicable
             if (
-                self._machine.radiation_mode == "protons"
+                self._machine.radiation_mode in self.rashi_scatter_ions
                 and range_shifter_lut[i]["eq_thickness"] > 0
             ):
-                # TODO: this is not tested yet as only Generic is used
                 sigma_rashi = self._calc_sigma_rashi(
-                    self._machine.energies[energy_ix],
-                    range_shifter_lut[i],
-                    energy_sigma_lut[i, 2],
+                    kernel, range_shifter_lut[i], energy_sigma_lut[i, 2]
                 )
                 sigma_ini_sq += sigma_rashi**2
 
-            energy_sigma_lut[i, 3] = sigma_ini_sq
+            energy_sigma_lut[i, -1] = sigma_ini_sq
 
         # Find for each individual energy the broadest initial beam width
         unique_energies = np.unique(energy_sigma_lut[:, 0])
@@ -835,9 +855,9 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         ix_max = np.full(len(unique_energies), np.nan)
         for i, energy in enumerate(unique_energies):
             largest_sigma_sq4unique_energies[i] = np.max(
-                energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3]
+                energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1]
             )
-            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], 3])
+            ix_max[i] = np.argmax(energy_sigma_lut[energy == energy_sigma_lut[:, 0], -1])
 
         # Get energy indices for looping
         v_energies_ix = np.where(np.isin(self._machine.energies, unique_energies))[0]
@@ -847,9 +867,6 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         for energy_ix in v_energies_ix:
             # Get the kernel entry
             kernel = self._machine.get_kernel_by_index(energy_ix)
-
-            # set default depth cut off - finite value will be set during first iteration
-            depth_dose_cut_off = np.inf
 
             # Get the current integrated depth dose profile
             idd_org = conversion_factor * kernel.idd
@@ -891,59 +908,29 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
                 comp_fac=1.0, depths=depth_values, cut_off=np.inf * np.ones_like(depth_values)
             )
 
-            base_kernel = deepcopy(kernel)  # similar to base_data in matRad
-
-            # TODO: this could probably be done for all depths with one calculation without a loop
-            for j, current_depth in enumerate(depth_values):
-                # If there's no cut-off set, we do not need to find it. Set it to infinity
-                if cut_off_level == 1:
-                    continue
-                # Create a dummy bixel calculating radial dose distribution for the current
-                # depth (physical dose only: no tissue parameters, hence no bio evaluation)
-                bixel = {
-                    "energy_ix": energy_ix,
-                    "kernel": base_kernel.to_namespace(np),
-                    "radial_dist_sq": radial_dist_sq,
-                    "lat_dists": lat_dists,
-                    "sigma_ini_sq": largest_sigma_sq4unique_energies[
-                        cnt - 1
-                    ],  # TODO: check if this result is correct (rounded but may be right)
-                    "rad_depths": (current_depth + base_kernel.offset)
-                    * np.ones_like(radial_dist_sq),
-                    "sub_ray_ix": np.ones_like(radial_dist_sq, dtype=bool),
-                    "ix": np.arange(len(radial_dist_sq)),
-                    "rad_depth_offset": 0,
-                    "add_sigma_sq": 0,
-                }
-
-                self._calc_particle_bixel(bixel)
-                dose_r = bixel["physical_dose"]
-
-                cum_area = np.cumsum(r_mid * dose_r * dr * d_theta)
-
-                relative_tolerance = 0.5  # in [%]
-
-                if abs((cum_area[-1] / idd[j]) - 1) * 100 > relative_tolerance:
-                    warnings.warn("Shell integration in cut-off calculation is inconsistent!")
-
-                # obtain the cut-off compensation factor dending on the cut-off method
-                if self.cut_off_method == "integral":
-                    ix = (cum_area >= idd[j] * cut_off_level).argmax()
-                    kernel.lateral_cut_off.comp_fac = cut_off_level**-1
-                elif self.cut_off_method == "relative":
-                    ix = (dose_r <= (1 - cut_off_level) * np.max(dose_r)).argmax()
-                    rel_fac = cum_area[ix] / cum_area[-1]
-                    kernel.lateral_cut_off.comp_fac = rel_fac**-1
-                else:
-                    raise ValueError("Invalid Cutoff Method. Must be 'integral' or 'relative'!")
-                # Nothing was cut-off -> warn the user
-                if ix == len(cum_area):
-                    depth_dose_cut_off = np.inf
-                    warnings.warn("Couldn't find lateral cut off!")
-                else:
-                    depth_dose_cut_off = r_mid[ix]
-
-                kernel.lateral_cut_off.cut_off[j] = depth_dose_cut_off
+            if cut_off_level != 1:
+                # Convert once per energy, and keep the default compensation during integration.
+                base_kernel = deepcopy(kernel).to_namespace(cutoff_xp, device=cutoff_device)
+                # Host-selected scalar must be a Python scalar for strict Array API backends.
+                sigma_ini_sq = float(largest_sigma_sq4unique_energies[cnt - 1])
+                result = evaluate_cutoff(
+                    to_namespace(cutoff_xp, depth_values, device=cutoff_device),
+                    to_namespace(cutoff_xp, idd, device=cutoff_device),
+                    quadrature,
+                    lambda depths, grid: self._cutoff_dose_profile(
+                        depths, base_kernel, sigma_ini_sq, grid
+                    ),
+                    cutoff=cut_off_level,
+                    method=self.cut_off_method,
+                )
+                # One small device-to-host transfer per energy for the serialized machine model.
+                result = to_numpy(result)
+                kernel.lateral_cut_off.cut_off = result[:, 0]
+                # Preserve the existing scalar compensation convention for relative cutoffs.
+                kernel.lateral_cut_off.comp_fac = result[-1, 1]
+                for error in result[:, 2]:
+                    if error > 0.5:
+                        warnings.warn("Shell integration in cut-off calculation is inconsistent!")
 
             self._machine.update_kernel_at_index(energy_ix, kernel)
 
@@ -955,45 +942,66 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Calculate initial sigma for all bixels on the current ray
         # TODO: here [ray] since calc_sigma_ini takes multiple rays (why?)
         # TODO: use to_namespace here. Issues with api_strict due to float64!
-        ray["sigma_ini"] = xp.asarray(
-            self._calc_sigma_ini_on_ray(ray), dtype=xp.float64, device=self.device
-        )
+        # One value per CT phase, like the SSD they derive from
+        ray["sigma_ini"] = [
+            xp.asarray(self._calc_sigma_ini_on_ray(ray, ssd), dtype=xp.float64, device=self.device)
+            for ssd in ray["SSD"]
+        ]
 
         # Since pyRadPlan's ray cast starts at the skin and base data
         # is generated at some source to phantom distance
         # we can explicitly correct for the nozzle to air WEPL in
         # the current case.
         if self.air_offset_correction:
-            nozzle_to_skin = (ray["SSD"] + self._machine.bams_to_iso_dist) - self._machine.sad
-            ray["rad_depth_offset"] = 0.0011 * (nozzle_to_skin - self._machine.fit_air_offset)
+            ray["rad_depth_offset"] = [
+                0.0011
+                * (
+                    (ssd + self._machine.bams_to_iso_dist)
+                    - self._machine.sad
+                    - self._machine.fit_air_offset
+                )
+                for ssd in ray["SSD"]
+            ]
         else:
-            ray["rad_depth_offset"] = 0
+            ray["rad_depth_offset"] = [0] * len(ray["SSD"])
 
-        # Reference LQ parameters of the voxels found by the ray tracer, per CT scenario
-        # TODO: multi-scenario support (ray["ix"] currently only carries the first CT scenario)
+        # Reference LQ parameters of the voxels found by the ray tracer, keyed by CT phase.
+        # The parameter arrays hold one column per voxel parameter set of the scenario set,
+        # not per CT phase.
         if self._calc_bio_dose:
-            ray["v_alpha_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_beta_x"] = [None] * self.mult_scen.num_of_ct_scen
-            ray["v_tissue_class_ix"] = [None] * self.mult_scen.num_of_ct_scen
-            for s in range(self.mult_scen.num_of_ct_scen):
-                ray["v_alpha_x"][s] = xp.take(self._v_alpha_x[:, s], ray["ix"][0], axis=0)
-                ray["v_beta_x"][s] = xp.take(self._v_beta_x[:, s], ray["ix"][0], axis=0)
-                ray["v_tissue_class_ix"][s] = xp.take(
-                    self._v_tissue_class_ix[:, s], ray["ix"][0], axis=0
+            ray["v_alpha_x"] = {}
+            ray["v_beta_x"] = {}
+            ray["v_tissue_class_ix"] = {}
+            for column, phase in enumerate(self._voxel_param_phases):
+                ix = ray["ix"][phase]
+                ray["v_alpha_x"][phase] = xp.take(self._v_alpha_x[:, column], ix, axis=0)
+                ray["v_beta_x"][phase] = xp.take(self._v_beta_x[:, column], ix, axis=0)
+                ray["v_tissue_class_ix"][phase] = xp.take(
+                    self._v_tissue_class_ix[:, column], ix, axis=0
                 )
 
         return ray
 
-    def _extract_single_scenario_ray(self, ray, scen_idx):
-        scen_ray = super()._extract_single_scenario_ray(ray, scen_idx)
-        # TODO: Add multscen support
-        # Gets number of scenario
-        ct_scen = self.mult_scen.linear_mask[0][scen_idx]
+    def _clear_kernel_cache(self) -> None:
+        """Invalidate converted kernels and their prepared interpolation together."""
+        self._kernel_cache.clear()
+        self._depth_interpolator_cache.clear()
+
+    def _init_geometry_group(self) -> None:
+        # Cached kernels carry lateral cutoffs computed for an earlier geometry (SSDs)
+        self._clear_kernel_cache()
+
+    def _apply_scenario_to_ray(self, ray: dict, scenario: Scenario) -> dict:
+        scen_ray = super()._apply_scenario_to_ray(ray, scenario)
+
+        ct_phase = scenario.ct_phase
+        scen_ray["sigma_ini"] = ray["sigma_ini"][ct_phase]
+        scen_ray["rad_depth_offset"] = ray["rad_depth_offset"][ct_phase]
 
         if self._calc_bio_dose:
-            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_scen]
-            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_scen]
-            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_scen]
+            scen_ray["v_alpha_x"] = ray["v_alpha_x"][ct_phase]
+            scen_ray["v_beta_x"] = ray["v_beta_x"][ct_phase]
+            scen_ray["v_tissue_class_ix"] = ray["v_tissue_class_ix"][ct_phase]
 
         return scen_ray
 
@@ -1074,17 +1082,50 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         np.float64
             The initial sigma for the given energy and focus index.
         """
-        focus = self._machine.foci[energy][focus_ix]
-        interpolator = interp1d(focus.dist, focus.sigma, fill_value="extrapolate")
+        key = (energy, focus_ix)
+        interpolator = self._focus_interpolator_cache.get(key)
+        if interpolator is None:
+            focus = self._machine.foci[energy][focus_ix]
+            interpolator = interp1d(focus.dist, focus.sigma, fill_value="extrapolate")
+            self._focus_interpolator_cache[key] = interpolator
         return interpolator(ssd)
 
-    def _calc_sigma_rashi(self, bd_entry, range_shifter: dict, ssd: float):
+    def _calc_sigma_rashi(self, bd_entry, range_shifter: dict, ssd: float) -> float:
+        """
+        Calculate the additional beam broadening by a range shifter.
+
+        The parametrization (Hong et al.; Gottschalk) is fitted for protons. Heavier ions are
+        scaled to the proton with the same velocity profile: depths and ranges scale with
+        z^2/A, the scattering power with (z/A)^2.
+
+        Parameters
+        ----------
+        bd_entry : dict, ParticlePencilBeamKernel or float
+            Base data of the energy, providing the range in water [mm] or the kinetic energy
+            ([MeV] for protons, [MeV/u] for heavier ions). A number is taken as the energy.
+        range_shifter : dict
+            Range shifter with ``eq_thickness`` and ``source_rashi_distance`` [mm].
+        ssd : float
+            Source to surface distance [mm].
+
+        Returns
+        -------
+        float
+            Sigma of the range shifter [mm], to be added in quadrature.
+        """
+        radiation_mode = self._machine.radiation_mode
+        if radiation_mode not in self.rashi_scatter_ions:
+            raise ValueError(
+                f"Range shifter scattering not implemented for radiation mode '{radiation_mode}'!"
+            )
+        z, a_mass = self.rashi_scatter_ions[radiation_mode]
+
         # Distance of range shifter to patient surface
-        rashi_dist = ssd - range_shifter["sourceRashiDistance"]
+        rashi_dist = ssd - range_shifter["source_rashi_distance"]
 
         # Convert to cm
         z_rs_cm = rashi_dist / 10.0  # [cm]
-        t = range_shifter["eqThickness"] / 10.0  # [cm]
+        t = range_shifter["eq_thickness"] / 10.0  # [cm]
 
         # Constants
         a1 = 0.21  # [1]
@@ -1094,27 +1135,32 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         alpha = 0.0022  # [cm MeV ^ (-p)]
         p = 1.77  # [1]
 
-        # Determine range
-        range_in_water = None
-        if isinstance(bd_entry, dict) and "range" in bd_entry:
-            range_in_water = bd_entry["range"]
+        if isinstance(bd_entry, dict):
+            range_mm, energy = bd_entry.get("range"), bd_entry.get("energy")
+        elif hasattr(bd_entry, "energy"):
+            range_mm, energy = getattr(bd_entry, "range", None), bd_entry.energy
+        else:
+            range_mm, energy = None, bd_entry
 
-        if range_in_water is None:
-            if isinstance(bd_entry, dict) and "energy" in bd_entry:
-                energy = bd_entry["energy"]
-            else:
-                energy = bd_entry
-            range_in_water = alpha * (energy**p)
+        # Ion range in water [cm]
+        if range_mm is not None and np.isfinite(range_mm):
+            range_in_water = float(range_mm) / 10.0
+        else:  # Bragg-Kleeman with energy per nucleon
+            range_in_water = (a_mass / z**2) * alpha * (float(energy) ** p)
 
         # Check if valid computation possible or range shifter too thick
-        if t / range_in_water >= 0.95:
+        if range_in_water <= 0 or t / range_in_water >= 0.95:
             raise ValueError(
                 "Computation of range shifter sigma invalid. Range shifter is too thick."
             )
 
-        # Improved HONG's Formula [1, Eq. 21]
+        # Relative depth in the range shifter (invariant under proton scaling)
         s = t / range_in_water
-        sigma_t = (a1 * s + a2 * s**2) * (c0 + c1 * range_in_water)
+        # Range of the equivalent proton
+        range_proton = (z**2 / a_mass) * range_in_water
+
+        # Improved HONG's Formula [1, Eq. 21]
+        sigma_t = (a1 * s + a2 * s**2) * (c0 + c1 * range_proton)
 
         # Constants for further calculations
         c1 = 13.6  # MeV
@@ -1129,22 +1175,24 @@ class ParticlePencilBeamEngineAbstract(PencilBeamEngineAbstract):
         # Calculate F1 and F2
         f1_part1 = (2 * c1**2 * alpha ** (2 / p)) / (4 * lr_pmma * (2 / p - 1))
         f1_part2 = ((1 - s) ** (2 - 2 / p) - 1) / (2 / p - 2) - s
-        f1_part3 = range_in_water ** (2 - 2 / p)
+        f1_part3 = range_proton ** (2 - 2 / p)
         f1 = f1_part1 * f1_part2 * f1_part3
 
         f2_part1 = (c1**2 * alpha ** (2 / p)) / (4 * lr_pmma * (2 / p - 1))
         f2_part2 = ((1 - s) ** (1 - 2 / p) - 1) / 1
-        f2_part3 = range_in_water ** (1 - 2 / p)
+        f2_part3 = range_proton ** (1 - 2 / p)
         f2 = f2_part1 * f2_part2 * f2_part3
 
+        # Scale each moment from the equivalent proton back to the ion
         sigma_proj_sq = prsf_pmma**2 * (
-            sigma_t**2 + f1 * z_rs_cm * rsp_pmma + f2 * (z_rs_cm * rsp_pmma) ** 2
+            (a_mass / z**4) * sigma_t**2
+            + (1 / z**2) * f1 * z_rs_cm * rsp_pmma
+            + (1 / a_mass) * f2 * (z_rs_cm * rsp_pmma) ** 2
         )  # [cm ^ 2]
 
         # Convert to mm
-        sigma_rashi = 10.0 * np.sqrt(sigma_proj_sq)  # [mm]
-
-        return sigma_rashi
+        # builtin float, so it combines with arrays of any backend
+        return float(10.0 * np.sqrt(sigma_proj_sq))  # [mm]
 
     def round2(self, a: np.floating, b: int) -> np.floating:
         """

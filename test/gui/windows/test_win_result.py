@@ -13,6 +13,31 @@ def test_quantity_window_init(qapp):
     assert win.windowTitle() == "pyRadPlan Plan Result Viewer"
 
 
+def test_bare_arrays_take_the_geometry_of_the_ct():
+    import SimpleITK as sitk
+    from types import SimpleNamespace
+
+    from pyRadPlan.gui.windows._result_win import _on_ct_grid
+    from pyRadPlan.result import validate_result
+
+    cube = sitk.GetImageFromArray(np.zeros((4, 5, 6)))
+    cube.SetSpacing((2.0, 3.0, 4.0))
+    cube.SetOrigin((-10.0, 5.0, 1.0))
+    ct = SimpleNamespace(cube_hu=cube)
+    placed = sitk.GetImageFromArray(np.ones((2, 2, 2)))
+    placed.SetSpacing((7.0, 7.0, 7.0))
+
+    data = {"physical_dose": np.ones((4, 5, 6)), "physical_dose_beam": [np.ones((4, 5, 6))]}
+    result = validate_result({key: _on_ct_grid(value, ct) for key, value in data.items()})
+
+    for image in (result["physical_dose"].values, result.beam.physical_dose[0].values):
+        assert image.GetSpacing() == cube.GetSpacing()
+        assert image.GetOrigin() == cube.GetOrigin()
+    assert _on_ct_grid(placed, ct) is placed
+    other_size = np.ones((2, 2, 2))
+    assert _on_ct_grid(other_size, ct) is other_size
+
+
 def test_quantity_window_load():
     # TODO
     pass

@@ -5,10 +5,11 @@ Sphinx build (``docs/conf.py``) converts them with :func:`write_notebooks` into
 ``docs/tutorials/examples`` (git-ignored) and renders them without executing anything, on Read
 the Docs as in CI.
 
-Executed notebooks are committed on release commits only: on the ``rc/X.Y.Z`` branch the
-release manager runs ``python docs/execute_examples.py --release``, which executes the
-examples locally and writes them into ``docs/tutorials/examples`` with their outputs, tagged
-with the hash of their script. The docs build renders such a notebook as is while its script is
+Executed notebooks stay tracked from one release to the next and only change on release
+commits: on the ``rc/X.Y.Z`` branch the release manager runs
+``python docs/execute_examples.py --release``, which executes the examples locally and writes
+them into ``docs/tutorials/examples`` with their outputs, tagged with the hash of their
+script. The docs build renders such a notebook as is while its script is
 unchanged, and replaces it by a conversion without outputs (with a warning) once the script
 changed. Examples matching :data:`SKIP` need tools a build system does not have and are never
 executed.
@@ -55,6 +56,7 @@ SKIP = {
     "utils_matrad": "needs MATLAB or Octave",
     "*ai_agent*": "needs AI API credentials",
     "*ai_model*": "downloads model repositories from the HuggingFace Hub",
+    "ai_dosecalc": "downloads a dose-calculation model from the HuggingFace Hub",
 }
 
 
@@ -252,8 +254,8 @@ def main(argv: list[str] | None = None) -> int:
 --release executes the examples into docs/tutorials/examples, where the docs build renders
 them with their outputs, and on an rc/* branch stages them with 'git add --force' (the folder
 is git-ignored) for the release commit. Examples listed in SKIP are not executed and stay
-without outputs. Outputs are scrubbed of the repository and home paths. Never commit executed
-notebooks outside of release commits.""",
+without outputs. Outputs are scrubbed of the repository and home paths. Never commit changes
+to executed notebooks outside of release commits.""",
     )
     parser.add_argument("examples", nargs="*", help="example names (without .py); default: all")
     parser.add_argument(

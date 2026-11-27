@@ -1,5 +1,6 @@
 """Structure Set Implementation."""
 
+import logging
 import warnings
 from typing import Any, Literal, Union, Optional
 from typing_extensions import Self
@@ -10,14 +11,25 @@ from pydantic import (
 )
 
 import numpy as np
-from scipy import ndimage
 import SimpleITK as sitk
 
-from ..core import PyRadPlanBaseModel, Grid
-from ..core.resample import resample_numpy_array
+from ..core import PyRadPlanBaseModel, Grid, decode_input
+from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
 from ..biology.tissues._base import TissueProperties
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_overlap_is_applied(overlap_is_applied: Optional[bool]) -> None:
+    if overlap_is_applied is not None:
+        warnings.warn(
+            "overlap_is_applied is deprecated and has no effect: the result is the same with "
+            "and without overlap priorities applied.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
 
 class StructureSet(PyRadPlanBaseModel):
@@ -32,6 +44,9 @@ class StructureSet(PyRadPlanBaseModel):
         if data.get("vois") is None:
             raise ValueError("No cst provided. Please provide a cst.")
 
+        if "ct_image" not in data and "ctImage" in data:
+            data = {**data, "ct_image": data["ctImage"]}
+            del data["ctImage"]
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
 
@@ -156,6 +171,9 @@ class StructureSet(PyRadPlanBaseModel):
         def get_idx_list(vdata_item):
             # Wrap a single array into a list if needed
             arr = vdata_item[3]
+            # cst{i,4} is a cell array, which may arrive as an object ndarray
+            if isinstance(arr, np.ndarray) and arr.dtype == object:
+                arr = arr.ravel().tolist()
             # return only one scenario (3D) else: Multi-Scenario (4D)
             return (
                 [np.asarray(arr, dtype=int).ravel()]
@@ -163,13 +181,16 @@ class StructureSet(PyRadPlanBaseModel):
                 else [np.asarray(a, dtype=int).ravel() for a in arr]
             )
 
+        dim = ct.cube_hu.GetDimension()
+        ct_3d = ct.cube_hu[:, :, :, 0] if dim == 4 else ct.cube_hu
+
         def create_mask(idx):
             # Create the ITK mask for a given index list.
             tmp_mask = np.zeros((ct.size[2], ct.size[0], ct.size[1]), dtype=np.uint8)
             tmp_mask.flat[idx - 1] = 1
             tmp_mask = np.swapaxes(tmp_mask, 1, 2)
             mask_image = sitk.GetImageFromArray(tmp_mask)
-            mask_image.CopyInformation(ct.cube_hu)
+            mask_image.CopyInformation(ct_3d)
             return mask_image
 
         for vdata in cst_data:
@@ -177,12 +198,11 @@ class StructureSet(PyRadPlanBaseModel):
             masks = [create_mask(idx) for idx in idx_list]
 
             # For 4D, we need to join the masks. We also check here if the number of masks we could
-            # extract matches the number of dimensions in the CT image
-            dim = ct.cube_hu.GetDimension()
+            # extract matches the number of scenarios in the CT image
             if dim == 4:
                 # First check if the mask is the same for all 4D scenarios
                 if len(masks) == 1:
-                    masks = [masks[0]] * dim
+                    masks = masks * ct.num_of_ct_scen
                 # Now do a sanity check that we don't have an incompatible number of masks
                 if len(masks) != ct.cube_hu.GetSize()[3]:
                     raise ValueError("Incompatible number of masks for 4D CT")
@@ -199,6 +219,10 @@ class StructureSet(PyRadPlanBaseModel):
                 objectives = [objectives]
 
             props = vdata[4] if len(vdata) > 4 and isinstance(vdata[4], dict) else {}
+            # matRad colors are always 0..1, but integer-typed triples like [0 0 1] would
+            # otherwise be read as 0..255.
+            if "visibleColor" in props:
+                props = {**props, "visibleColor": np.asarray(props["visibleColor"], dtype=float)}
 
             voi = validate_voi(
                 name=str(vdata[1]),
@@ -215,6 +239,8 @@ class StructureSet(PyRadPlanBaseModel):
     def _process_native_data(cls, data: dict, info: ValidationInfo) -> dict:
         """Handle data coming from native format."""
         data["ct_image"] = validate_ct(data["ct_image"])
+        if isinstance(data["vois"], list):
+            data["vois"] = [validate_voi(v) if isinstance(v, dict) else v for v in data["vois"]]
         # Handle the case where vois is supplied as a dict.
         if isinstance(data["vois"], dict):
             # Define possible keys and their validation functions
@@ -564,10 +590,17 @@ class StructureSet(PyRadPlanBaseModel):
 
     @staticmethod
     def _center_of_mass(mask_image: sitk.Image) -> np.ndarray:
-        # Transpose so axes go (x, y, z) for sitk-style continuous indexing.
-        mask = sitk.GetArrayViewFromImage(mask_image).T
-
-        cm_index = ndimage.center_of_mass(mask)
+        # The center of mass along an axis only needs the mask projected onto it, which is
+        # much faster on large images than ndimage.center_of_mass.
+        mask = sitk.GetArrayViewFromImage(mask_image)  # (z, y, x)
+        along_z = mask.sum(axis=(1, 2), dtype=np.float64)
+        plane = mask.sum(axis=0, dtype=np.float64)
+        total = along_z.sum()
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cm_index = tuple(
+                float(np.dot(np.arange(p.size), p) / total)
+                for p in (plane.sum(axis=0), plane.sum(axis=1), along_z)
+            )
 
         cm = mask_image.TransformContinuousIndexToPhysicalPoint(cm_index)
 
@@ -588,20 +621,61 @@ class StructureSet(PyRadPlanBaseModel):
             The resampled StructureSet.
         """
 
-        new_model = self.model_dump()
-
-        if new_model["ct_image"] != new_ct:
-            new_model["ct_image"] = new_ct
-            new_model["vois"] = [voi._resample_on_new_ct(new_ct) for voi in self.vois]
+        # No model_dump here: it would evaluate every computed field (voxel indices, shape
+        # statistics) of every VOI on the old grid, only to discard them.
+        new_model = {name: getattr(self, name) for name in type(self).model_fields}
+        new_model["ct_image"] = new_ct
+        new_model["vois"] = [self._voi_on_ct(voi, new_ct) for voi in self.vois]
         return self.model_validate(new_model)
+
+    @staticmethod
+    def _voi_on_ct(voi: VOI, new_ct: CT) -> VOI:
+        """
+        Resample ``voi`` onto ``new_ct``, phase by phase for a 4D CT.
+
+        A 3D structure on a 4D CT is repeated for every phase (matRad's convention for a
+        structure set without per-phase contours).
+        """
+        cube = new_ct.cube_hu
+        if cube.GetDimension() == 3:
+            return voi._resample_on_new_ct(new_ct)
+        num_phases = cube.GetSize()[3]
+        phase_ct = CT(cube_hu=cube[:, :, :, 0])
+        if voi.mask.GetDimension() == 4:
+            if voi.mask.GetSize()[3] != num_phases:
+                raise ValueError(
+                    f"CT image mismatch: structure {voi.name!r} has {voi.mask.GetSize()[3]} "
+                    f"phases, the CT {num_phases}"
+                )
+            masks = []
+            for i in range(num_phases):
+                phase_mask = voi.mask[:, :, :, i]
+                phase_voi = voi.model_copy(
+                    update={"mask": phase_mask, "grid": Grid.from_sitk_image(phase_mask)}
+                )
+                masks.append(phase_voi._resample_on_new_ct(phase_ct).mask)
+        else:
+            masks = [voi._resample_on_new_ct(phase_ct).mask] * num_phases
+        grid = Grid.from_sitk_image(cube)
+        mask = sitk.JoinSeries(masks)
+        mask.SetOrigin(grid.origin)
+        mask.SetSpacing(grid.resolution_vector)
+        mask.SetDirection(grid.direction_vector)
+        return voi.model_copy(update={"mask": mask, "grid": grid})
 
     def apply_overlap_priorities(self) -> Self:
         """
         Apply overlaps to the StructureSet.
 
-        A VOI with ``apply_overlap=None`` is excluded in both directions: it keeps its full
-        mask and removes no voxels from any other VOI. ``apply_overlap=False`` keeps its own
-        voxels but still removes them from lower-priority VOIs.
+        A voxel is removed from a participating VOI if it also belongs to a participating
+        VOI with a lower overlap priority number. Participation is set per VOI by
+        ``apply_overlap``:
+
+        - ``"auto"`` (default): participates only if the VOI has objectives.
+        - ``True``: always participates, even without objectives.
+        - ``False``: keeps its own voxels but still removes them from lower-priority VOIs.
+        - ``None``: excluded in both directions; keeps its full mask and removes no voxels
+          from any other VOI.
 
         A warning is emitted for any VOI that carries objectives but is left empty, since
         its objectives would silently have no effect during optimization.
@@ -611,52 +685,43 @@ class StructureSet(PyRadPlanBaseModel):
         StructureSet
             The StructureSet with overlaps applied.
         """
+        if not self.vois:
+            return self.model_copy(deep=True)
 
-        new_vois: list[Optional[VOI]] = [None] * len(self.vois)
+        new_vois = [v.model_copy() for v in self.vois]
 
-        # VOIs with None will instantly be copied to new_vois.
-        overlap_indices = []
-        for i, v in enumerate(self.vois):
-            if v.apply_overlap is not None:
-                overlap_indices.append(i)
-            else:
-                new_vois[i] = v.model_copy()
+        def participates(voi: VOI) -> bool:
+            if voi.apply_overlap == "auto":
+                return bool(voi.objectives)
+            return voi.apply_overlap is not None
 
-        # Cases where all VOIs were set to None
+        overlap_indices = [i for i, v in enumerate(self.vois) if participates(v)]
         if not overlap_indices:
             return self._warn_on_empty_objectives(new_vois)
 
-        # sort by overlap priority
-        overlaps = [self.vois[i].overlap_priority for i in overlap_indices]
-        ix_sorted_subset = np.argsort(overlaps)
-        ix_sorted = [overlap_indices[i] for i in ix_sorted_subset]
+        priorities = [self.vois[i].overlap_priority for i in overlap_indices]
+        ix_sorted = [overlap_indices[i] for i in np.argsort(priorities, kind="stable")]
 
-        overlap_mask = self.vois[ix_sorted[0]].mask  # Will aggregate the overlap masks using OR
-        last_priority_mask = sitk.Image(overlap_mask.GetSize(), overlap_mask.GetPixelID())
-        last_priority_mask.CopyInformation(overlap_mask)
+        # Work on numpy arrays, since sitk's mask filters do not support 4D images
+        shape = sitk.GetArrayViewFromImage(self.vois[ix_sorted[0]].mask).shape
+        # union of the participating VOIs with a strictly lower priority number
+        carving_mask = np.zeros(shape, dtype=bool)
+        # union of the participating VOIs in the current priority group
+        group_mask = np.zeros(shape, dtype=bool)
+        group_priority = self.vois[ix_sorted[0]].overlap_priority
 
-        new_vois[ix_sorted[0]] = self.vois[ix_sorted[0]].model_copy()
+        for ix_voi in ix_sorted:
+            curr_voi = new_vois[ix_voi]
+            if curr_voi.overlap_priority != group_priority:
+                carving_mask = carving_mask | group_mask
+                group_mask = np.zeros(shape, dtype=bool)
+                group_priority = curr_voi.overlap_priority
 
-        for i, ix_voi in enumerate(ix_sorted[1:], 1):
-            curr_voi = self.vois[ix_voi].model_copy()
-            curr_mask = curr_voi.mask
+            orig_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
+            group_mask = group_mask | orig_mask
 
-            # if the overlap priority is higher than we need to apply overlap
-            prev_voi = new_vois[ix_sorted[i - 1]]
-            if curr_voi.overlap_priority >= prev_voi.overlap_priority:
-                if curr_voi.overlap_priority > prev_voi.overlap_priority:
-                    last_priority_mask = overlap_mask
-
-                # False means IT DOES NOT UPDATE ITS VOXELS (is not masked by higher priority)
-                if curr_voi.apply_overlap is not False:
-                    curr_mask = sitk.MaskNegated(curr_mask, last_priority_mask)
-
-            curr_voi.mask = curr_mask
-
-            # Both True and False contribute to overlap_mask
-            overlap_mask = sitk.Or(overlap_mask, curr_mask)
-
-            new_vois[ix_voi] = curr_voi
+            if curr_voi.apply_overlap is not False and carving_mask.any():
+                curr_voi.mask = (orig_mask & ~carving_mask).astype(np.uint8)
 
         return self._warn_on_empty_objectives(new_vois)
 
@@ -664,13 +729,12 @@ class StructureSet(PyRadPlanBaseModel):
         """Warn about VOIs left empty by overlap resolution, then build the new StructureSet."""
         for voi in new_vois:
             if voi.objectives and not sitk.GetArrayViewFromImage(voi.mask).any():
-                warnings.warn(
-                    f"VOI '{voi.name}' has objectives defined but was fully overlapped by "
-                    "structures with a higher overlap priority. Its objectives will have no "
-                    "effect during optimization. Set `apply_overlap=None` on this VOI to "
-                    "exclude it from overlap resolution.",
-                    UserWarning,
-                    stacklevel=3,
+                logger.warning(
+                    "VOI '%s' has objectives defined but was fully overlapped by structures "
+                    "with a higher overlap priority. Its objectives will have no effect during "
+                    "optimization. Set `apply_overlap=None` on this VOI to exclude it from "
+                    "overlap resolution.",
+                    voi.name,
                 )
 
         return self.model_copy(deep=True, update={"vois": new_vois})
@@ -754,54 +818,130 @@ class StructureSet(PyRadPlanBaseModel):
         # Add to existing VOIs
         self.vois = self.vois + [body_voi]
 
-    def get_reference_lq_params(
-        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Get the reference LQ parameters (alpha_x and beta_x) for the given CT."""
+    def get_tissue_data(
+        self, resample_grid: Optional[Grid] = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Prepare reference alpha, beta, tissue indices and classes together.
 
-        cst = self if overlap_is_applied else self.apply_overlap_priorities()
-        num_voxels = np.prod(cst.ct_image.size)
-        alpha = np.zeros(num_voxels)
-        beta = np.zeros(num_voxels)
-        for voi in cst.vois:
-            alpha[voi.indices_numpy] = voi.tissue_properties.alpha_x
-            beta[voi.indices_numpy] = voi.tissue_properties.beta_x
+        A voxel that several VOIs share gets the values of the VOI with the lowest
+        overlap priority number. One VOI-label volume is resampled using nearest
+        neighbors. Label zero denotes unassigned voxels: their alpha/beta are
+        zero and their tissue index is zero, preserving the separate getters'
+        conventions. The structure set is not modified.
 
-        if resample_grid is not None:
-            original_grid = cst.ct_image.grid
-            alpha = resample_numpy_array(
-                alpha.reshape(original_grid.dimensions[::-1]),
-                reference_grid=original_grid,
-                interpolator=sitk.sitkNearestNeighbor,
-                target_grid=resample_grid,
-            ).ravel()
-            beta = resample_numpy_array(
-                beta.reshape(original_grid.dimensions[::-1]),
-                reference_grid=original_grid,
-                interpolator=sitk.sitkNearestNeighbor,
-                target_grid=resample_grid,
-            ).ravel()
+        Parameters
+        ----------
+        resample_grid : Grid, optional
+            Target grid for nearest-neighbor label resampling.
 
-        # One column per CT scenario. TODO: structures are currently assumed identical
-        # across CT scenarios; per-scenario structure sets need to fill the columns here.
-        num_ct_scen = cst.ct_image.num_of_ct_scen
-        alpha = np.repeat(alpha[:, None], num_ct_scen, axis=1)
-        beta = np.repeat(beta[:, None], num_ct_scen, axis=1)
-        return alpha, beta
-
-    def get_tissue_class_indices(
-        self, overlap_is_applied: bool = False, resample_grid: Optional[Grid] = None
-    ) -> np.ndarray:
+        Returns
+        -------
+        alpha, beta : numpy.ndarray
+            Reference LQ parameters, each shaped (num_voxels, num_ct_scenarios).
+        tissue_indices : numpy.ndarray
+            Integer class indices with the same shape as alpha and beta.
+        classes : numpy.ndarray
+            Distinct tissue properties in original first-occurrence order.
         """
-        Get the tissue class index of every voxel of the CT.
+        classes = self.get_tissue_classes()
+        class_list = list(classes)
+        labels = np.zeros(
+            (int(np.prod(self.ct_image.size)), self.ct_image.num_of_ct_scen), dtype=np.int64
+        )
+        alpha = np.zeros(len(self.vois) + 1)
+        beta = np.zeros(len(self.vois) + 1)
+        tissue = np.zeros(len(self.vois) + 1, dtype=np.int64)
+        for label, voi in self._labeled_vois_highest_priority_last():
+            for phase, indices in enumerate(voi.scenario_indices(order="numpy")):
+                labels[indices, phase] = label
+            alpha[label] = voi.tissue_properties.alpha_x
+            beta[label] = voi.tissue_properties.beta_x
+            tissue[label] = class_list.index(voi.tissue_properties)
+        if resample_grid is not None:
+            labels = self._resample_scenario_columns(labels, resample_grid)
+        return alpha[labels], beta[labels], tissue[labels], classes
 
-        Indices refer to :meth:`get_tissue_classes`. Overlapping VOIs are resolved by
-        their overlap priority; voxels outside every VOI get index 0.
+    def get_reference_lq_params(
+        self, overlap_is_applied: Optional[bool] = None, resample_grid: Optional[Grid] = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get the reference LQ parameters (alpha_x and beta_x) for the given CT.
+
+        A voxel that several VOIs share gets the parameters of the VOI with the lowest
+        overlap priority number.
 
         Parameters
         ----------
         overlap_is_applied : bool, optional
-            Whether overlap priorities were already applied to this structure set.
+            Deprecated, has no effect: the result is the same with and without overlap
+            priorities applied.
+        resample_grid : Grid, optional
+            Grid to resample the parameters onto (nearest neighbor), e.g. the dose grid.
+
+        Returns
+        -------
+        alpha, beta : numpy.ndarray
+            Shaped (num_voxels, num_ct_scenarios), voxels in numpy order.
+        """
+        _warn_overlap_is_applied(overlap_is_applied)
+        num_voxels = np.prod(self.ct_image.size)
+        # One column per CT scenario, filled from the VOI masks of that scenario
+        num_ct_scen = self.ct_image.num_of_ct_scen
+        alpha = np.zeros((num_voxels, num_ct_scen))
+        beta = np.zeros((num_voxels, num_ct_scen))
+        for _, voi in self._labeled_vois_highest_priority_last():
+            for scen, ix in enumerate(voi.scenario_indices(order="numpy")):
+                alpha[ix, scen] = voi.tissue_properties.alpha_x
+                beta[ix, scen] = voi.tissue_properties.beta_x
+
+        if resample_grid is not None:
+            alpha = self._resample_scenario_columns(alpha, resample_grid)
+            beta = self._resample_scenario_columns(beta, resample_grid)
+
+        return alpha, beta
+
+    def _labeled_vois_highest_priority_last(self) -> list[tuple[int, VOI]]:
+        """Return the VOIs with 1-based labels, highest overlap priority last.
+
+        Writing per-voxel values in this order lets the VOI with the lowest overlap
+        priority number win voxels that several VOIs share. That VOI keeps the voxel in
+        :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
+        the result is the same with and without overlap priorities applied.
+        """
+        return sorted(enumerate(self.vois, 1), key=lambda item: -item[1].overlap_priority)
+
+    def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
+        """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""
+        # the columns live on one 3D phase of the CT, also when the CT itself is 4D
+        original_grid = _phase_grid(self.ct_image)
+        return np.stack(
+            [
+                resample_array(
+                    column.reshape(original_grid.dimensions[::-1]),
+                    reference_grid=original_grid,
+                    interpolator=sitk.sitkNearestNeighbor,
+                    target_grid=target_grid,
+                ).ravel()
+                for column in values.T
+            ],
+            axis=1,
+        )
+
+    def get_tissue_class_indices(
+        self, overlap_is_applied: Optional[bool] = None, resample_grid: Optional[Grid] = None
+    ) -> np.ndarray:
+        """
+        Get the tissue class index of every voxel of the CT.
+
+        Indices refer to :meth:`get_tissue_classes`. A voxel that several VOIs share gets
+        the class of the VOI with the lowest overlap priority number; voxels outside every
+        VOI get index 0.
+
+        Parameters
+        ----------
+        overlap_is_applied : bool, optional
+            Deprecated, has no effect: the result is the same with and without overlap
+            priorities applied.
         resample_grid : Grid, optional
             Grid to resample the indices onto (nearest neighbor), e.g. the dose grid.
 
@@ -811,26 +951,20 @@ class StructureSet(PyRadPlanBaseModel):
             Indices of shape (num_voxels, num_ct_scenarios), voxels in numpy order.
         """
 
-        cst = self if overlap_is_applied else self.apply_overlap_priorities()
-        num_voxels = np.prod(cst.ct_image.size)
-        ix = np.zeros(num_voxels, dtype=np.int64)
+        _warn_overlap_is_applied(overlap_is_applied)
+        num_voxels = np.prod(self.ct_image.size)
+        # One column per CT scenario, filled from the VOI masks of that scenario
+        num_ct_scen = self.ct_image.num_of_ct_scen
+        ix = np.zeros((num_voxels, num_ct_scen), dtype=np.int64)
         tissue_classes = list(self.get_tissue_classes())
-        for voi in cst.vois:
-            ix[voi.indices_numpy] = tissue_classes.index(voi.tissue_properties)
+        for _, voi in self._labeled_vois_highest_priority_last():
+            tissue_ix = tissue_classes.index(voi.tissue_properties)
+            for scen, voxels in enumerate(voi.scenario_indices(order="numpy")):
+                ix[voxels, scen] = tissue_ix
 
         if resample_grid is not None:
-            original_grid = cst.ct_image.grid
-            ix = resample_numpy_array(
-                ix.reshape(original_grid.dimensions[::-1]),
-                reference_grid=original_grid,
-                interpolator=sitk.sitkNearestNeighbor,
-                target_grid=resample_grid,
-            ).ravel()
+            ix = self._resample_scenario_columns(ix, resample_grid)
 
-        # One column per CT scenario. TODO: structures are currently assumed identical
-        # across CT scenarios; per-scenario structure sets need to fill the columns here.
-        num_ct_scen = cst.ct_image.num_of_ct_scen
-        ix = np.repeat(ix[:, None], num_ct_scen, axis=1)
         return ix
 
     def get_tissue_classes(self) -> np.ndarray:
@@ -895,6 +1029,12 @@ class StructureSet(PyRadPlanBaseModel):
         return self
 
 
+def _phase_grid(ct: CT) -> Grid:
+    """Grid of one phase of ``ct``: its 3D geometry, also for a 4D CT."""
+    cube = ct.cube_hu
+    return Grid.from_sitk_image(cube[:, :, :, 0] if cube.GetDimension() == 4 else cube)
+
+
 def create_cst(
     cst_data: Union[dict[str, Any], StructureSet, None] = None,
     ct: Union[CT, dict, None] = None,
@@ -923,12 +1063,21 @@ def create_cst(
     """
 
     if isinstance(cst_data, StructureSet):
-        if ct and cst_data.ct_image != validate_ct(ct):
-            raise ValueError("CT image mismatch between StructureSet and provided CT")
-        return cst_data
+        if ct is None:
+            return cst_data
+        ct = validate_ct(ct)
+        if cst_data.ct_image == ct:
+            return cst_data
+        if _phase_grid(cst_data.ct_image) == _phase_grid(ct):
+            # same voxel grid: attach the structures to this CT; a 3D structure set on a 4D CT
+            # is repeated for every phase
+            return cst_data.resample_on_new_ct(ct)
+        raise ValueError("CT image mismatch between StructureSet and provided CT")
     elif isinstance(cst_data, dict):
-        cst_data.update(kwargs)
-        cst_data["ct_image"] = ct
+        cst_data = {**decode_input(cst_data), **kwargs}
+        if ct is not None or not {"ct_image", "ctImage"} & cst_data.keys():
+            cst_data.pop("ctImage", None)
+            cst_data["ct_image"] = ct
     else:
         cst_data = {"vois": cst_data, "ct_image": ct, **kwargs}
     return StructureSet(**cst_data)

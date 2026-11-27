@@ -11,11 +11,15 @@ from pydantic import (
 
 from numpydantic import NDArray, Shape
 
+from pyRadPlan.stf._beamlet import Beamlet, IonSpot, PhotonBixel
 from pyRadPlan.stf._ray import Ray
 from pyRadPlan.core import PyRadPlanBaseModel
 from pyRadPlan.core.xp_utils import to_numpy
 from pyRadPlan.geometry import lps
 from pyRadPlan.util.helpers import models2recarray
+
+
+_ION_MODES = frozenset({"protons", "helium", "carbon", "oxygen"})
 
 
 class Beam(PyRadPlanBaseModel):
@@ -111,16 +115,13 @@ class Beam(PyRadPlanBaseModel):
                 if "numOfRays" in ray_dict:
                     ray_dict.pop("numOfRays")
 
-                length_lists = []
+                length_lists = [len(v) for v in ray_dict.values() if isinstance(v, list)]
 
-                for v in ray_dict.values():
-                    if isinstance(v, list):
-                        length_lists.append(len(v))
-
-                    # this exception is necessary if imported stf from matlab is only one beam
-                    # TODO: Test if this is necessary
-                    if isinstance(v, int or float):
-                        length_lists.append(1)
+                # a beam with a single ray comes from matRad as a plain struct, not as lists
+                if not length_lists:
+                    data.pop("ray")
+                    data["rays"] = [ray_dict]
+                    return data
 
                 # TODO: This error message might be confusing in some cases
                 if len(set(length_lists)) != 1:
@@ -171,6 +172,29 @@ class Beam(PyRadPlanBaseModel):
         if "source_point" not in self.model_fields_set:
             rotation_matrix = lps.get_beam_rotation_matrix(self.gantry_angle, self.couch_angle)
             self.__dict__["source_point"] = rotation_matrix @ self.source_point_bev
+        return self
+
+    @model_validator(mode="after")
+    def specialize_beamlets(self) -> "Beam":
+        """
+        Give plain beamlets the type of the beam's radiation mode.
+
+        The subclasses ``IonSpot`` and ``PhotonBixel`` have the fields of ``Beamlet``, so a
+        dump does not tell them apart. Ion beams hold ``IonSpot`` and photon beams
+        ``PhotonBixel`` beamlets (field shapes are kept), whatever way the stf was created.
+        The class is swapped in place (the subclasses add no fields), which is much cheaper
+        than rebuilding every beamlet of a large stf.
+        """
+        if self.radiation_mode in _ION_MODES:
+            target = IonSpot
+        elif self.radiation_mode == "photons":
+            target = PhotonBixel
+        else:
+            return self
+        for ray in self.rays:
+            for beamlet in ray.beamlets:
+                if type(beamlet) is Beamlet:
+                    object.__setattr__(beamlet, "__class__", target)
         return self
 
     @field_validator("rays", mode="after")

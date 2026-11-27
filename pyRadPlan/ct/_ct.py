@@ -5,7 +5,7 @@ Defines a CT pydantic model and factories.
 
 import os
 from abc import ABC
-from typing import Annotated, Any, Union
+from typing import Annotated, Any, Optional, Union
 from typing_extensions import Self
 from pydantic import (
     Field,
@@ -17,6 +17,8 @@ import numpy as np
 from pyRadPlan.core import resample_image
 
 from pyRadPlan.core import PyRadPlanBaseModel, Grid
+
+from ._dicom_info import DicomInfo
 
 
 class CT(PyRadPlanBaseModel, ABC):
@@ -39,6 +41,8 @@ class CT(PyRadPlanBaseModel, ABC):
         The origin coordinates of the CT image.
     direction : tuple
         The direction cosines of the CT image.
+    dicom_info : DicomInfo, optional
+        DICOM provenance metadata (patient, study, frame of reference, source series).
 
     Methods
     -------
@@ -47,6 +51,7 @@ class CT(PyRadPlanBaseModel, ABC):
     """
 
     cube_hu: Annotated[sitk.Image, Field(init=False, alias="cubeHU")]
+    dicom_info: Optional[DicomInfo] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -82,8 +87,15 @@ class CT(PyRadPlanBaseModel, ABC):
         if not isinstance(data, dict):
             return data
 
+        # Work on copies so the caller's dict and image are not modified
+        data = dict(data)
+
+        cls._merge_matrad_dicom_info(data)
+
         # Extract cube_hu from data using field name or alias
         cube_hu = cls._extract_cube_hu(data)
+        if isinstance(cube_hu, sitk.Image):
+            cube_hu = sitk.Image(cube_hu)
 
         # Auto-extract origin from SimpleITK images if not provided
         cls._extract_origin_from_sitk_image(data, cube_hu)
@@ -102,6 +114,18 @@ class CT(PyRadPlanBaseModel, ABC):
         cls._apply_image_properties(data, cube_hu)
 
         return data
+
+    @classmethod
+    def _merge_matrad_dicom_info(cls, data: dict) -> None:
+        """Merge matRad's ``dicomInfo``/``dicomMeta`` structs into ``dicom_info``."""
+        info = data.pop("dicomInfo", None)
+        meta = data.pop("dicomMeta", None)
+        if data.get("dicom_info") is not None:
+            return
+        if meta is not None:
+            data["dicom_info"] = DicomInfo.from_matrad(info, meta)
+        elif info is not None:
+            data["dicom_info"] = info
 
     @classmethod
     def _extract_cube_hu(cls, data: dict) -> Any:
@@ -140,6 +164,9 @@ class CT(PyRadPlanBaseModel, ABC):
         """Convert multiple CT scenarios to joined SimpleITK image."""
         num_cubes = len(cube_hu)
 
+        if num_cubes == 1:
+            return cls._convert_single_scenario(cube_hu[0], should_permute)
+
         if should_permute:
             ct_scenarios = [
                 sitk.GetImageFromArray(np.transpose(cube_hu[i], (2, 0, 1)), False)
@@ -171,7 +198,11 @@ class CT(PyRadPlanBaseModel, ABC):
 
         # Apply direction
         if "direction" in data:
-            data["cube_hu"].SetDirection(data["direction"])
+            direction = data["direction"]
+            # 4D metadata of a single scenario, whose cube is a 3D image
+            if not is4d and len(direction) == 16:
+                direction = np.reshape(direction, (4, 4))[:3, :3].ravel().tolist()
+            data["cube_hu"].SetDirection(direction)
 
         # Apply spacing from resolution
         cls._apply_spacing(data, cube_hu, is4d)
@@ -201,7 +232,12 @@ class CT(PyRadPlanBaseModel, ABC):
         """Apply origin to the SimpleITK image using three different strategies."""
         if "origin" in data:
             # Strategy 1: Use explicitly provided origin
-            data["cube_hu"].SetOrigin(data["origin"])
+            origin = tuple(data["origin"])
+            if is4d and len(origin) == 3:
+                origin += (0.0,)
+            elif not is4d and len(origin) == 4:
+                origin = origin[:3]
+            data["cube_hu"].SetOrigin(origin)
         elif all(key in data for key in ("x", "y", "z")):
             # Strategy 2: Calculate origin from x, y, z coordinate vectors
             cls._apply_origin_from_coordinate_vectors(data, is4d)
@@ -221,7 +257,9 @@ class CT(PyRadPlanBaseModel, ABC):
     def _apply_centered_origin(cls, data: dict, is4d: bool) -> None:
         """Calculate and apply centered origin based on image geometry."""
         centered_origin = (
-            -np.array(data["cube_hu"].GetSize()) / 2.0 * np.array(data["cube_hu"].GetSpacing())
+            -np.array(data["cube_hu"].GetSize()[:3])
+            / 2.0
+            * np.array(data["cube_hu"].GetSpacing()[:3])
         )
 
         if is4d:
@@ -331,8 +369,7 @@ class CT(PyRadPlanBaseModel, ABC):
 
         x_spacing = self.cube_hu.GetSpacing()[0]
         origin = self.cube_hu.GetOrigin()[0]
-        x = np.arange(origin, (self.size[0] * x_spacing + origin), x_spacing)
-        return x
+        return np.arange(self.size[0]) * x_spacing + origin
 
     @computed_field
     @property
@@ -348,8 +385,7 @@ class CT(PyRadPlanBaseModel, ABC):
 
         y_spacing = self.cube_hu.GetSpacing()[1]
         origin = self.cube_hu.GetOrigin()[1]
-        y = np.arange(origin, (self.size[1] * y_spacing + origin), y_spacing)
-        return y
+        return np.arange(self.size[1]) * y_spacing + origin
 
     @computed_field
     @property
@@ -365,8 +401,7 @@ class CT(PyRadPlanBaseModel, ABC):
 
         z_spacing = self.cube_hu.GetSpacing()[2]
         origin = self.cube_hu.GetOrigin()[2]
-        z = np.arange(origin, (self.size[2] * z_spacing + origin), z_spacing)
-        return z
+        return np.arange(self.size[2]) * z_spacing + origin
 
     @property
     def grid(self) -> Grid:
@@ -414,7 +449,7 @@ class CT(PyRadPlanBaseModel, ABC):
             The water equivalent thickness (WET) image.
         """
 
-        if hlut.shape[1] != 2 and hlut.shape[0] <= 1:
+        if hlut.ndim != 2 or hlut.shape[1] != 2 or hlut.shape[0] < 2:
             raise ValueError(
                 "HLUT must have 2 columns of values, with the first column being the HU values "
                 "and the second column being the WET values with each at least 2 values."
@@ -429,7 +464,7 @@ class CT(PyRadPlanBaseModel, ABC):
         ct_array = sitk.GetArrayViewFromImage(self.cube_hu)
 
         # Convert the WET array back to a SimpleITK image
-        wet_image = sitk.GetImageFromArray(np.interp(ct_array, xp, fp))
+        wet_image = sitk.GetImageFromArray(np.interp(ct_array, xp, fp), isVector=False)
         wet_image.SetOrigin(self.cube_hu.GetOrigin())
         wet_image.SetSpacing(self.cube_hu.GetSpacing())
         wet_image.SetDirection(self.cube_hu.GetDirection())
@@ -448,12 +483,17 @@ class CT(PyRadPlanBaseModel, ABC):
         ct_dict = super().to_matrad(context=context)
         # as cubeHU for the matRad format
         sitk_image = ct_dict["cubeHU"]
-        # Flip axes for matRad format
-        numpy_array = np.transpose(sitk.GetArrayFromImage(sitk_image), (1, 2, 0))
-        # We also need to put the image array into a ndarray of objects
-        ct_dict["cubeHU"] = np.ndarray(shape=(1,), dtype=object)
-        ct_dict["cubeHU"][0] = numpy_array
-        ct_dict["cubeDim"] = np.array(ct_dict["cubeDim"], dtype=float)
+        cubes = sitk.GetArrayFromImage(sitk_image)
+        if cubes.ndim == 3:
+            cubes = cubes[np.newaxis]
+        # One cell per scenario, axes flipped to matRad's (y, x, z)
+        ct_dict["cubeHU"] = np.ndarray(shape=(len(cubes),), dtype=object)
+        for i, cube in enumerate(cubes):
+            ct_dict["cubeHU"][i] = np.transpose(cube, (1, 2, 0))
+        ct_dict["cubeDim"] = np.array(ct_dict["cubeDim"], dtype=float)[[1, 0, 2]]
+        ct_dict.pop("dicomInfo", None)
+        if self.dicom_info is not None:
+            ct_dict["dicomInfo"] = self.dicom_info.to_dicom_dict()
         return ct_dict
 
     def resample_to_grid(self, grid: Grid) -> Self:
@@ -486,7 +526,7 @@ class CT(PyRadPlanBaseModel, ABC):
         else:
             new_ct = resampler.Execute(self.cube_hu)
 
-        return self.model_validate({"cube_hu": new_ct})
+        return self.model_validate({"cube_hu": new_ct, "dicom_info": self.dicom_info})
 
 
 def resample_ct(ct: CT, interpolator=sitk.sitkBSpline, **kwargs) -> CT:
@@ -503,7 +543,7 @@ def resample_ct(ct: CT, interpolator=sitk.sitkBSpline, **kwargs) -> CT:
 
     resampled_ct_cube = resample_image(input_image=ct_cube, interpolator=interpolator, **kwargs)
 
-    return validate_ct(cube_hu=resampled_ct_cube)
+    return validate_ct(cube_hu=resampled_ct_cube, dicom_info=ct.dicom_info)
 
 
 def ct_from_file(file_path: Union[str, os.PathLike]) -> CT:

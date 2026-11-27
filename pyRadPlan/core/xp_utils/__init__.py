@@ -24,6 +24,7 @@ from .helpers import (
     device_cache_key,
     get_device_info,
     is_on_gpu,
+    device_string,
     is_host_device,
     openblas_has_gemm_race,
     warn_on_unreliable_openblas,
@@ -53,6 +54,9 @@ from .compat import (
     quantile,
     interp1d,
 )
+from ._reductions import grouped_max
+from ._interpolation import ArrayBackendGridInterpolator, interpnd
+from ._interpolation1d import ArrayBackend1DInterpolator
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +295,7 @@ __all__ = [
     "device_cache_key",
     "get_device_info",
     "is_on_gpu",
+    "device_string",
     "is_host_device",
     "openblas_has_gemm_race",
     "warn_on_unreliable_openblas",
@@ -309,6 +314,7 @@ __all__ = [
     "free_gpu_memory",
     "elapsed_time",
     "scatter",
+    "grouped_max",
     "to_numpy",
     "from_numpy",
     "to_namespace",
@@ -316,5 +322,8 @@ __all__ = [
     "ArrayNamespace",
     "quantile",
     "interp1d",
+    "interpnd",
+    "ArrayBackendGridInterpolator",
+    "ArrayBackend1DInterpolator",
     "record_event",
 ]

@@ -4,9 +4,11 @@ import array_api_strict as xp
 import array_api_compat
 import array_api_extra as xpx
 import numpy as np
+import pytest
 
 from scipy.optimize import Bounds, minimize
 
+from pyRadPlan import settings
 from pyRadPlan.optimization.solvers import get_solver, OptimizerSciPy, SolverBase
 
 
@@ -246,3 +248,49 @@ def test_max_iter_caps_tnc_which_does_not_take_maxiter():
 
     _, info = solver.solve(_PROBE_X0)
     assert info["nfev"] <= 1
+
+
+def test_max_time_stops_scipy():
+    """Regression: `max_time` never reached SciPy, so a solve ran until it converged."""
+    solver = _probe_solver()
+    solver.max_time = 0.0
+
+    _, info = solver.solve(_PROBE_X0)
+
+    assert info["num_iter"] == 1
+    assert info["status"] == 99
+
+
+def test_tnc_can_be_cancelled():
+    """Regression: TNC let the StopIteration of a cancel escape, losing the result."""
+    solver = _probe_solver()
+    solver.method = "TNC"
+    solver.status_callback = lambda message="", **data: data["iteration"] < 3
+
+    x, info = solver.solve(_PROBE_X0)
+
+    assert info["num_iter"] == 3
+    assert info["success"] is False
+    assert _probe_objective(x) < _probe_objective(_PROBE_X0)
+
+
+def test_scipy_evaluates_on_the_device_of_x0(monkeypatch):
+    """Regression: with a GPU preferred, a CPU x0 was evaluated (and returned) on the GPU."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    monkeypatch.setattr(settings.xp, "prefer_gpu", True)
+    x0 = torch.ones(2, dtype=torch.float64)
+
+    def objective(x):
+        assert x.device == x0.device
+        return torch.sum(x**2)
+
+    solver = get_solver("scipy")
+    solver.display = False
+    solver.objective = objective
+    solver.gradient = lambda x: 2 * x
+
+    x, _ = solver.solve(x0)
+
+    assert x.device == x0.device

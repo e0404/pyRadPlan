@@ -7,6 +7,7 @@ from pydantic import (
     field_validator,
     model_validator,
     SerializerFunctionWrapHandler,
+    SerializeAsAny,
     FieldSerializationInfo,
 )
 import logging
@@ -16,7 +17,7 @@ from scipy.interpolate import RegularGridInterpolator
 from pyRadPlan.stf._rangeshifter import RangeShifter
 from pyRadPlan.core import PyRadPlanBaseModel
 
-from pyRadPlan.machines import BeamLimitingDevice
+from pyRadPlan.machines import BeamLimitingDevice, create_bld
 
 # TODO: We need to figure out how we can do nested validation in pydantic and then differentiate
 # between photon and particle beamlets. For now, we will use the Beamlet class for both.
@@ -131,8 +132,10 @@ class FieldShape(Beamlet):
     Notes
     -----
     Coordinates in FieldShapes are defined in BEV in LPS.
-    Note that Beam Limiting Devices from DICOM are typically defined in IEC with the
-    X axis flipped compared to BEV convention (when gantry and couch angle are 0).
+    Beam limiting device positions of ``FieldShapeAsBLD`` are in the IEC BEAM LIMITING DEVICE
+    coordinate system, which at collimator angle 0 coincides with the IEC GANTRY system: device
+    x is BEV x (the patient's left at gantry and couch angle 0 for a head-first supine
+    patient) and device y is BEV z (towards the gantry, superior).
     """
 
     # TODO:
@@ -165,7 +168,7 @@ class FieldShape(Beamlet):
     @staticmethod
     def _resolve_field_width(field_width: Optional[float], grid: Optional[np.ndarray]) -> float:
         if field_width is None and grid is None:
-            raise ValueError("Either resolution or grid must be provided")
+            raise ValueError("Either field_width or grid must be provided")
         if grid is not None:
             grid_resolution = np.unique(np.round(np.diff(grid), decimals=10))
             if len(grid_resolution) != 1:
@@ -192,18 +195,19 @@ class FieldShape(Beamlet):
     # TODO: Is the padding included in the grid?
     @staticmethod
     def _validate_mask_array(v: np.ndarray) -> np.ndarray:
+        v = np.asarray(v)
         if len(v.shape) != 2:
             raise ValueError("Mask must be 2D")
         if v.shape[0] != v.shape[1]:
             raise ValueError("Mask must be quadratic")
         if v.shape[0] % 2 == 0:
             logger.warning(
-                f"Mask size {v.shape[0]} is even. Padding with zeros to make it odd. "
+                "Mask size %d is even. Padding with zeros to make it odd. "
                 "This may slightly affect convolution results.",
-                UserWarning,
+                v.shape[0],
             )
             v = np.pad(v, ((0, 1), (0, 1)), mode="constant", constant_values=0)
-        return np.array(v) if not isinstance(v, np.ndarray) else v
+        return v
 
     @model_validator(mode="after")
     def validate_spatial_consistency(self) -> "FieldShape":
@@ -324,14 +328,17 @@ class FieldShapeAsBLD(FieldShape):
 
     """
 
-    bld: BeamLimitingDevice
+    bld: SerializeAsAny[BeamLimitingDevice]
+
+    @field_validator("bld", mode="before")
+    @classmethod
+    def _build_device(cls, v: Any) -> Any:
+        """Rebuild the device subclass (MLC, Jaw) from its dump."""
+        return create_bld(v) if isinstance(v, dict) else v
 
     @property
     def mask(self) -> np.ndarray:
         mask = self.bld.calculate_transmission_mask(spacing=self.resolution)
-        # BLDs use IEC coordinates where X points to patient's right.
-        # BEV-LPS X points to patient's left, so the X axis is inverted.
-        mask = np.fliplr(mask)
 
         if self.field_width is not None:
             bld_field_width = (mask.shape[0] - 1) * self.resolution

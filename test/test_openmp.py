@@ -206,6 +206,51 @@ def test_runtimes_shipped_by_scans_vendor_directory(tmp_path, monkeypatch):
     assert "fakeopt" not in sys.modules  # find_spec must not execute the package
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="loaded modules come from /proc/self/maps")
+def test_symlinked_install_does_not_clash_with_itself(tmp_path, monkeypatch):
+    """/proc/self/maps lists resolved paths, so a symlinked install must compare equal."""
+    vendor = tmp_path / "real" / "fakeopt.libs"
+    vendor.mkdir(parents=True)
+    (tmp_path / "real" / "fakeopt").mkdir()
+    (tmp_path / "real" / "fakeopt" / "__init__.py").write_text("")
+    (vendor / "libomp.so").write_bytes(b"")
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    monkeypatch.syspath_prepend(str(tmp_path / "link"))
+    monkeypatch.setattr(openmp, "_loaded_modules", lambda: [str(vendor / "libomp.so")])
+    monkeypatch.delenv("KMP_DUPLICATE_LIB_OK", raising=False)
+
+    assert openmp.blocked_by_openmp("fakeopt") is None
+
+
+def _short_path(path):
+    import ctypes  # noqa: PLC0415
+
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer)):
+        return None
+    return buffer.value
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 short names are Windows-only")
+def test_short_name_install_does_not_clash_with_itself(tmp_path, monkeypatch):
+    """Windows reports a module by the path it was loaded from, which may hold 8.3 names."""
+    root = tmp_path / "long_directory_name"
+    (root / "fakeopt").mkdir(parents=True)
+    (root / "fakeopt" / "__init__.py").write_text("")
+    (root / "fakeopt.libs").mkdir()
+    (root / "fakeopt.libs" / "libiomp5md.dll").write_bytes(b"")
+    short = _short_path(root)
+    if short is None or os.path.normcase(short) == os.path.normcase(str(root)):
+        pytest.skip("8.3 short names are disabled on this volume")
+    monkeypatch.syspath_prepend(str(root))
+    monkeypatch.setattr(
+        openmp, "_loaded_modules", lambda: [os.path.join(short, "fakeopt.libs", "libiomp5md.dll")]
+    )
+    monkeypatch.delenv("KMP_DUPLICATE_LIB_OK", raising=False)
+
+    assert openmp.blocked_by_openmp("fakeopt") is None
+
+
 def test_runtimes_shipped_by_unknown_package():
     assert openmp.runtimes_shipped_by("a_package_that_does_not_exist") == {}
 
@@ -215,11 +260,16 @@ def test_runtimes_shipped_by_unknown_package():
 # --------------------------------------------------------------------------
 
 
+def _resolved(path):
+    """A path the way runtimes_shipped_by() and loaded_runtimes() record it."""
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _fake_clash(monkeypatch):
     monkeypatch.setattr(
         openmp,
         "runtimes_shipped_by",
-        lambda pkg: {"libiomp5md": frozenset({os.path.normcase("/site/pkg.libs/libiomp5md.dll")})},
+        lambda pkg: {"libiomp5md": frozenset({_resolved("/site/pkg.libs/libiomp5md.dll")})},
     )
     monkeypatch.setattr(openmp, "_loaded_modules", lambda: ["/site/torch/lib/libiomp5md.dll"])
 
@@ -246,7 +296,7 @@ def test_not_blocked_when_same_file_is_the_loaded_one(monkeypatch):
     monkeypatch.setattr(
         openmp,
         "runtimes_shipped_by",
-        lambda pkg: {"libiomp5md": frozenset({os.path.normcase("/site/pkg.libs/libiomp5md.dll")})},
+        lambda pkg: {"libiomp5md": frozenset({_resolved("/site/pkg.libs/libiomp5md.dll")})},
     )
     monkeypatch.setattr(openmp, "_loaded_modules", lambda: ["/site/pkg.libs/libiomp5md.dll"])
 

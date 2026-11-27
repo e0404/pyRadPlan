@@ -180,6 +180,30 @@ def test_plot_multiple_slices_numpy(sample_ct, sample_cst, sample_overlay, tmp_p
     )
 
 
+@pytest.mark.parametrize("offset", [0.0, -0.7])
+def test_overlay_with_negative_values(sample_ct, sample_overlay, offset):
+    import matplotlib.pyplot as plt
+
+    overlay = sitk.GetArrayFromImage(sample_overlay) + offset
+    overlay_2d = overlay[5]
+    _, ax = plt.subplots()
+    plot_slice(image_volume=sample_ct, overlay=overlay, view_slice=5, ax=ax, show_plot=False)
+
+    mesh = ax.collections[-1]
+    max_abs = np.max(np.abs(overlay_2d))
+    np.testing.assert_allclose(mesh.norm.vmax, max_abs)
+    if offset < 0:
+        np.testing.assert_allclose(mesh.norm.vmin, -max_abs)
+        assert mesh.get_cmap().name == "RdBu_r"
+        # strongly negative voxels are drawn, not hidden by the threshold
+        alpha = np.asarray(mesh.get_alpha()).reshape(overlay_2d.shape)
+        assert np.all(alpha[overlay_2d < -0.5 * max_abs] > 0)
+    else:
+        assert mesh.norm.vmin == 0
+        assert mesh.get_cmap().name == "jet"
+    plt.close("all")
+
+
 def test_image_windowing(sample_ct, sample_cst, sample_overlay, tmp_path):
     plot_slice(
         image_volume=sample_ct,
@@ -201,3 +225,11 @@ def test_image_windowing(sample_ct, sample_cst, sample_overlay, tmp_path):
         save_filename=str(tmp_path / "image_windowing_centerwidth.png"),
         show_plot=False,
     )
+
+
+@pytest.mark.parametrize("unit", ["1", "Gy", ""])
+def test_normalize_overlay_unit(unit):
+    from pyRadPlan.core._units import ureg
+    from pyRadPlan.visualization._plot_slice import _normalize_overlay_unit
+
+    assert _normalize_overlay_unit(unit) == ureg.Unit(unit)

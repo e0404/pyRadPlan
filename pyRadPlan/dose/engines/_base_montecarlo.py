@@ -1,11 +1,16 @@
 import logging
-from typing import Annotated, Any, Optional
+import os
+from pathlib import Path
+from typing import Annotated, Any, ClassVar, Optional, Union
 
 import numpy as np
 from pydantic import Field
 
 from ...biology.models import BiologicalModel, BioModelUnavailableError
-from ._base import DoseEngineBase
+from ...ct import CT
+from ...cst import StructureSet
+from ...stf import SteeringInformation, validate_stf
+from ._base import DoseEngineBase, ct_phase_images
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +18,117 @@ logger = logging.getLogger(__name__)
 class MonteCarloEngineAbstract(DoseEngineBase):
     """Abstract base for Monte Carlo dose calculation engines."""
 
+    supported_uncertainties: ClassVar[tuple[str, ...]] = ("ct_phase",)
+
     num_histories_per_beamlet: Annotated[float, Field(gt=0.0)] = 2e2
     num_histories_direct: Annotated[float, Field(gt=0.0)] = 1e6
+
+    def _scenario_ct(self, ct: CT) -> CT:
+        """
+        CT the simulation runs on: the phase of the single computed scenario.
+
+        The Monte Carlo engines simulate one scenario; a 4D CT is reduced to the phase that
+        scenario selects so that the simulated geometry matches the tissue parameter column.
+        """
+        if ct.num_of_ct_scen == 1:
+            return ct
+        computed = self._scenarios.computed_indices()
+        phase = int(self._scenarios.ct_phases()[computed[0]])
+        return CT(cube_hu=ct_phase_images(ct.cube_hu)[phase])
+
+    def write_inputs(
+        self,
+        ct: CT,
+        cst: StructureSet,
+        stf: SteeringInformation,
+        weights: Any,
+        directory: Union[str, os.PathLike],
+    ) -> list[Path]:
+        """
+        Write the simulation inputs of a plan without running the Monte Carlo code.
+
+        The files are those an external calculation writes (patient, beam and run files);
+        the engine's settings (dose grid, histories, ...) apply as for a forward calculation
+        with ``weights``. The engine's settings are left as they were, and neither ``stf``
+        nor ``ct`` are modified.
+
+        Parameters
+        ----------
+        ct : CT
+            The CT of the patient.
+        cst : StructureSet
+            The structure set, selecting the voxels the dose is scored in.
+        stf : SteeringInformation
+            The steering information of the beams.
+        weights : array_like
+            One weight per bixel in STF order.
+        directory : str or os.PathLike
+            Target directory (created if needed).
+
+        Returns
+        -------
+        list of pathlib.Path
+            The input files written.
+
+        Raises
+        ------
+        ValueError
+            If the number of weights does not match the bixels of ``stf`` or no weight is
+            positive.
+        RuntimeError
+            If an input file could not be written.
+        """
+        stf = validate_stf(stf)
+        weights = np.asarray(weights, dtype=float).ravel()
+        if weights.size != stf.total_number_of_bixels:
+            raise ValueError(
+                f"Number of weights ({weights.size}) does not match the number of bixels "
+                f"in stf ({stf.total_number_of_bixels})."
+            )
+        if not np.all(np.isfinite(weights)) or np.any(weights < 0) or weights.sum() <= 0:
+            raise ValueError("The weights must be finite, non-negative and not all zero.")
+
+        stf = stf.model_copy(deep=True)
+        bixel = 0
+        for beam in stf.beams:
+            for ray in beam.rays:
+                for beamlet in ray.beamlets:
+                    beamlet.weight = weights[bixel]
+                    bixel += 1
+
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        overrides = self._input_only_settings(directory)
+        previous = {name: getattr(self, name) for name in overrides}
+        direct = self._calc_dose_direct
+        try:
+            for name, value in overrides.items():
+                setattr(self, name, value)
+            self._calc_dose_direct = True
+            with self._keep_settings():
+                self._calc_dose_with_scenarios(ct, cst, stf, None)
+        finally:
+            for name, value in previous.items():
+                setattr(self, name, value)
+            self._calc_dose_direct = direct
+
+        expected = self._expected_input_files(directory, stf)
+        missing = [path.name for path in expected if not path.exists()]
+        if missing:
+            raise RuntimeError(f"{self.name} input files could not be written: {missing}.")
+        return expected
+
+    def existing_input_files(self, directory: Union[str, os.PathLike]) -> list[Path]:
+        """Files of an earlier input export in ``directory`` that a new export would replace."""
+        raise NotImplementedError
+
+    def _input_only_settings(self, directory: Path) -> dict[str, Any]:
+        """Engine settings that make a calculation write its inputs into ``directory`` only."""
+        raise NotImplementedError
+
+    def _expected_input_files(self, directory: Path, stf: SteeringInformation) -> list[Path]:
+        """All input files a calculation of ``stf`` writes into ``directory``."""
+        raise NotImplementedError
 
 
 class ScoredLETBioMixin:

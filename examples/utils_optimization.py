@@ -98,7 +98,7 @@ cst.vois[2].objectives = [MeanDose(priority=1.0, d_ref=0.0)]  # Body
 
 # %%
 opt_info = {}
-fluence = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
+result = fluence_optimization(ct, cst, stf, dij, pln, opt_info=opt_info)
 
 # %%
 # Plot convergence

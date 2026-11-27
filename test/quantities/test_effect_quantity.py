@@ -99,7 +99,7 @@ def test_Effect_dense(sample_dij_dense):
         fgrad_beta, 0
     )
     calc_derivative = alpha_grad + beta_grad
-    assert np.array_equal(effect._w_grad_cache, fluence)
+    assert np.array_equal(effect._grad_fluence, fluence)
     assert np.array_equal(effect._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_dense.physical_dose.dtype
@@ -135,7 +135,7 @@ def test_effect_sparse(sample_dij_sparse):
         fgrad_beta, 0
     )
     calc_derivative = alpha_grad + beta_grad
-    assert np.array_equal(effect._w_grad_cache, fluence)
+    assert np.array_equal(effect._grad_fluence, fluence)
     assert np.array_equal(effect._qgrad_cache.flat[0], ret_deriv.flat[0])
     assert isinstance(ret_deriv, np.ndarray)
     assert ret_deriv.dtype == sample_dij_sparse.physical_dose.dtype

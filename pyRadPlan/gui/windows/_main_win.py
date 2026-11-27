@@ -122,7 +122,12 @@ class MainWindow(QMainWindow):
         self._build_menu_bar()
 
     def _apply_compact_font(self) -> None:
-        font = self.font()
+        # Set on the application, not the window: widgets with a style sheet (or whose
+        # style sheet is cleared again) fall back to the application font.
+        app = QApplication.instance()
+        if app.property("compact_font_applied"):
+            return
+        font = app.font()
         point = font.pointSizeF()
         if point > 0:
             font.setPointSizeF(point * self._FONT_SCALE)
@@ -130,7 +135,8 @@ class MainWindow(QMainWindow):
             pixel = font.pixelSize()
             if pixel > 0:
                 font.setPixelSize(max(1, round(pixel * self._FONT_SCALE)))
-        self.setFont(font)
+        app.setFont(font)
+        app.setProperty("compact_font_applied", True)
 
     def apply_ui_mode_setting(self) -> None:
         """Push the configured ``settings.gui.ui_mode`` to the widgets and the File menu."""

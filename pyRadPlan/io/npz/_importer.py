@@ -8,10 +8,18 @@ import SimpleITK as sitk
 
 from pyRadPlan.ct import validate_ct, CT
 from pyRadPlan.cst import validate_cst, validate_voi, StructureSet
-from pyRadPlan.core.np2sitk import linear_indices_to_sitk_mask
 
 from ..base import BaseImporter
 from ._serialize import array_geom_to_image, geom_to_ct_kwargs
+
+
+def _indices_to_mask(indices: np.ndarray, reference: sitk.Image) -> sitk.Image:
+    """Rebuild a (possibly 4D) uint8 mask from C-order linear indices into ``reference``."""
+    array = np.zeros(sitk.GetArrayViewFromImage(reference).shape, dtype=np.uint8)
+    array.flat[indices] = 1
+    mask = sitk.GetImageFromArray(array, isVector=False)
+    mask.CopyInformation(reference)
+    return mask
 
 
 class NpzImporter(BaseImporter):
@@ -53,16 +61,14 @@ class NpzImporter(BaseImporter):
 
         vois = []
         for vmeta in meta["cst"]["vois"]:
-            mask = linear_indices_to_sitk_mask(
-                npz[vmeta["indices_array"]], ct.cube_hu, order="numpy"
-            )
+            mask = _indices_to_mask(npz[vmeta["indices_array"]], ct.cube_hu)
             kwargs = {
                 "name": vmeta["name"],
                 "voi_type": vmeta["voi_type"],
                 "mask": mask,
                 "ct_image": ct,
                 "overlap_priority": vmeta["overlap_priority"],
-                "apply_overlap": vmeta.get("apply_overlap", True),
+                "apply_overlap": vmeta.get("apply_overlap", "auto"),
                 "visible": vmeta["visible"],
             }
             # Archives written before tissue properties were stored only carry alpha/beta.

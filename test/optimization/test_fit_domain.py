@@ -57,6 +57,8 @@ def test_polo_risk_structure_ignores_overlap_handling(proton_case, caplog):
 def test_polo_warns_on_region_without_risk_voxels(proton_case, caplog):
     pln, ct, cst, dij, stf, vois = proton_case
     vois["Body"].objectives = [NTCPPOLO(priority=1.0, risk_voi_name="Target")]
+    # Without objectives the target only cuts the body when told to explicitly.
+    vois["Target"].apply_overlap = True
 
     _, warnings = _initialize(pln, ct, cst, dij, stf)
 
@@ -81,6 +83,8 @@ def test_polo_warns_on_region_inside_gtv(proton_case):
 
 def test_polo_objectives_with_different_risk_structures_are_independent(proton_case):
     pln, ct, cst, dij, stf, vois = proton_case
+    # Keep the body's region the same whether or not the target carries an objective.
+    vois["Target"].apply_overlap = True
 
     def evaluate(objectives):
         for name, objs in objectives.items():

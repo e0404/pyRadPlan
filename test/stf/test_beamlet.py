@@ -54,6 +54,8 @@ def test_photon_beamlet_all():
 
 
 ########################## FieldShapes #############################
+import logging
+
 import numpy as np
 import pytest
 from pyRadPlan.machines import create_bld
@@ -110,9 +112,8 @@ def test_shape():
     energy = 6
     resolution = 0.5
     mlc_X = sample_MLC("X")
-    mask_mlc_X = np.fliplr(
-        mlc_X.calculate_transmission_mask(resolution)
-    )  # IEC X --> BEV-LPS X (flip)
+    # IEC beam limiting device x is BEV x at collimator angle 0
+    mask_mlc_X = mlc_X.calculate_transmission_mask(resolution)
     half_size = mask_mlc_X.shape[0] // 2
     field_grid = resolution * np.arange(-half_size, half_size + 1)
 
@@ -147,7 +148,7 @@ def test_shape_resampling():
     resolution_resampled = 1.2
     padding = 10.0
     mlc_X = sample_MLC("X")
-    mask_mlc_X = np.fliplr(mlc_X.calculate_transmission_mask(resolution))
+    mask_mlc_X = mlc_X.calculate_transmission_mask(resolution)
 
     field_shape_mask = FieldShapeAsMask(energy=energy, mask=mask_mlc_X, resolution=resolution)
     field_shape_bld = FieldShapeAsBLD(energy=energy, bld=mlc_X, resolution=resolution)
@@ -272,3 +273,21 @@ def test_shape_composite():
 #     # TODO:
 #     # - non-square mask
 #     # - test padding for even mask widths
+
+
+def test_shape_from_list_mask():
+    shape = FieldShapeAsMask(energy=6, mask=[[0, 1, 0], [1, 1, 1], [0, 1, 0]], resolution=1.0)
+    assert isinstance(shape.mask, np.ndarray)
+    np.testing.assert_array_equal(shape.grid, [-1.0, 0.0, 1.0])
+
+
+def test_shape_even_mask_is_padded(caplog):
+    with caplog.at_level(logging.WARNING, logger="pyRadPlan.stf._beamlet"):
+        shape = FieldShapeAsMask(energy=6, mask=np.ones((4, 4)), resolution=1.0)
+    assert shape.mask.shape == (5, 5)
+    assert "Mask size 4 is even" in caplog.records[0].getMessage()
+
+
+def test_shape_missing_field_width_message():
+    with pytest.raises(ValueError, match="field_width or grid"):
+        FieldShape._resolve_field_width(None, None)

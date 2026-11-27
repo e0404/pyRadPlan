@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+import math
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,34 +30,56 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyRadPlan.app import PreconditionError
+from pyRadPlan.app._forms import comparison_key
+from pyRadPlan.app._plan import plan_class as _plan_class
+from pyRadPlan.app._planform import (
+    ENGINE_FORM_EXCLUDE,
+    RADIATION_MODES,
+    BioSelection,
+    beam_presets,
+    bio_change,
+    changes_from_form,
+    engine_choices,
+    engine_class,
+    engine_form_values,
+    first_bio_option,
+    machine_choices,
+    optimization_change,
+    plan_engine_config,
+    plan_machine_label,
+    plan_problem,
+    problem_choices,
+    problem_classes,
+    scenario_choices,
+    scenario_overrides,
+    select_bio_model,
+)
+from pyRadPlan.app._plan import plan_summary
 from pyRadPlan.biology.models import (
     BiologicalModel,
     BioMachineSummary,
     BioModelOption,
-    available_bio_models,
 )
-from pyRadPlan.dose.engines import get_available_engines
 from pyRadPlan._settings import get_settings
 from pyRadPlan.gui.widgets._ui_mode import UIMode
 from pyRadPlan.gui.workspace import WorkspaceManager
-from pyRadPlan.machines import Machine, get_available_machines
-from pyRadPlan.optimization.problems import get_available_problems
+from pyRadPlan.machines import Machine
 from pyRadPlan.optimization.solvers import SolverBase
-from pyRadPlan.plan import IonPlan, PhotonPlan, Plan, default_bio_models
-from pyRadPlan.scenarios import available_scenario_models
-from pyRadPlan.stf import get_beam_angle_presets
-from pyRadPlan.biology.tissues import provenance_label
+from pyRadPlan.plan import Plan
+from pyRadPlan.scenarios import get_scenario_model_class
 from .._base import WorkspaceWidget, format_number_list, parse_number_list
 from .._config_form import ConfigFormDialog
 from .._display_names import (
     add_identified_item,
     bio_model_display_name,
+    current_identifier,
+    select_identifier,
     show_identifiers_when_open,
 )
-from .._tissue_params import (
+from pyRadPlan.biology._editing import (
     SELECTION_PARAMETERS,
     bio_model_quietly,
-    bio_options_quietly,
     dose_engine_quietly,
     load_machine_quietly,
     machine_summary,
@@ -70,17 +95,13 @@ from ..ai import ai_disabled_reason
 
 logger = logging.getLogger(__name__)
 
-_ION_MODES = list(IonPlan.available_radiation_modes)
-_RADIATION_MODES = ["photons", *_ION_MODES]
+#: Identifier of the scenario model of a plan's own scenario set (offered only for it).
+_EXPLICIT = "explicit"
 
 #: Orange border marking a field whose value differs from the applied plan.
-_MODIFIED_STYLE = "border: 1px solid #e67e22;"
+_MODIFIED_COLOR = QColor("#e67e22")
 #: Persistent status note shown while the form has unapplied edits.
 _MODIFIED_NOTE = "Modified — not applied"
-#: Suffix of the machine dropdown entry for the base data a plan carries itself.
-_FROM_PLAN_SUFFIX = "(from plan)"
-#: Suffix of the model dropdown entry keeping a plan's model the machine cannot run.
-_UNSUPPORTED_SUFFIX = "(not supported by this machine)"
 #: Tissue marker while the structures' tissues fail the model's check.
 _TISSUE_ERROR_MARK = "⚠"
 _TISSUE_ERROR_STYLE = "color: #e67e22; font-weight: bold;"
@@ -95,8 +116,42 @@ _NUM_BEAMS_TOOLTIP = (
 )
 
 
-def _plan_class(radiation_mode: str) -> type[Plan]:
-    return PhotonPlan if radiation_mode == "photons" else IonPlan
+class _ModifiedFrame(QWidget):
+    """Orange frame painted over a field marked as modified.
+
+    A style sheet border would switch the field to style-sheet rendering, which
+    redraws sub-controls such as the spin box arrows in a different look and place.
+    """
+
+    def __init__(self, target: QWidget):
+        super().__init__(target)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setGeometry(target.rect())
+        target.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt override)
+        if watched is self.parent() and event.type() == QEvent.Type.Resize:
+            self.setGeometry(watched.rect())
+        return False
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        # Paint in device pixels: with fractional scaling (e.g. 150 %) a field can
+        # start mid-pixel, and a logical 1 px line on its edge is clipped away.
+        painter = QPainter(self)
+        to_device = painter.deviceTransform()
+        bounds = to_device.mapRect(QRectF(self.rect()))
+        eps = 1e-6
+        left, top = math.ceil(bounds.left() - eps), math.ceil(bounds.top() - eps)
+        right, bottom = math.floor(bounds.right() + eps), math.floor(bounds.bottom() + eps)
+        width = max(1, math.floor(self.devicePixelRatioF() + eps))
+        painter.setWorldTransform(to_device.inverted()[0])
+        rect = QRect(left, top, right - left, bottom - top)
+        painter.fillRect(rect.x(), rect.y(), rect.width(), width, _MODIFIED_COLOR)
+        painter.fillRect(rect.x(), rect.bottom() + 1 - width, rect.width(), width, _MODIFIED_COLOR)
+        painter.fillRect(rect.x(), rect.y(), width, rect.height(), _MODIFIED_COLOR)
+        painter.fillRect(rect.right() + 1 - width, rect.y(), width, rect.height(), _MODIFIED_COLOR)
 
 
 class PlanWidget(WorkspaceWidget):
@@ -152,13 +207,16 @@ class PlanWidget(WorkspaceWidget):
         #: Dose engine configuration values per engine short name, edited via
         #: the [...] popup and written into ``pln.prop_dose_calc`` on Apply.
         self._engine_props: dict[str, dict] = {}
+        #: Suggested parameter values per (engine short name, radiation mode), as the last
+        #: ``config_choices`` lookup of the engine's popup found them.
+        self._engine_choices: dict[tuple[str, str], dict] = {}
+        #: Scenario model parameters per model short name (nested overrides of the model's
+        #: defaults), edited via the [...] popup and written into ``pln.scenarios`` on Apply.
+        self._scenario_props: dict[str, dict] = {}
         #: ``pln.prop_opt`` entries per planning problem short name (without the
         #: ``"problem"`` key), edited via the [...] popup.
         self._problem_props: dict[str, dict] = {}
         self._problems: dict[str, type] = {}
-        #: Whether the applied plan names its planning problem; Apply then keeps naming it,
-        #: while a plan relying on the default problem stays without the key.
-        self._plan_names_problem = False
         #: Parameter overrides per biological model name (edited via the "…" button).
         self._bio_params: dict[str, dict] = {}
         self._bio_model_classes: dict[str, type[BiologicalModel]] = {}
@@ -215,6 +273,7 @@ class PlanWidget(WorkspaceWidget):
             "iso_per_beam": self._txt_iso,
             "iso": self._txt_iso,
             "scenario": self._cmb_scenario,
+            "scenario_props": self._btn_scenario_config,
             "res_x": self._spn_res_x,
             "res_y": self._spn_res_y,
             "res_z": self._spn_res_z,
@@ -257,12 +316,46 @@ class PlanWidget(WorkspaceWidget):
         root.addLayout(bottom)
 
         root.addStretch()
+        self._show_plan_defaults(self._ws.session.default_plan)
 
-        self._refresh_machines(self._cmb_radiation.currentText())
-        self._refresh_engines(self._cmb_radiation.currentText())
-        self._refresh_problems(self._cmb_radiation.currentText())
-        self._refresh_bio_models(self._cmb_radiation.currentText())
-        self._refresh_angle_presets(self._cmb_radiation.currentText())
+    def _show_plan_defaults(self, defaults: Mapping[str, Any]) -> None:
+        """Fill the form with the session's default plan (its profile's) and list options."""
+        self._cmb_radiation.blockSignals(True)
+        self._cmb_radiation.setCurrentText(defaults.get("radiation_mode") or "photons")
+        self._cmb_radiation.blockSignals(False)
+        mode = self._cmb_radiation.currentText()
+        self._refresh_machines(mode)
+        if defaults.get("machine"):
+            self._cmb_machine.setEditText(defaults["machine"])
+        self._refresh_engines(mode)
+        if defaults.get("engine"):
+            select_identifier(self._cmb_engine, defaults["engine"])
+        self._refresh_problems(mode)
+        self._refresh_bio_models(mode)
+        if isinstance(defaults.get("bio_model"), str):
+            self._select_bio_model(defaults["bio_model"])
+            self._apply_option_parameters(self._cmb_bio_model.currentIndex())
+        self._refresh_angle_presets(mode)
+        if defaults.get("num_of_fractions") is not None:
+            self._spn_fractions.setValue(int(defaults["num_of_fractions"]))
+        index = self._cmb_dose_convention.findData(defaults.get("dose_convention"))
+        if index >= 0:
+            self._cmb_dose_convention.setCurrentIndex(index)
+        for key, edit in (("gantry_angles", self._txt_gantry), ("couch_angles", self._txt_couch)):
+            if defaults.get(key) is not None:
+                edit.setText(self._format_angles(defaults[key]))
+        if defaults.get("bixel_width") is not None:
+            self._spn_bixel.setValue(float(defaults["bixel_width"]))
+        resolution = defaults.get("dose_grid_resolution")
+        if resolution is not None:
+            for spin, value in zip(
+                (self._spn_res_x, self._spn_res_y, self._spn_res_z), resolution
+            ):
+                spin.setValue(float(value))
+        iso = defaults.get("iso_center")
+        self._chk_iso_auto.setChecked(iso is None)
+        if iso is not None:
+            self._txt_iso.setText(self._format_angles(iso))
         self._update_beam_count()
 
     def _build_fields(self, grid: QGridLayout) -> None:
@@ -277,7 +370,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _build_setup_rows(self, grid: QGridLayout) -> None:
         self._cmb_radiation = QComboBox()
-        self._cmb_radiation.addItems(_RADIATION_MODES)
+        self._cmb_radiation.addItems(list(RADIATION_MODES))
         self._cmb_radiation.currentTextChanged.connect(self._on_radiation_changed)
 
         self._cmb_machine = QComboBox()
@@ -291,19 +384,15 @@ class PlanWidget(WorkspaceWidget):
 
         self._spn_fractions = QSpinBox()
         self._spn_fractions.setRange(1, 1000)
-        self._spn_fractions.setValue(30)
 
         self._cmb_dose_convention = QComboBox()
         self._cmb_dose_convention.addItem("per fraction", "per_fraction")
         self._cmb_dose_convention.addItem("total", "total")
-        # Total-course doses keep objectives meaningful for fraction-size dependent
-        # biological models (ions); per fraction is the plan model's default.
-        self._cmb_dose_convention.setCurrentIndex(self._cmb_dose_convention.findData("total"))
         self._cmb_dose_convention.setToolTip(
             "Convention for dose values in objectives and results:\n"
             "per fraction - objective doses and reported doses refer to one fraction;\n"
-            "total - objective doses are total-course doses (scaled by 1/fractions for "
-            "optimization) and reported doses are multiplied by the number of fractions."
+            "total - objective values (including reference images) and reported results\n"
+            "refer to the whole course; doses scale with the number of fractions, LET does not."
         )
         fractions_row = QHBoxLayout()
         fractions_row.setContentsMargins(0, 0, 0, 0)
@@ -322,14 +411,14 @@ class PlanWidget(WorkspaceWidget):
         self._add_advanced(grid, fractions_row, 1, 3)
 
     def _build_geometry_rows(self, grid: QGridLayout) -> None:
-        self._txt_gantry = QLineEdit("0")
+        self._txt_gantry = QLineEdit()
         self._txt_gantry.setToolTip(
             "Gantry angles in the matRad coordinate system.\n"
             "Every gantry angle defines a beam; separate angles by blanks."
         )
         self._txt_gantry.textChanged.connect(self._update_beam_count)
         self._txt_gantry.editingFinished.connect(self._sync_couch_angles)
-        self._txt_couch = QLineEdit("0")
+        self._txt_couch = QLineEdit()
         self._txt_couch.setToolTip(
             "Couch angles in the matRad coordinate system.\n"
             "Every couch angle belongs to a gantry angle; separate angles by blanks.\n"
@@ -380,7 +469,6 @@ class PlanWidget(WorkspaceWidget):
         self._spn_bixel = QDoubleSpinBox()
         self._spn_bixel.setRange(0.1, 100.0)
         self._spn_bixel.setDecimals(2)
-        self._spn_bixel.setValue(5.0)
         self._spn_bixel.setToolTip(
             "Photons: width (and height) of quadratic photon bixel\n"
             "Particles: lateral spot distance"
@@ -433,10 +521,25 @@ class PlanWidget(WorkspaceWidget):
         bio_row.addWidget(self._btn_bio_config)
 
         self._cmb_scenario = QComboBox()
-        self._cmb_scenario.addItems(available_scenario_models())
-        for model in ("wcScen", "impScen", "rndScen"):
-            self._add_disabled_item(self._cmb_scenario, model)
+        show_identifiers_when_open(self._cmb_scenario)
+        for choice in scenario_choices():
+            add_identified_item(
+                self._cmb_scenario, choice["label"], choice["value"], choice["identifier"]
+            )
         self._cmb_scenario.setToolTip("Scenario sampling model for uncertainty handling")
+        self._btn_scenario_config = QPushButton("…")
+        self._btn_scenario_config.setFixedWidth(28)
+        self._btn_scenario_config.setToolTip(
+            "Configure the selected scenario model: setup and range uncertainties, CT phases, "
+            "worst-case extent and sampling"
+        )
+        self._btn_scenario_config.clicked.connect(self._on_scenario_config)
+        self._cmb_scenario.currentIndexChanged.connect(self._on_scenario_model_changed)
+        scenario_row = QHBoxLayout()
+        scenario_row.setContentsMargins(0, 0, 0, 0)
+        scenario_row.setSpacing(4)
+        scenario_row.addWidget(self._cmb_scenario, 1)
+        scenario_row.addWidget(self._btn_scenario_config)
 
         # Plan-level target/reporting quantity, as opposed to the quantities the
         # individual objectives are evaluated on.
@@ -473,7 +576,7 @@ class PlanWidget(WorkspaceWidget):
         grid.addWidget(QLabel("Biological model:"), 4, 0)
         grid.addLayout(bio_row, 4, 1)
         self._add_advanced(grid, QLabel("Scenario model:"), 4, 2)
-        self._add_advanced(grid, self._cmb_scenario, 4, 3)
+        self._add_advanced(grid, scenario_row, 4, 3)
 
         self._add_advanced(grid, QLabel("Optimized quantity:"), 5, 0)
         self._add_advanced(grid, self._cmb_quantity, 5, 1)
@@ -481,6 +584,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _build_optimization_row(self, grid: QGridLayout) -> None:
         self._cmb_problem = QComboBox()
+        show_identifiers_when_open(self._cmb_problem)
         self._cmb_problem.setToolTip("Planning problem formulation used by the optimization")
         self._btn_problem_config = QPushButton("…")
         self._btn_problem_config.setFixedWidth(28)
@@ -580,20 +684,14 @@ class PlanWidget(WorkspaceWidget):
             tooltip += f"\n{hint}"
         widget.setToolTip(tooltip)
 
-    @staticmethod
-    def _add_disabled_item(combo: QComboBox, text: str) -> None:
-        combo.addItem(text)
-        item = combo.model().item(combo.count() - 1)
-        item.setEnabled(False)
-        item.setToolTip("Not yet implemented")
-
     def _build_engine_selector(self) -> QHBoxLayout:
         self._cmb_engine = QComboBox()
+        show_identifiers_when_open(self._cmb_engine)
         self._cmb_engine.setToolTip(
             "Dose engine. Which biological models can be computed depends on it: Monte "
             "Carlo engines do not use the machine's pencil-beam kernels."
         )
-        self._cmb_engine.currentTextChanged.connect(self._on_engine_changed)
+        self._cmb_engine.currentIndexChanged.connect(self._on_engine_changed)
         self._btn_engine_config = QPushButton("…")
         self._btn_engine_config.setFixedWidth(28)
         self._btn_engine_config.setToolTip("Configure the selected dose engine")
@@ -610,7 +708,6 @@ class PlanWidget(WorkspaceWidget):
         spin = QDoubleSpinBox()
         spin.setRange(0.1, 50.0)
         spin.setDecimals(2)
-        spin.setValue(3.0)
         return spin
 
     # ------------------------------------------------------------------
@@ -666,10 +763,9 @@ class PlanWidget(WorkspaceWidget):
     def _refresh_machines(self, radiation_mode: str) -> None:
         """List the machine files found for ``radiation_mode``; keep or default the selection."""
         current = self._cmb_machine.currentText()
-        names = get_available_machines(radiation_mode).get(radiation_mode, [])
+        choices = machine_choices(radiation_mode, self._plan_machine)
+        names = [choice["label"] for choice in choices]
         plan_label = self._plan_machine_label(radiation_mode)
-        if plan_label is not None:
-            names = [plan_label, *names]
         self._cmb_machine.blockSignals(True)
         self._cmb_machine.clear()
         self._cmb_machine.addItems(names)
@@ -698,7 +794,7 @@ class PlanWidget(WorkspaceWidget):
         mode = self._cmb_radiation.currentText() if radiation_mode is None else radiation_mode
         if machine is None or machine.radiation_mode != mode:
             return None
-        return f"{machine.name} {_FROM_PLAN_SUFFIX}"
+        return plan_machine_label(machine)
 
     def _form_machine(self) -> str | Machine:
         """Machine entered in the form: a name, or the plan's own base data if selected."""
@@ -785,96 +881,49 @@ class PlanWidget(WorkspaceWidget):
         tuple[str, str] or None
             Status note and its detailed reason if a selection the new context cannot run
             was replaced, otherwise None.
+
+        Notes
+        -----
+        The rules are :func:`~pyRadPlan.app._planform.select_bio_model`, which ``plan.options``
+        applies for the web frontend.
         """
         had_entries = self._cmb_bio_model.count() > 0
-        previous = self._selected_bio_model() if had_entries else None
-        previous_name = self._bio_model_name()
-        previous_label = self._cmb_bio_model.currentText().split(" (not supported")[0]
         previous_mode = self._bio_models_mode
-        explicit = had_entries and previous_name not in (
-            "",
-            default_bio_models.get(previous_mode),
-        )
-        # A mode's default follows into the new mode's default; anything else is kept if the
-        # new context can run it.
-        keep = had_entries and (explicit or previous_mode == radiation_mode)
         self._bio_models_mode = radiation_mode
         self._bio_models_key = self._machine_key(radiation_mode)
         engine = self._current_engine()
         self._bio_models_engine = engine.short_name if engine is not None else ""
         machine = self._current_machine()
-        options = bio_options_quietly(radiation_mode, machine, engine)
-        self._bio_model_classes = {cls.model: cls for cls in available_bio_models(radiation_mode)}
+        selection = select_bio_model(
+            radiation_mode,
+            machine,
+            engine,
+            restore=restore,
+            current=self._selected_bio_model() if had_entries else None,
+            current_name=self._bio_model_name(),
+            current_label=self._cmb_bio_model.currentText().split(" (not supported")[0],
+            previous_mode=previous_mode,
+            machine_name=self._bio_models_key[1],
+        )
+        self._bio_model_classes = selection.model_classes
 
         self._cmb_bio_model.blockSignals(True)
         self._cmb_bio_model.clear()
         self._bio_options = []
         self._unsupported_bio_model = None
-        for option in options:
+        for option in selection.options:
             self._add_bio_option(option)
-
-        note = None
-        if restore is not None:
-            option = matching_bio_option(options, restore, machine)
-            index = self._option_index(option) if option is not None and option.available else -1
-            if index < 0:
-                index = self._add_unsupported_bio_model(restore, machine, engine)
-            self._cmb_bio_model.setCurrentIndex(index)
+        if selection.unsupported is not None:
+            index = self._add_unsupported_bio_model(selection)
         else:
-            index = -1
-            if keep and previous_name in self._bio_model_classes:
-                option = matching_bio_option(options, previous, machine)
-                if option is not None and option.available:
-                    index = self._option_index(option)
-            if index >= 0:
-                self._cmb_bio_model.setCurrentIndex(index)
-            else:
-                if keep:
-                    index = self._first_option_index(previous_name, available_only=True)
-                if index < 0:
-                    default = default_bio_models.get(radiation_mode, "none")
-                    index = self._first_option_index(default, available_only=True)
-                if index < 0:
-                    index = self._first_option_index("none")
-                self._cmb_bio_model.setCurrentIndex(max(index, 0))
-                self._apply_option_parameters(self._cmb_bio_model.currentIndex())
-                if keep:
-                    note = self._replacement_note(
-                        previous, previous_label, radiation_mode, machine, engine
-                    )
+            index = self._option_index(selection.selected)
+        self._cmb_bio_model.setCurrentIndex(index)
+        if selection.replaced:
+            self._apply_option_parameters(self._cmb_bio_model.currentIndex())
         self._cmb_bio_model.blockSignals(False)
         self._update_bio_config_button()
         self._update_tissue_indicator()
-        return note
-
-    def _replacement_note(
-        self, previous: Any, previous_label: str, radiation_mode: str, machine: Any, engine: Any
-    ) -> tuple[str, str]:
-        """Status note and reason for a selection the new context cannot run."""
-        current = self._cmb_bio_model.currentText()
-        model = bio_model_quietly(previous, radiation_mode)
-        reason = ""
-        if model is None or model.model not in self._bio_model_classes:
-            context = f"for {radiation_mode}"
-        else:
-            issues = [
-                issue
-                for issue in tissue_issues_quietly(machine, model, [], engine)
-                if issue.structure is None
-            ]
-            reason = tissue_issues_text(issues)
-            on_machine = not any(
-                issue.structure is None for issue in tissue_issues_quietly(machine, model, [])
-            )
-            if engine is not None and on_machine:
-                context = f"with the dose engine {engine.short_name}"
-            else:
-                context = f"on machine '{self._bio_models_key[1]}'"
-        return (
-            f"Biological model '{previous_label}' is not available {context}; "
-            f"selected '{current}'.",
-            reason,
-        )
+        return selection.note
 
     def _add_bio_option(self, option: BioModelOption) -> None:
         """Append a model dropdown entry for one option, disabled if it is unavailable."""
@@ -887,53 +936,16 @@ class PlanWidget(WorkspaceWidget):
         self._cmb_bio_model.setItemData(index, tooltip, Qt.ItemDataRole.ToolTipRole)
         self._bio_options.append(option)
 
-    def _add_unsupported_bio_model(self, bio_model: Any, machine: Any, engine: Any = None) -> int:
-        """
-        Append a disabled entry keeping a plan's model the machine or engine cannot run.
-
-        Only used when restoring a plan, so that Apply keeps its model. Returns its index,
-        -1 if the model cannot be built at all.
-        """
-        model = bio_model_quietly(bio_model, self._bio_models_mode or "")
-        if model is None:
-            return -1
-        suffix = []
-        for key, value in selection_parameters(model.parameters).items():
-            if key == "data_model":
-                suffix.append(provenance_label(value))
-            elif isinstance(value, dict):
-                suffix.extend(str(variant) for variant in value.values())
-            else:
-                suffix.append(str(value))
-        label = " · ".join([bio_model_display_name(model), *suffix])
-        issues = [
-            issue
-            for issue in tissue_issues_quietly(machine, model, [], engine)
-            if issue.structure is None
-        ]
-        on_machine = not any(
-            issue.structure is None for issue in tissue_issues_quietly(machine, model, [])
-        )
-        if engine is not None and issues and on_machine:
-            subject = f"the dose engine {engine.short_name}"
-            unsupported = f"(not supported by {subject})"
-        else:
-            subject, unsupported = "the machine", _UNSUPPORTED_SUFFIX
+    def _add_unsupported_bio_model(self, selection: BioSelection) -> int:
+        """Append the disabled entry keeping a plan's model the context cannot run."""
+        model = selection.unsupported
         add_identified_item(
-            self._cmb_bio_model, f"{label} {unsupported}", model.model, model.model
+            self._cmb_bio_model, selection.unsupported_label, model.model, model.model
         )
         index = self._cmb_bio_model.count() - 1
         self._cmb_bio_model.model().item(index).setEnabled(False)
-        reason = (
-            tissue_issues_text(issues)
-            if issues
-            else "The machine offers no base data matching the configuration of this model."
-        )
         self._cmb_bio_model.setItemData(
-            index,
-            f"Model of the plan, which {subject} cannot run:\n{reason}\n"
-            "Apply keeps it; select another model to replace it.",
-            Qt.ItemDataRole.ToolTipRole,
+            index, selection.unsupported_tooltip, Qt.ItemDataRole.ToolTipRole
         )
         self._bio_options.append(None)
         self._unsupported_bio_model = model
@@ -953,14 +965,9 @@ class PlanWidget(WorkspaceWidget):
 
         With ``available_only``, -1 if the formalism has no available entry.
         """
-        entries = [i for i, o in enumerate(self._bio_options) if o is not None and o.model == name]
-        if not entries:
-            model = bio_model_quietly(name, self._bio_models_mode or "")
-            if model is not None and model.model != name:
-                return self._first_option_index(model.model, available_only)
-            return -1
-        fallback = -1 if available_only else entries[0]
-        return next((i for i in entries if self._bio_options[i].available), fallback)
+        options = [o for o in self._bio_options if o is not None]
+        option = first_bio_option(options, name, self._bio_models_mode or "", available_only)
+        return self._option_index(option) if option is not None else -1
 
     def _apply_option_parameters(self, index: int) -> None:
         """Take over the base data parameters of the option of an entry into the model's."""
@@ -1058,9 +1065,9 @@ class PlanWidget(WorkspaceWidget):
             self._current_bio_model(),
             self,
             engine=self._current_engine(),
+            apply=lambda rows: self._ws.session.tissue_apply(rows, apply_anyway=True),
         )
-        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.changed:
-            self._ws.cst = cst
+        dialog.exec()
 
     def _current_machine(self) -> Optional[BioMachineSummary]:
         """
@@ -1084,7 +1091,7 @@ class PlanWidget(WorkspaceWidget):
         for the radiation mode, otherwise the mode's default engine.
         """
         return dose_engine_quietly(
-            self._cmb_radiation.currentText(), self._cmb_engine.currentText() or None
+            self._cmb_radiation.currentText(), current_identifier(self._cmb_engine) or None
         )
 
     def _current_bio_model(self) -> Optional[BiologicalModel]:
@@ -1118,7 +1125,7 @@ class PlanWidget(WorkspaceWidget):
         errors = tissue_errors(issues)
         self.tissue_marker_state = "error" if errors else "warning" if issues else ""
         self._lbl_tissue_warning.setVisible(bool(issues))
-        with_engine = f" with the dose engine {engine.short_name}" if engine else ""
+        with_engine = f" with the dose engine {engine.name}" if engine else ""
         context = (
             f"the structures on machine '{self._bio_models_key[1]}'{with_engine}" if issues else ""
         )
@@ -1149,57 +1156,134 @@ class PlanWidget(WorkspaceWidget):
     # ------------------------------------------------------------------
 
     def _refresh_engines(self, radiation_mode: str) -> None:
-        self._engines = get_available_engines(radiation_mode)
-        current = self._cmb_engine.currentText()
+        choices = engine_choices(radiation_mode)
+        self._engines = {c["value"]: engine_class(radiation_mode, c["value"]) for c in choices}
+        current = current_identifier(self._cmb_engine)
         self._cmb_engine.blockSignals(True)
         self._cmb_engine.clear()
-        self._cmb_engine.addItems(list(self._engines))
-        if current in self._engines:
-            self._cmb_engine.setCurrentText(current)
+        for choice in choices:
+            add_identified_item(
+                self._cmb_engine, choice["label"], choice["value"], choice["identifier"]
+            )
+            if choice.get("enabled") is False:
+                index = self._cmb_engine.count() - 1
+                self._cmb_engine.model().item(index).setEnabled(False)
+                self._cmb_engine.setItemData(index, choice["reason"], Qt.ItemDataRole.ToolTipRole)
+        select_identifier(self._cmb_engine, current)
         self._cmb_engine.blockSignals(False)
         self._btn_engine_config.setEnabled(bool(self._engines))
 
     def _on_engine_config(self) -> None:
-        engine_name = self._cmb_engine.currentText()
+        engine_name = current_identifier(self._cmb_engine)
         engine_cls = self._engines.get(engine_name)
         if engine_cls is None:
             return
 
+        # Engines may suggest values for their parameters, given the radiation mode. The
+        # lookup may go online, so the dialog opens with the suggestions of an earlier
+        # lookup, or those found without the network, and gets the current ones when
+        # they arrive.
+        radiation_mode = self._cmb_radiation.currentText()
+        key = (engine_name, radiation_mode)
+        lookup = getattr(engine_cls, "config_choices", None)
+        if key not in self._engine_choices and callable(lookup):
+            try:
+                if "offline" in inspect.signature(lookup).parameters:
+                    self._engine_choices[key] = lookup(radiation_mode, offline=True)
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                logger.debug("Could not collect local choices for %s: %s", engine_name, exc)
         dialog = ConfigFormDialog(
             engine_cls.config_model(),
             initial=self._engine_props.get(engine_name, {}),
             title=f"Configure {engine_cls.name}",
             parent=self,
+            choices=self._engine_choices.get(key, {}),
+            exclude=set(ENGINE_FORM_EXCLUDE),
         )
+        if callable(lookup):
+            dialog.choices_loaded.connect(
+                lambda choices, key=key: self._engine_choices.__setitem__(key, choices)
+            )
+            dialog.load_choices(lookup, radiation_mode)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._engine_props[engine_name] = dialog.values()
             self._update_dirty_state()
+
+    # ------------------------------------------------------------------
+    # Scenario model handling
+    # ------------------------------------------------------------------
+
+    def _on_scenario_model_changed(self, *_args) -> None:
+        name = current_identifier(self._cmb_scenario)
+        self._btn_scenario_config.setEnabled(name != _EXPLICIT)
+
+    def _show_explicit_scenario_entry(self, shown: bool) -> None:
+        """Offer the explicit model only while the plan holds one; it cannot be built here."""
+        index = self._cmb_scenario.findData(_EXPLICIT)
+        if shown and index < 0:
+            choice = scenario_choices(explicit=True)[-1]
+            add_identified_item(
+                self._cmb_scenario, choice["label"], choice["value"], choice["identifier"]
+            )
+            self._cmb_scenario.setItemData(
+                self._cmb_scenario.count() - 1,
+                "The scenario set the applied plan carries itself. It is kept unless another "
+                "model is selected.",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        elif not shown and index >= 0:
+            if self._cmb_scenario.currentIndex() == index:
+                self._cmb_scenario.setCurrentIndex(0)
+            self._cmb_scenario.removeItem(index)
+
+    def _on_scenario_config(self) -> None:
+        model_name = current_identifier(self._cmb_scenario)
+        try:
+            model_cls = get_scenario_model_class(model_name)
+        except (ValueError, NotImplementedError):
+            return
+
+        dialog = ConfigFormDialog(
+            model_cls,
+            initial=self._scenario_props.get(model_name, {}),
+            title=f"Configure {model_cls.name}",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._scenario_props[model_name] = dialog.values()
+            self._update_dirty_state()
+
+    def _restore_scenario_from_pln(self, pln: Plan) -> None:
+        model = pln.scenarios
+        name = getattr(model, "short_name", None)
+        explicit = name == _EXPLICIT
+        self._show_explicit_scenario_entry(explicit)
+        if not name or not select_identifier(self._cmb_scenario, name):
+            return
+        # An empty override mapping means defaults, not "keep the form's edits".
+        self._scenario_props[name] = {} if explicit else self._scenario_overrides(model)
+
+    _scenario_overrides = staticmethod(scenario_overrides)
 
     # ------------------------------------------------------------------
     # Optimization (planning problem / solver) handling
     # ------------------------------------------------------------------
 
     def _refresh_problems(self, radiation_mode: str) -> None:
-        self._problems = {
-            name: cls
-            for name, cls in get_available_problems().items()
-            if radiation_mode in cls.possible_radiation_modes
-        }
-        current = self._cmb_problem.currentText()
+        self._problems = problem_classes(radiation_mode)
+        current = current_identifier(self._cmb_problem)
         self._cmb_problem.blockSignals(True)
         self._cmb_problem.clear()
-        for name, cls in self._problems.items():
-            self._cmb_problem.addItem(name)
-            self._cmb_problem.setItemData(
-                self._cmb_problem.count() - 1, cls.name, Qt.ItemDataRole.ToolTipRole
+        for choice in problem_choices(radiation_mode):
+            add_identified_item(
+                self._cmb_problem, choice["label"], choice["value"], choice["identifier"]
             )
-        if current in self._problems:
-            self._cmb_problem.setCurrentText(current)
+        select_identifier(self._cmb_problem, current)
         self._cmb_problem.blockSignals(False)
         self._btn_problem_config.setEnabled(bool(self._problems))
 
     def _on_problem_config(self) -> None:
-        problem_name = self._cmb_problem.currentText()
+        problem_name = current_identifier(self._cmb_problem)
         problem_cls = self._problems.get(problem_name)
         if problem_cls is None:
             return
@@ -1212,18 +1296,12 @@ class PlanWidget(WorkspaceWidget):
             self._update_dirty_state()
 
     def _restore_problem_from_pln(self, pln: Plan) -> None:
-        prop_opt = pln.prop_opt if isinstance(pln.prop_opt, dict) else {}
-        requested = prop_opt.get("problem") or prop_opt.get("opti_prob")
-        self._plan_names_problem = bool(requested)
         # An unavailable problem falls back to the default, as get_problem_from_pln does.
-        default = next(iter(self._problems), None)
-        problem_name = requested if requested in self._problems else default
+        problem_name, values = plan_problem(pln)
         if problem_name is None:
             return
-        self._cmb_problem.setCurrentText(problem_name)
-        self._problem_props[problem_name] = self._copy_prop_opt(
-            {k: v for k, v in prop_opt.items() if k not in ("problem", "opti_prob")}
-        )
+        select_identifier(self._cmb_problem, problem_name)
+        self._problem_props[problem_name] = self._copy_prop_opt(values)
 
     @staticmethod
     def _copy_prop_opt(prop_opt: dict) -> dict:
@@ -1231,15 +1309,6 @@ class PlanWidget(WorkspaceWidget):
         solver = prop_opt.get("solver")
         memo = {id(solver): solver} if isinstance(solver, SolverBase) else {}
         return deepcopy(prop_opt, memo)
-
-    def _form_prop_opt(self) -> dict:
-        """``pln.prop_opt`` described by the optimization fields."""
-        problem_name = self._cmb_problem.currentText()
-        prop_opt = self._copy_prop_opt(self._problem_props.get(problem_name, {}))
-        default = next(iter(self._problems), None)
-        if problem_name and (self._plan_names_problem or problem_name != default):
-            prop_opt = {"problem": problem_name, **prop_opt}
-        return prop_opt
 
     # ------------------------------------------------------------------
     # Workspace → UI synchronisation
@@ -1264,24 +1333,30 @@ class PlanWidget(WorkspaceWidget):
         self._update_tissue_indicator()
 
     def _apply_default_plan(self) -> None:
-        """Apply the form defaults as the initial plan once patient data is loaded.
+        """Apply the form as the initial plan once patient data is loaded.
 
-        If the defaults do not validate, the form is flagged as modified instead
-        so the user sees that the plan still needs to be applied.
+        The form starts from the session's default plan (its profile's), so an unedited
+        form applies exactly that. Data loaded by a running operation gets the plan once
+        the operation has ended. If the plan does not validate, the form is flagged as
+        modified instead so the user sees that the plan still needs to be applied.
         """
+        self._ws.session.call_when_idle(self._apply_default_plan_now)
+
+    def _apply_default_plan_now(self) -> None:
+        if self._ws.pln is not None or not self._ws.has("ct", "cst"):
+            return
         try:
-            pln = self._build_plan()
+            self._write_plan()
         except Exception as exc:  # noqa: BLE001 - surface, never crash
-            self._set_status(f"Plan not applied — {type(exc).__name__}: {exc}", error=True)
+            self._set_status(f"Plan not applied — {self._error_text(exc)}", error=True)
             self._set_global_modified(True)
             return
-        with self.hold_updates():
-            self._ws.pln = pln
         self._set_status("Default plan applied.")
 
     def _sync_from_workspace(self) -> None:
         pln = self._ws.pln
         if pln is None:
+            self._show_explicit_scenario_entry(False)
             self._btn_ct_grid.setEnabled(self._ws.ct is not None)
             self._update_auto_iso_center()
             return
@@ -1325,11 +1400,9 @@ class PlanWidget(WorkspaceWidget):
         if couch is not None:
             self._txt_couch.setText(self._format_angles(couch))
 
-        self._restore_iso_center(stf.get("iso_center"))
+        self._restore_iso_center(plan_summary(pln)["iso_center"])
 
-        scenario = getattr(pln.mult_scen, "short_name", None)
-        if scenario and self._cmb_scenario.findText(scenario) >= 0:
-            self._cmb_scenario.setCurrentText(scenario)
+        self._restore_scenario_from_pln(pln)
 
         spacing = stf.get("bixel_width")
         if spacing is not None:
@@ -1350,32 +1423,28 @@ class PlanWidget(WorkspaceWidget):
         self._update_beam_count()
 
     def _restore_engine_from_pln(self, pln: Plan) -> None:
-        prop_dose_calc = pln.prop_dose_calc if isinstance(pln.prop_dose_calc, dict) else {}
-        engine_name = prop_dose_calc.get("engine") or next(iter(self._engines), None)
+        engine_name, engine_props = plan_engine_config(pln)
         if engine_name not in self._engines:
             return
-        self._cmb_engine.setCurrentText(engine_name)
-        engine_props = {
-            k: v for k, v in prop_dose_calc.items() if k not in ("engine", "dose_grid")
-        }
-        # An empty override mapping means defaults, not "keep the form's edits".
-        self._engine_props[engine_name] = deepcopy(engine_props)
+        select_identifier(self._cmb_engine, engine_name)
+        # An empty override mapping means defaults, not "keep the form's edits". Settings
+        # the engine form does not show stay in the plan (the session keeps them).
+        self._engine_props[engine_name] = deepcopy(engine_form_values(engine_props))
 
     def _restore_iso_center(self, iso_center) -> None:
+        """Show a ``PlanSummary.iso_center``: automatic, one, or one per beam."""
         self._per_beam_iso_center = None
-        if iso_center is None or np.size(iso_center) == 0:
+        if iso_center is None:
             self._chk_iso_auto.setChecked(True)
             self._update_auto_iso_center()
-            return
-        iso = np.atleast_2d(np.asarray(iso_center, dtype=float))
-        if len(np.unique(iso, axis=0)) == 1:
-            self._txt_iso.setText(self._format_angles(iso[0]))
+        elif not isinstance(iso_center[0], list):
+            self._txt_iso.setText(self._format_angles(iso_center))
             self._chk_iso_auto.setChecked(False)
         else:
             # per-beam iso centers cannot be edited here; show auto, but keep them
             # (setChecked first, as the toggle drops them and auto-fills the field)
             self._chk_iso_auto.setChecked(True)
-            self._per_beam_iso_center = iso.tolist()
+            self._per_beam_iso_center = deepcopy(iso_center)
             self._txt_iso.setText("multiple iso centers")
 
     @staticmethod
@@ -1412,7 +1481,7 @@ class PlanWidget(WorkspaceWidget):
 
     def _refresh_angle_presets(self, radiation_mode: str) -> None:
         """List the angle presets, those typical for ``radiation_mode`` first."""
-        presets = get_beam_angle_presets(radiation_mode)
+        presets = beam_presets(radiation_mode)
         menu = self._btn_angle_preset.menu()
         menu.clear()
         for preset in presets:
@@ -1487,14 +1556,13 @@ class PlanWidget(WorkspaceWidget):
 
     def _on_apply(self) -> None:
         try:
-            pln = self._build_plan()
+            pln = self._write_plan()
         except Exception as exc:  # noqa: BLE001 - surface, never crash
-            self._set_status(f"{type(exc).__name__}: {exc}", error=True)
-            self.update_failed.emit(f"{type(exc).__name__}: {exc}")
+            self._set_status(self._error_text(exc), error=True)
+            self.update_failed.emit(self._error_text(exc))
             return
 
-        with self.hold_updates():
-            self._ws.pln = pln
+        self._show_explicit_scenario_entry(pln.scenarios.short_name == _EXPLICIT)
         if self._plan_machine is not None and pln.machine is not self._plan_machine:
             self._plan_machine = self._plan_machine_summary = None
             self._refresh_machines(pln.radiation_mode)
@@ -1649,25 +1717,17 @@ class PlanWidget(WorkspaceWidget):
     # Plan construction
     # ------------------------------------------------------------------
 
-    def _build_plan(self) -> Plan:
-        radiation_mode = self._cmb_radiation.currentText()
+    def _form_changes(self) -> dict[str, Any]:
+        """Every field of the form as ``plan.set`` params (see ``Session.set_plan``).
 
+        Raises ``ValueError`` when the fields do not describe a valid set of beams or
+        isocenter. The plan's model is left out while the form keeps it unsupported.
+        """
         gantry, couch = self._form_beam_angles()
-
-        current = self._ws.pln
-        same_mode = current is not None and current.radiation_mode == radiation_mode
-        prop_stf = deepcopy(current.prop_stf) if same_mode else {}
-        prop_stf.update(
-            gantry_angles=gantry,
-            couch_angles=couch,
-            bixel_width=float(self._spn_bixel.value()),
-        )
-
         if not self._chk_iso_auto.isChecked():
-            iso = parse_number_list(self._txt_iso.text())
+            iso: Any = parse_number_list(self._txt_iso.text())
             if len(iso) != 3:
                 raise ValueError("iso center requires exactly three coordinates (x y z)")
-            prop_stf["iso_center"] = iso
         elif self._per_beam_iso_center is not None:
             if len(self._per_beam_iso_center) != len(gantry):
                 raise ValueError(
@@ -1675,55 +1735,55 @@ class PlanWidget(WorkspaceWidget):
                     f"match {len(gantry)} beams; enter an iso center, or untick and re-tick "
                     "Auto to use the target center of mass"
                 )
-            prop_stf["iso_center"] = deepcopy(self._per_beam_iso_center)
+            iso = deepcopy(self._per_beam_iso_center)
         else:
-            prop_stf.pop("iso_center", None)
-
-        prop_dose_calc: dict = {}
-        engine_name = self._cmb_engine.currentText()
-        if engine_name:
-            prop_dose_calc["engine"] = engine_name
-            prop_dose_calc.update(self._engine_props.get(engine_name, {}))
-        prop_dose_calc["dose_grid"] = {
-            "resolution": {
-                "x": float(self._spn_res_x.value()),
-                "y": float(self._spn_res_y.value()),
-                "z": float(self._spn_res_z.value()),
-            }
+            iso = None
+        machine = self._form_machine()
+        engine = current_identifier(self._cmb_engine) or None
+        scenario = current_identifier(self._cmb_scenario)
+        problem = current_identifier(self._cmb_problem)
+        changes: dict[str, Any] = {
+            "radiation_mode": self._cmb_radiation.currentText(),
+            "machine": machine if isinstance(machine, str) else "__plan__",
+            "num_of_fractions": int(self._spn_fractions.value()),
+            "dose_convention": self._cmb_dose_convention.currentData(),
+            "gantry_angles": gantry,
+            "couch_angles": couch,
+            "bixel_width": float(self._spn_bixel.value()),
+            "iso_center": iso,
+            "dose_grid_resolution": [
+                float(self._spn_res_x.value()),
+                float(self._spn_res_y.value()),
+                float(self._spn_res_z.value()),
+            ],
+            "engine": engine,
+            "engine_config": {"values": deepcopy(self._engine_props.get(engine, {}))},
+            "scenarios": {
+                "model": scenario,
+                "values": deepcopy(self._scenario_props.get(scenario, {})),
+            },
+            **optimization_change(
+                problem, self._copy_prop_opt(self._problem_props.get(problem, {}))
+            ),
         }
+        option = self._option_at(self._cmb_bio_model.currentIndex())
+        if option is not None or self._unsupported_bio_model is None:
+            name = self._bio_model_name() or "none"
+            changes["bio_model"] = bio_change(name, option, self._bio_params.get(name, {}))
+        return changes
 
-        # Keep settings this form does not edit (prescription, sequencing, etc.).
-        # Read field values directly to retain arbitrary model types. The
-        # machine is set below and never copied: base data runs to hundreds of megabytes.
-        plan_data = (
-            {
-                name: deepcopy(getattr(current, name))
-                for name in type(current).model_fields
-                if name not in ("machine", "prop_opt")
-            }
-            if current is not None
-            else {}
-        )
-        scenario = self._cmb_scenario.currentText()
-        if current is not None and getattr(current.mult_scen, "short_name", None) == scenario:
-            scenario = deepcopy(current.mult_scen)
-        plan_data.update(
-            {
-                "radiation_mode": radiation_mode,
-                "machine": self._form_machine(),
-                "num_of_fractions": int(self._spn_fractions.value()),
-                "dose_convention": self._cmb_dose_convention.currentData(),
-                "bio_model": self._selected_bio_model(),
-                "mult_scen": scenario,
-                "prop_stf": prop_stf,
-                "prop_seq": deepcopy(current.prop_seq) if same_mode else {},
-                "prop_dose_calc": prop_dose_calc,
-                "prop_opt": self._form_prop_opt(),
-            }
-        )
+    def _write_plan(self) -> Plan:
+        """Apply what differs between the form and the plan through the session."""
+        changes = changes_from_form(self._ws.pln, self._form_changes())
+        with self.hold_updates():
+            self._ws.session.set_plan(changes)
+        return self._ws.pln
 
-        # Constructing validates; validate_pln would deep-copy the plan's own base data.
-        return _plan_class(radiation_mode)(**plan_data)
+    @staticmethod
+    def _error_text(exc: Exception) -> str:
+        if isinstance(exc, PreconditionError) and exc.code == "busy":
+            return f"Plan not applied: {exc}."
+        return f"{type(exc).__name__}: {exc}"
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1744,7 +1804,7 @@ class PlanWidget(WorkspaceWidget):
         # ``_cmb_radiation`` and ``_cmb_engine`` are handled by ``_on_radiation_changed`` and
         # ``_on_engine_changed``.
         self._cmb_machine.editTextChanged.connect(self._on_field_edited)
-        self._cmb_problem.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_problem.currentIndexChanged.connect(self._on_field_edited)
         self._cmb_bio_model.currentIndexChanged.connect(self._on_field_edited)
         self._spn_fractions.valueChanged.connect(self._on_field_edited)
         self._cmb_dose_convention.currentIndexChanged.connect(self._on_field_edited)
@@ -1755,7 +1815,7 @@ class PlanWidget(WorkspaceWidget):
         self._spn_bixel.valueChanged.connect(self._on_field_edited)
         self._chk_iso_auto.toggled.connect(self._on_field_edited)
         self._txt_iso.textChanged.connect(self._on_field_edited)
-        self._cmb_scenario.currentTextChanged.connect(self._on_field_edited)
+        self._cmb_scenario.currentIndexChanged.connect(self._on_field_edited)
         for spin in (self._spn_res_x, self._spn_res_y, self._spn_res_z):
             spin.valueChanged.connect(self._on_field_edited)
 
@@ -1764,8 +1824,8 @@ class PlanWidget(WorkspaceWidget):
 
     def _capture_state(self) -> dict[str, Any]:
         """Snapshot the tracked field values for modified-state comparison."""
-        engine = self._cmb_engine.currentText()
-        problem = self._cmb_problem.currentText()
+        engine = current_identifier(self._cmb_engine)
+        problem = current_identifier(self._cmb_problem)
         not_auto = not self._chk_iso_auto.isChecked()
         bio_params = self._bio_params.get(self._bio_model_name(), {})
         unsupported = self._option_at(self._cmb_bio_model.currentIndex()) is None
@@ -1773,20 +1833,16 @@ class PlanWidget(WorkspaceWidget):
             "radiation": self._cmb_radiation.currentText(),
             "machine": self._cmb_machine.currentText(),
             "engine": engine,
-            "engine_props": dict(self._engine_props.get(engine, {})),
+            "engine_props": comparison_key(self._engine_props.get(engine, {})),
             "problem": problem,
-            "problem_props": dict(self._problem_props.get(problem, {})),
+            "problem_props": comparison_key(self._problem_props.get(problem, {})),
             # The base data the selected entry reads belongs to the model choice, not to
             # the parameters configured through the "…" button.
-            "bio_model": json.dumps(
-                [self._bio_model_name(), unsupported, selection_parameters(bio_params)],
-                default=str,
-                sort_keys=True,
+            "bio_model": comparison_key(
+                [self._bio_model_name(), unsupported, selection_parameters(bio_params)]
             ),
-            "bio_params": json.dumps(
-                {k: v for k, v in bio_params.items() if k not in SELECTION_PARAMETERS},
-                default=str,
-                sort_keys=True,
+            "bio_params": comparison_key(
+                {k: v for k, v in bio_params.items() if k not in SELECTION_PARAMETERS}
             ),
             "fractions": self._spn_fractions.value(),
             "dose_convention": self._cmb_dose_convention.currentData(),
@@ -1796,7 +1852,10 @@ class PlanWidget(WorkspaceWidget):
             "iso_auto": self._chk_iso_auto.isChecked(),
             "iso_per_beam": self._per_beam_iso_center is not None,
             "iso": self._txt_iso.text() if not_auto else None,
-            "scenario": self._cmb_scenario.currentText(),
+            "scenario": current_identifier(self._cmb_scenario),
+            "scenario_props": comparison_key(
+                self._scenario_props.get(current_identifier(self._cmb_scenario), {})
+            ),
             "res_x": self._spn_res_x.value(),
             "res_y": self._spn_res_y.value(),
             "res_z": self._spn_res_z.value(),
@@ -1837,7 +1896,19 @@ class PlanWidget(WorkspaceWidget):
 
     @staticmethod
     def _set_field_modified(widget: QWidget, modified: bool) -> None:
-        widget.setStyleSheet(_MODIFIED_STYLE if modified else "")
+        frame = widget.findChild(_ModifiedFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        if frame is None:
+            if not modified:
+                return
+            frame = _ModifiedFrame(widget)
+        frame.setVisible(modified)
+        if modified:
+            frame.raise_()
+
+    @staticmethod
+    def _is_field_modified(widget: QWidget) -> bool:
+        frame = widget.findChild(_ModifiedFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        return frame is not None and not frame.isHidden()
 
     def _set_global_modified(self, modified: bool) -> None:
         self._modified = modified
