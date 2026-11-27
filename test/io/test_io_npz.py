@@ -132,6 +132,19 @@ def test_npz_roundtrip_preserves_apply_overlap(tmp_path):
     )
 
 
+def test_npz_roundtrip_keeps_explicit_apply_overlap_true(tmp_path):
+    # True forces a VOI into overlap resolution even without objectives, so it must not
+    # come back as the objectives-based default.
+    ct, cst = load_tg119()
+    cst.vois[0].apply_overlap = True
+
+    out = tmp_path / "apply_overlap_true.npz"
+    save_data(ct=ct, cst=cst, file_name=str(out))
+    cst2 = load_data(out)["cst"]
+
+    assert cst2.vois[0].apply_overlap is True
+
+
 def test_npz_cst_only_is_self_contained(tmp_path):
     # Saving a cst alone must still produce a loadable file (ct pulled from cst.ct_image).
     ct, cst = load_tg119()

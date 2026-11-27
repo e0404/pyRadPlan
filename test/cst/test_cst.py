@@ -765,6 +765,40 @@ def test_apply_overlap_priorities_warns_when_objectives_fully_overlapped(
     assert any("CTV" in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.parametrize(
+    ("high", "high_objectives", "low", "low_objectives", "low_is_cut"),
+    [
+        ("auto", True, "auto", True, True),
+        ("auto", False, "auto", True, False),
+        ("auto", True, "auto", False, False),
+        (True, False, "auto", True, True),
+        (True, False, True, False, True),
+        ("auto", True, True, False, True),
+        (False, False, "auto", True, True),
+        ("auto", True, False, True, False),
+        (None, True, "auto", True, False),
+        ("auto", True, None, True, False),
+    ],
+)
+def test_apply_overlap_modes(
+    generic_ct, generic_vois, high, high_objectives, low, low_objectives, low_is_cut
+):
+    """An explicit apply_overlap overrides the objectives-based default in both directions."""
+    ptv, body = generic_vois[1], generic_vois[3]
+    for voi, mode, has_objectives in ((ptv, high, high_objectives), (body, low, low_objectives)):
+        voi.apply_overlap = mode
+        if not has_objectives:
+            voi.objectives = []
+    cst = StructureSet(ct_image=generic_ct, vois=[ptv, body])
+
+    overlapped = cst.apply_overlap_priorities()
+    ptv_mask, body_mask = (sitk.GetArrayViewFromImage(v.mask) > 0 for v in cst.vois)
+    new_ptv, new_body = (sitk.GetArrayViewFromImage(v.mask) > 0 for v in overlapped.vois)
+
+    np.testing.assert_array_equal(new_ptv, ptv_mask)
+    np.testing.assert_array_equal(new_body, body_mask & ~ptv_mask if low_is_cut else body_mask)
+
+
 @pytest.mark.parametrize("without_objectives", [(), (0,), (1, 4), (0, 1, 2, 3, 4)])
 @pytest.mark.parametrize("priorities", [(1, 2, 5, 10, 5), (3, 2, 1, 1, 4), (1, 1, 1, 1, 1)])
 def test_tissue_data_does_not_depend_on_overlap_removal(
