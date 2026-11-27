@@ -185,6 +185,84 @@ def test_total_ntcp_keeps_its_precision_in_float32():
     assert np.isclose(float(total_ntcp(p)), exact, rtol=1e-5)
 
 
+@pytest.fixture
+def graded_dij(sample_base_dij_dict):
+    """Dose and LET-weighted dose rise with the voxel index, so a wrong voxel order shows."""
+    scale = np.linspace(0.0, 1.0, 125, dtype=np.float32)[:, None]
+    sample_base_dij_dict["physical_dose"].flat[0] = scale * np.ones((125, 10), dtype=np.float32)
+    sample_base_dij_dict["let_dose"].flat[0] = 2.0 * scale * np.ones((125, 10), dtype=np.float32)
+    return Dij.model_validate(sample_base_dij_dict)
+
+
+GRADED_RISK = np.arange(125) % 2 == 0
+GRADED_FLUENCE = np.full(10, 4.0, dtype=np.float32)  # course dose from 0 to 80 Gy in 2 fractions
+
+
+def _graded_polo(dij):
+    return POLO(dij, num_of_fractions=2, binary_risk_mask=GRADED_RISK, risk_voi_name=None)
+
+
+def _graded_polo_closed_form():
+    """Voxel-wise POLO for ``graded_dij``, written out from the model in float64."""
+    dose = 2 * GRADED_FLUENCE.sum() * np.linspace(0.0, 1.0, 125)
+    eta = -26.3 + 0.19 * dose + 0.018 * (2.0 * dose) + 1.19 * GRADED_RISK
+    p = 1.0 / (1.0 + np.exp(-eta))
+    q = 1.0 - (1.0 - p) ** (27.0 / 1.08)  # 3 mm dose grid against the 1.08 mm^3 of the fit
+    q[dose < 2.0] = 0.0
+    return q
+
+
+@pytest.mark.parametrize("mask_kind", ["none", "array", "image"])
+def test_polo_total_ntcp_matches_closed_form(graded_dij, mask_kind):
+    q = _graded_polo_closed_form()
+    # The lower two of the five dose-grid slices: the first 50 voxels.
+    in_mask = np.arange(125) < 50
+    if mask_kind == "none":
+        mask, in_mask = None, np.ones(125, dtype=bool)
+    elif mask_kind == "array":
+        mask = in_mask
+    else:
+        # The same slices on the ct grid (10^3 at 1.5 mm), resampled by the quantity.
+        ct_mask = np.zeros((10, 10, 10), dtype=np.uint8)
+        ct_mask[:4] = 1
+        mask = sitk.GetImageFromArray(ct_mask)
+        mask.SetSpacing((1.5, 1.5, 1.5))
+
+    ntcp = _graded_polo(graded_dij).compute_total_ntcp(GRADED_FLUENCE, mask=mask)
+
+    expected = 1.0 - np.prod(1.0 - q[in_mask])
+    assert isinstance(ntcp, float)
+    assert 0.0 < expected < 0.9  # neither empty nor saturated
+    np.testing.assert_allclose(ntcp, expected, rtol=1e-4)
+
+
+def test_polo_on_the_ct_grid_interpolates_the_dose_grid(graded_dij):
+    polo = _graded_polo(graded_dij)
+
+    on_dose_grid = polo.compute_dose_grid(GRADED_FLUENCE)
+    on_ct_grid = polo.compute_ct_grid(GRADED_FLUENCE)
+
+    dose_arr = sitk.GetArrayFromImage(on_dose_grid)
+    ct_arr = sitk.GetArrayFromImage(on_ct_grid)
+    np.testing.assert_allclose(dose_arr.ravel(), _graded_polo_closed_form(), rtol=1e-4, atol=1e-9)
+    assert on_ct_grid.GetSize() == (10, 10, 10)
+    assert on_ct_grid.GetSpacing() == (1.5, 1.5, 1.5)
+    assert on_ct_grid.GetOrigin() == on_dose_grid.GetOrigin()
+    # Every second ct voxel coincides with a dose voxel; the ones between are their mean.
+    np.testing.assert_allclose(ct_arr[::2, ::2, ::2], dose_arr, rtol=1e-6)
+    np.testing.assert_allclose(
+        ct_arr[7, 4, 4], (dose_arr[3, 2, 2] + dose_arr[4, 2, 2]) / 2, rtol=1e-5
+    )
+    np.testing.assert_allclose(
+        ct_arr[6, 4, 5], (dose_arr[3, 2, 2] + dose_arr[3, 2, 3]) / 2, rtol=1e-5
+    )
+
+
+def test_polo_rejects_a_plan_without_fractions(sample_dij_dense):
+    with pytest.raises(ValueError, match="num_of_fractions must be at least 1"):
+        POLO(sample_dij_dense, num_of_fractions=0, risk_voi_name=None)
+
+
 def test_polo_derivative_without_forward_compute(sample_dij_dense):
     # The derivative path must not depend on a prior compute() having populated _w_cache.
     polo = POLO(sample_dij_dense, num_of_fractions=1, risk_voi_name=None)
