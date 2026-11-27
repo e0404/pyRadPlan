@@ -15,7 +15,7 @@ import { Combo, MenuButton, choiceOptions, type ComboOption } from "../forms/Com
 import { SpinInput } from "../forms/ConfigForm";
 import { checkValue, formatValue } from "../forms/formModel";
 import { StatusWindow } from "../optimization/StatusWindow";
-import { objectiveRows, parameterUnit, referenceChoices, robustnessOptions } from "./objectivesModel";
+import { objectiveRows, parameterUnit, referenceChoices, robustnessOptions, typeOptions, unlistedRobustness } from "./objectivesModel";
 import "../plan/plan.css";
 
 const ROBUSTNESS_TOOLTIP = "How the objective is combined over the scenarios of the dose influence data; 'None' uses the nominal scenario only";
@@ -179,7 +179,6 @@ export function ObjectivesPanel() {
   const ai = feature(info, "ai");
   const aiTitle = !ai.available ? (ai.reason ?? "") : !hasCst ? "Load a structure set first" : !hasPln ? "Configure a plan first" : "Suggest objectives for all VOIs using an LLM";
   const voiOptions: ComboOption[] = structures.map((s) => ({ key: String(s.index), label: `${s.name} (${s.type})` }));
-  const objectiveOptions: ComboOption[] = (catalog?.objectives ?? []).map((o) => ({ key: o.name, label: o.name }));
   const quantityOptions: ComboOption[] = (catalog?.quantities ?? []).map((q) => ({ key: String(q.value), label: q.label, identifier: q.identifier ?? String(q.value) }));
 
   return (
@@ -225,7 +224,8 @@ export function ObjectivesPanel() {
             {catalog &&
               rows.map(({ structure, objective, first }) => {
                 const type = catalog.objectives.find((o) => o.name === objective.name);
-                const rob = robustnessOptions(type, objective.robustness);
+                const types = typeOptions(catalog.objectives, objective.name);
+                const rob = robustnessOptions(type, objective.robustness, unlistedRobustness(catalog.robustness, objective.robustness));
                 const key = `${structure.name}-${objective.index}`;
                 const q = quantityOptions.some((o) => o.key === objective.quantity)
                   ? quantityOptions
@@ -236,10 +236,10 @@ export function ObjectivesPanel() {
                     <td>
                       <Combo
                         value={objective.name}
-                        options={objectiveOptions}
+                        options={types.options}
                         chars={9}
-                        disabled={disabled}
-                        title={objective.name}
+                        disabled={disabled || types.locked}
+                        title={types.locked ? `${objective.name} is set up in code; its type cannot be changed here.` : objective.name}
                         testId={`obj-${key}-type`}
                         onChange={(name) => void objectiveActions.changeType(structure.index, objective.index, name)}
                       />

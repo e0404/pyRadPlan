@@ -114,11 +114,14 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     # Private properties
     _ct: CT
     _cst: StructureSet
+    _planning_ct: CT
+    _planning_cst: StructureSet
     _stf: SteeringInformation
     _dij: Dij
     _scenarios: ScenarioModel
 
     _objective_list: list[tuple]
+    _objective_voi_names: list[str]
     _constraint_list: list
     _terms: list[RobustTerm]
     _scenario_set: ScenarioSet
@@ -315,6 +318,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             cube_ix = voi.scenario_indices(0, order="numpy")
             linear_mask = voi_linear_mask(voi)
             for obj in objs:
+                obj.setup(ct=self._planning_ct, cst=self._planning_cst)
                 obj.preprocess_image_reference_parameters(
                     target_grid=self._dij.dose_grid, index_list=cube_ix
                 )
@@ -470,6 +474,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
 
         self._check_tissue_data_matches_dij()
 
+        # Objectives' setup() gets the CT and structures as passed in, not the dose-grid ones.
+        self._planning_ct = self._ct
+        self._planning_cst = self._cst
+
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)
 
@@ -493,6 +501,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # sanitize objectives and constraints and manage required quantities
         voi_objectives, objectives, _ = self._collect_objectives()
         self._objective_list = objectives
+        self._objective_voi_names = [voi.name for voi, _ in voi_objectives]
         self._scenario_set = self._problem_scenarios(voi_objectives)
         self._terms = build_robust_terms(
             voi_objectives,
@@ -633,6 +642,20 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         x, info = self._solve()
         x = xp_utils.to_numpy(x)
         return x, info
+
+    def collect_objective_info(self) -> list[dict]:
+        """Collect auxiliary info reported by objectives after optimization.
+
+        Each entry names the objective and the VOI it is attached to, followed by what
+        :meth:`Objective.report_info` returned.
+        """
+        collected = []
+        for voi_name, (_mask, obj_list) in zip(self._objective_voi_names, self._objective_list):
+            for obj in obj_list:
+                report = obj.report_info()
+                if report:
+                    collected.append({"objective": obj.name, "voi": voi_name, **report})
+        return collected
 
 
 class NonLinearPlanningProblem(PlanningProblem):

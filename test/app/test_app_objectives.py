@@ -141,3 +141,130 @@ def test_reference_values_pair_cubes_with_the_ct_grid():
         {"value": {"$result": "physical_dose"}, "label": "dose"},
         {"value": {"$result": "let"}, "label": "LETd"},
     ]
+
+
+def _scripted_objective(monkeypatch):
+    """Register an objective only code can create: it needs a ``handle`` no editor has."""
+    from typing import Any, ClassVar, Literal
+
+    from pydantic import Field, model_validator
+
+    from pyRadPlan.optimization.objectives import Objective
+    from pyRadPlan.optimization.objectives._factory import OBJECTIVES
+
+    class Scripted(Objective):
+        name: Literal["Scripted"] = "Scripted"
+        selectable: ClassVar[bool] = False
+        loads: ClassVar[int] = 0
+        model: str
+        handle: Any = Field(default=None, exclude=True)
+
+        @model_validator(mode="before")
+        @classmethod
+        def _load(cls, data: Any) -> Any:
+            if isinstance(data, dict) and data.get("handle") is None:
+                Scripted.loads += 1
+                data = {**data, "handle": object()}
+            return data
+
+        def compute_objective(self, values):
+            return values.sum()
+
+        def compute_gradient(self, values):
+            return values
+
+    monkeypatch.setitem(OBJECTIVES, "Scripted", Scripted)
+    return Scripted
+
+
+def _script_objective(client, structure, objective):
+    session = client.manager.get(client.session)
+    cst = session.workspace.cst
+    voi = next(voi for voi in cst.vois if voi.name == structure)
+    voi.objectives = [*voi.objectives, objective]
+    session.workspace.cst = cst
+    return session, len(voi.objectives) - 1
+
+
+def test_objectives_created_in_code_are_not_offered(loaded, monkeypatch):
+    from pyRadPlan.app import _objectives as editor
+    from pyRadPlan.optimization.objectives import get_available_objectives
+
+    scripted = _scripted_objective(monkeypatch)
+    hidden = set(get_available_objectives()) - set(get_available_objectives(selectable_only=True))
+    assert {"Scripted", "Outcome Model", "Outcome LR", "Outcome scikit-learn"} <= hidden
+
+    names = {o["name"] for o in loaded.ok("objectives.catalog")["result"]["objectives"]}
+    assert names == set(get_available_objectives(selectable_only=True))
+
+    monkeypatch.setitem(editor.DEFAULT_BY_TYPE, "*", "Scripted")
+    added = loaded.ok("objectives.add", {"structure": "Core"})["result"]["structure"]
+    new = added["objectives"][-1]
+    assert new["name"] in names
+
+    for name in ("Scripted", "Outcome LR"):
+        request = {"structure": "Core", "index": new["index"], "name": name}
+        error = loaded.call("objectives.change_type", request)["error"]
+        assert error["type"] == "ValidationError" and error["details"][0]["field"] == "name"
+        assert "cannot be selected" in error["message"]
+    assert _objectives(loaded, "Core")[new["index"]]["name"] == new["name"]
+    assert scripted.loads == 0
+
+
+def test_an_objective_created_in_code_is_shown_and_edited_without_reloading(loaded, monkeypatch):
+    from pyRadPlan.app._objectives import objectives_of
+
+    scripted = _scripted_objective(monkeypatch)
+    objective = scripted(model="some model")
+    assert scripted.loads == 1
+    session, index = _script_objective(loaded, "Core", objective)
+
+    shown = _objectives(loaded, "Core")[index]
+    assert shown["name"] == "Scripted" and shown["parameters"] == {}
+
+    changes = {"priority": 3.0, "quantity": "rbe_x_dose", "robustness": "expected_value"}
+    updated = loaded.ok(
+        "objectives.update", {"structure": "Core", "index": index, "changes": changes}
+    )["result"]["structure"]["objectives"][index]
+    assert {key: updated[key] for key in changes} == changes
+    loaded.ok("objectives.set_quantity_all", {"quantity": "physical_dose"})
+    stored = objectives_of(next(v for v in session.workspace.cst.vois if v.name == "Core"))[index]
+    assert isinstance(stored, scripted) and stored.handle is objective.handle
+    assert (stored.priority, stored.quantity) == (3.0, "physical_dose")
+    assert scripted.loads == 1
+
+    request = {"structure": "Core", "index": index, "name": "Max DVH"}
+    error = loaded.call("objectives.change_type", request)["error"]
+    assert error["type"] == "ValidationError" and "cannot be changed" in error["message"]
+    assert _objectives(loaded, "Core")[index]["name"] == "Scripted"
+
+    loaded.ok("objectives.remove", {"structure": "Core", "index": index})
+    assert "Scripted" not in [o["name"] for o in _objectives(loaded, "Core")]
+
+
+def test_a_preloaded_outcome_objective_keeps_its_model_when_edited(loaded):
+    import numpy as np
+
+    linear_model = pytest.importorskip("sklearn.linear_model")
+
+    from pyRadPlan.ai.modelhub import OutcomeFeature, OutcomeModelSpec
+    from pyRadPlan.app._objectives import objectives_of
+    from pyRadPlan.cst import validate_cst
+    from pyRadPlan.optimization.objectives import OutcomeLR
+
+    estimator = linear_model.LogisticRegression()
+    estimator.coef_ = np.asarray([[0.1]])
+    estimator.intercept_ = np.asarray([0.05])
+    estimator.classes_ = np.asarray([0, 1])
+    feature = OutcomeFeature(name="core_DoseMean", segment="Core", function="Dose Mean")
+    spec = OutcomeModelSpec(label="test", outcome_type="NTCP", features=[feature])
+    session, index = _script_objective(loaded, "Core", OutcomeLR(model=(estimator, spec)))
+
+    assert _objectives(loaded, "Core")[index]["name"] == "Outcome LR"
+    request = {"structure": "Core", "index": index, "changes": {"priority": 4.0}}
+    loaded.ok("objectives.update", request)
+    core = next(v for v in validate_cst(session.workspace.cst).vois if v.name == "Core")
+    stored = objectives_of(core)[index]
+    assert stored.priority == 4.0 and stored.model == "<preloaded>"
+    assert stored.estimator is estimator and stored.spec is spec
+    assert stored.coef.tolist() == [0.1] and stored.intercept == 0.05

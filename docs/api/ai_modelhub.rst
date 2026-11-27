@@ -31,6 +31,21 @@ Loading
    load_model
    load_model_with_dir
    BasePreprocessor
+   OutcomePreprocessor
+
+
+pyanno4rt outcome models
+------------------------
+
+Outcome models trained with pyanno4rt are scikit-learn estimators in a local folder, not
+model repositories of the hub; see :ref:`modelhub_pyanno4rt`.
+
+.. autosummary::
+   :toctree: generated/ai/modelhub/
+
+   load_pyanno4rt_model
+   OutcomeModelSpec
+   OutcomeFeature
 
 
 Trust

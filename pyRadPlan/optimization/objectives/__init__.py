@@ -10,6 +10,13 @@ from ._squared_dev import SquaredDeviation
 from ._squared_mimicking import SquaredMimicking
 from ._squared_over import SquaredOverdosing
 from ._squared_under import SquaredUnderdosing
+from .outcome import (
+    OutcomeObjective,
+    OutcomeModel,
+    FeatureOutcomeObjective,
+    OutcomeLR,
+    OutcomeSklearn,
+)
 from ._variance import Variance
 
 from ._factory import (
@@ -28,6 +35,9 @@ register_objective(EUD)
 register_objective(MinDVH)
 register_objective(MaxDVH)
 register_objective(DoseUniformity)
+register_objective(OutcomeModel)
+register_objective(OutcomeLR)
+register_objective(OutcomeSklearn)
 register_objective(Variance)
 
 __all__ = [
@@ -41,6 +51,11 @@ __all__ = [
     "SquaredMimicking",
     "SquaredOverdosing",
     "SquaredUnderdosing",
+    "OutcomeObjective",
+    "OutcomeModel",
+    "FeatureOutcomeObjective",
+    "OutcomeLR",
+    "OutcomeSklearn",
     "Variance",
     "get_available_objectives",
     "get_objective",
