@@ -40,7 +40,7 @@ def _centered_grid(half_size: float, spacing: float) -> NDArray:
 class BeamLimitingDevice(PyRadPlanBaseModel):
     """Base class for beam limiting device objects.
 
-    Defines ...:
+    A device that shapes the field of a beam (an MLC or a pair of jaws).
 
     Notes
     -----
@@ -50,28 +50,37 @@ class BeamLimitingDevice(PyRadPlanBaseModel):
     angle 0 are LPS +x and LPS +z.
 
     For a head-first supine patient this frame coincides with the IEC 61217 BEAM LIMITING
-    DEVICE coordinate system of DICOM RT at collimator angle 0 (X to the patient's left and Y
-    towards the gantry at gantry and couch angle 0), so DICOM positions are used without a
-    change of sign. ``device_angle`` is stored but not applied yet.
+    DEVICE coordinate system of DICOM RT at collimator angle 0: its X is ``ray_pos_bev`` x
+    (the patient's left) and its Y is ``ray_pos_bev`` z (towards the gantry) at gantry and
+    couch angle 0. Its Z points to the source, along ``-ray_pos_bev`` y, but enters no
+    position, so DICOM positions are used without a change of sign. ``device_angle`` is
+    stored but not applied yet.
 
     Attributes
     ----------
     device_type : str
-        The type of device (X, Y, ASYMX, ASYMY, MLCX, MLCY). DICOM (300A,00B8)
+        The type of device: MLCX, MLCY, JAWX or JAWY (MLC or JAW with device_orientation).
+        DICOM X and ASYMX correspond to JAWX, Y and ASYMY to JAWY. DICOM (300A,00B8)
     device_orientation : str
-        The axis (X, Y) along which the device's leaves or jaws move.
+        The axis (X, Y) along which the device's leaves or jaws travel: X along
+        ``ray_pos_bev`` x (an MLC's leaf rows stacked along ``ray_pos_bev`` z), Y
+        along ``ray_pos_bev`` z (rows stacked along ``ray_pos_bev`` x).
     number_of_elements : int
         The number of leaf or jaw pairs (1 for standard jaws). DICOM (300A,00BC)
-    source_to_device_distance : float
+    source_to_device_distance : float, optional
         The distance between source and the beam limiting device (in mm). DICOM (300A,00BA)
-    device_angle:
-        The orientation of IEC BEAM LIMITING DEVICE coordinate system with respect to IEC GANTRY coordinate system (degrees). (300A,0120)
+        Not used yet: all positions are given in the isocenter plane.
+    device_angle : float, optional
+        The orientation of IEC BEAM LIMITING DEVICE coordinate system with respect to IEC GANTRY
+        coordinate system (degrees). DICOM (300A,0120)
+        Stored but not applied yet. Mapping segments to beamlets (ApertureInfo) refuses a non-zero
+        angle.
     """
 
     device_type: str = Field(default="")
     device_orientation: Annotated[str, StringConstraints(pattern="^(X|Y)$")]
     number_of_elements: int = 0
-    source_to_device_distance: Optional[float] = 0
+    source_to_device_distance: Optional[float] = None
     device_angle: Optional[float] = 0
 
     @field_validator("device_type", "device_orientation", mode="before")
@@ -95,43 +104,45 @@ class BeamLimitingDevice(PyRadPlanBaseModel):
 class MLC(BeamLimitingDevice):
     """Class for MLC objects.
 
-    Defines ...:
+    A multi-leaf collimator with rows of leaf pairs stacked across the field. Each pair opens
+    between a left and right leaf position along the travel axis. DICOM (300A,00B8) MLCX or MLCY.
 
     Attributes
     ----------
-    leaf_position_boundaries : Optional[np.ndarray]
-        Lower edges of the leaf rows in mm (in isocenter plane), ascending.
-        (Conversion from DICOM's n+1 Leaf Position Boundaries (300A,00BE) to
-        n leaf rows required in I/O.)
-    leaf_positions : Optional[np.ndarray]
-        Leaf positions in mm (in isocenter plane), ``(rows, 2)``
-    leaf_width: float
-        Width of the leaves (mm in isocenter plane)
-    leaf_leakage: float
-        Leakage of the leaves relative to open field (0-1))
-    interleaf_leakage: float
-        Leakage between the leaves relative to open field (0-1)) [not yet implemented!]
+    leaf_position_boundaries : np.ndarray, optional
+        Lower edges of the leaf rows in mm (in isocenter plane), ascending. DICOM stores the
+        ``n + 1`` Leaf Position Boundaries (300A,00BE) of ``n`` rows, which a future RT Plan
+        importer has to convert.
+    leaf_positions : np.ndarray, optional
+        Leaf positions in mm (in isocenter plane), ``(rows, 2)``.
+    leaf_width : float, optional
+        Width of the leaves (mm in isocenter plane). Derived from leaf_position_boundaries when
+        not given. Required for an MLC with one single leaf row.
+    leaf_leakage : float
+        Leakage of the leaves relative to open field (0-1).
+    interleaf_leakage : float
+        Leakage between the leaves relative to open field (0-1). Not used yet.
     """
 
-    # TODO: Should not overwrite Config?
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_assignment=False)
 
     leaf_position_boundaries: Optional[np.ndarray] = None
     leaf_positions: Optional[np.ndarray] = None
 
-    leaf_width: float = Field(
-        default=None, description="Leaf width in mm"
-    )  # should be from BeamLimitingDevicePosition
+    leaf_width: Optional[float] = Field(default=None, description="Leaf width in mm")
+    # TODO: Move leaf_leakage to BeamLimitingDevice as `leakage` (Jaw.leakage means the same),
+    # accepting leaf_leakage as an alias since it is released. interleaf_leakage stays MLC-only.
     leaf_leakage: float = Field(default=0.0)
     interleaf_leakage: float = Field(default=0.0)
 
     @property
     def num_of_active_leaf_pairs(self) -> int:
-        """Calculate the number of active leaf pairs based on leaf positions."""
+        """Number of leaf rows in the field, closed rows included.
+
+        Follows matRad's numOfActiveLeafPairs, where every row in the field counts as active.
+        """
         if self.leaf_positions is None:
             return 0
-        # Counts closed leaves as active too (matches the matRad convention where
-        # the number of active pairs equals the number of leaf rows in the field).
         return len(self.leaf_positions)
 
     @property
@@ -142,6 +153,10 @@ class MLC(BeamLimitingDevice):
         even number of leaf pairs (``N / 2 + 0.5``) and a leaf center for an odd number.
         Leaf rows that put a leaf center on the isocenter of an even device, as sequencing
         on the ray grid does, give matRad's ``ceil(N / 2)``.
+
+        Pairs are counted towards negative stack coordinates, as in matRad (DICOM counts the
+        other way). ``k + 0.5`` means the isocenter lies between pairs ``k`` and ``k + 1``.
+        Needs ``leaf_position_boundaries`` and ``leaf_width``.
         """
         fraction = (self.leaf_position_boundaries[0] / self.leaf_width + 0.5) % 1.0
         on_center = min(fraction, 1.0 - fraction) < 1e-6  # noqa: PLR2004
@@ -149,7 +164,7 @@ class MLC(BeamLimitingDevice):
         return float(math.ceil(num / 2)) if on_center else num / 2 + 0.5
 
     def is_active_leaf_pair(self, central_leaf_pair: Optional[float] = None) -> np.ndarray:
-        """Map the field's leaf rows onto the full MLC, given beam geometry.
+        """Per leaf pair of the full MLC: 1.0 if a leaf row of the field falls on it, else 0.0.
 
         Parameters
         ----------
@@ -245,7 +260,12 @@ class MLC(BeamLimitingDevice):
     @staticmethod
     def validate_leaf_width_consistency(
         leaf_position_boundaries: np.ndarray, leaf_width: Optional[float]
-    ) -> float:
+    ) -> Optional[float]:
+        """Return the common width of the leaf rows, derived from their spacing if not given.
+
+        Raises ValueError if the rows are spaced unevenly, if the spacing differs from
+        ``leaf_width``, or if there is a single row and no ``leaf_width``.
+        """
         if len(leaf_position_boundaries) > 1:
             boundary_diffs = np.unique(np.abs(np.diff(leaf_position_boundaries)))
             if len(boundary_diffs) != 1:
@@ -349,7 +369,7 @@ class MLC(BeamLimitingDevice):
                 continue
 
             if self.device_orientation == "X":
-                # boundary runs along Y axis, opening runs along X axis
+                # Boundary runs along Y axis, opening runs along X axis
                 cov_boundary = _smooth_step(grid_y, b_start, dx_y) * (
                     1.0 - _smooth_step(grid_y, b_end, dx_y)
                 )
@@ -357,7 +377,7 @@ class MLC(BeamLimitingDevice):
                     1.0 - _smooth_step(grid_x, o_end, dx_x)
                 )
             elif self.device_orientation == "Y":
-                # boundary runs along X axis, opening runs along Y axis
+                # Boundary runs along X axis, opening runs along Y axis
                 cov_boundary = _smooth_step(grid_x, b_start, dx_x) * (
                     1.0 - _smooth_step(grid_x, b_end, dx_x)
                 )
@@ -403,17 +423,17 @@ class MLC(BeamLimitingDevice):
         leaf_width : float, optional
             The true row pitch (mm) of ``stack_ray_pos``. Needed to set
             ``self.leaf_width`` correctly when there's only a single leaf row
-            (no boundary spacing to derive it from); otherwise it is derived
+            (no boundary spacing to derive it from). Otherwise it is derived
             from/cross-checked against the boundary spacing as before.
         """
-        # get leaf position boundaries from unique ray positions (ray positions are at
+        # Get leaf position boundaries from unique ray positions (ray positions are at
         # row centres, while leaf_position_boundaries are the rows' lower edges)
         row_centers = np.unique(stack_ray_pos)
         leaf_width = self.validate_leaf_width_consistency(row_centers, leaf_width)
         self.leaf_width = leaf_width
         self.leaf_position_boundaries = row_centers - leaf_width / 2.0
 
-        # compute left/right leaf positions from open bixel columns in physical coordinates
+        # Compute left/right leaf positions from open bixel columns in physical coordinates
         dim_stack = shape_map.shape[0]
         self.leaf_positions = np.full((dim_stack, 2), np.nan)
         for n in range(dim_stack):
@@ -441,16 +461,19 @@ class MLC(BeamLimitingDevice):
 class Jaw(BeamLimitingDevice):
     """Class for Jaw objects.
 
-    Defines ...:
+    A pair of jaws along one axis, open between two positions, within the maximum field width of
+    the device.
 
     Attributes
     ----------
     positions : list[float]
-        Jaw edge positions in mm (in isocenter plane)
-    field_width: float
-        Width of field. ??
-    leakage: float
-        Leakage of the jaws. ??
+        Jaw edge positions in mm (in isocenter plane).
+    field_width : float
+        Maximum field width of the device in mm (in isocenter plane). Positions must lie
+        within ``±field_width / 2``. A single jaw collimates along its other axis too, unless
+        ``field_width`` covers the whole field.
+    leakage : float
+        Leakage of the jaws relative to open field (0-1).
     """
 
     number_of_elements: int = 1
@@ -559,7 +582,7 @@ def create_bld(
 
     Parameters
     ----------
-    data : Union[dict[str, Any], None]
+    data : dict or BeamLimitingDevice, optional
         Dictionary containing the data to create the BeamLimitingDevice object.
     **kwargs
         Arbitrary keyword arguments.
@@ -609,7 +632,7 @@ def validate_bld(
 
     Parameters
     ----------
-    beam_limiting_device : Union[dict[str, Any], BeamLimitingDevice, None], optional
+    beam_limiting_device : dict or BeamLimitingDevice, optional
         Dictionary containing the data to create the BeamLimitingDevice object.
     **kwargs
         Arbitrary keyword arguments.
