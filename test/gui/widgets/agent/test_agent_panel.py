@@ -99,6 +99,7 @@ def agent(qapp, monkeypatch, test_data_photons):
     ws.set_many(ct=ct, cst=cst, pln=PhotonPlan())
     panel = AgentPanel(ws)
     panel.agentic_plan_widget._cmb_model.setEditText("test")
+    panel._disabled_reason = None  # as with a model key configured
     handle = SimpleNamespace(
         panel=panel, ws=ws, cst=cst, dose=result["physicalDose"], run=None, resume=None, calls=[]
     )

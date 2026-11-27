@@ -468,7 +468,7 @@ class AgentPanel(WorkspaceWidget):
             btn.setEnabled(not running and not loading)
         can_run = self._disabled_reason is None and self._ws.has("ct", "cst", "pln")
         stopping = self._control is not None and self._control.stop_requested
-        self._btn_run.setEnabled((running and not stopping) or (can_run and not loading))
+        self._btn_run.setEnabled(not stopping if running else can_run and not loading)
         self._btn_run.setText("Abort agent" if running else "Run agent")
         self._btn_clear.setEnabled(not running and not loading)
         pausing = self._state is not None and self._state.pause_requested
