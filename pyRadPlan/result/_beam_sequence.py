@@ -19,6 +19,7 @@ def _angle_span(start: float, end: float, rotation: Optional[str]) -> float:
         return span % _FULL_CIRCLE
     if rotation == "ccw":
         return -((-span) % _FULL_CIRCLE)
+    # No direction given: shorter way, in [-180, 180)
     return (span + _FULL_CIRCLE / 2) % _FULL_CIRCLE - _FULL_CIRCLE / 2
 
 
@@ -318,7 +319,9 @@ class BeamSequence(PyRadPlanBaseModel):
         A segment contributes the state it starts in at the weight delivered before it, and
         the state it ends in at the weight delivered after it. A start that repeats the
         control point before it is left out, so a continuous arc of ``n`` segments gives
-        ``n + 1`` control points and ``n`` step-and-shoot segments give ``2 n``.
+        ``n + 1`` control points and ``n`` step-and-shoot segments give ``2 n``. Between two
+        control points, rising weight means the beam is on and unchanged weight that the
+        machine moves with the beam off.
 
         Parameters
         ----------
@@ -337,10 +340,13 @@ class BeamSequence(PyRadPlanBaseModel):
                 "mlc": state.mlc,
                 "jaws": state.jaws,
             }
+            # skip a start that repeats the previous point (continuous arc)
             if points and all(points[-1][key] == value for key, value in point.items()):
                 return
             points.append(point)
 
+        # Add start and end state of each segment (step and shoot: start twice) and
+        # track the cumulative weight
         cumulative = 0.0
         for segment in self.segments:
             add(segment.start, cumulative)
