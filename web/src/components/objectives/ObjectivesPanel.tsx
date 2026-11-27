@@ -15,7 +15,7 @@ import { Combo, MenuButton, choiceOptions, type ComboOption } from "../forms/Com
 import { SpinInput } from "../forms/ConfigForm";
 import { checkValue, formatValue } from "../forms/formModel";
 import { StatusWindow } from "../optimization/StatusWindow";
-import { objectiveRows, parameterUnit, referenceChoices, robustnessOptions, typeOptions, unlistedRobustness } from "./objectivesModel";
+import { objectiveRows, parameterUnit, referenceChoices, robustnessOptions, typeOptions, unlistedRobustness, voiReferenceChoices } from "./objectivesModel";
 import "../plan/plan.css";
 
 const ROBUSTNESS_TOOLTIP = "How the objective is combined over the scenarios of the dose influence data; 'None' uses the nominal scenario only";
@@ -70,6 +70,8 @@ function ParameterEditors(props: {
   objective: ObjectiveData;
   type: ObjectiveType | undefined;
   catalog: ObjectivesCatalog;
+  /** Names of the structure set, for parameters that name a structure. */
+  voiNames: readonly string[];
   unitOf: (quantity: string) => string;
   disabled: boolean;
   setStatus: (text: string) => void;
@@ -99,6 +101,23 @@ function ParameterEditors(props: {
               onChange={(key) => {
                 if (key.startsWith("$custom")) return;
                 void objectiveActions.update(props.structure, objective.index, { parameters: { [f.name]: { $result: key } } }, `reference image for ${f.name}`);
+              }}
+            />
+          );
+        } else if (f.type === "voi_ref") {
+          const { options, current, missing } = voiReferenceChoices(props.voiNames, value);
+          editor = (
+            <Combo
+              value={current}
+              options={options}
+              chars={12}
+              className={missing ? "invalid" : undefined}
+              disabled={props.disabled}
+              testId={testId}
+              title={missing ? `No structure named '${current}'; pick one from the structure set` : "Structure from the structure set"}
+              onChange={(name) => {
+                if (name === current) return;
+                void objectiveActions.update(props.structure, objective.index, { parameters: { [f.name]: name } }, `structure for ${f.name}`);
               }}
             />
           );
@@ -171,6 +190,7 @@ export function ObjectivesPanel() {
   }, [structures, voi]);
 
   const rows = useMemo(() => objectiveRows(structures), [structures]);
+  const voiNames = useMemo(() => structures.map((s) => s.name), [structures]);
   const total = rows.length;
   const disabled = busy !== null;
   const unitOf = (quantity: string) => info?.quantities?.find((q) => q.identifier === quantity)?.unit ?? "Gy";
@@ -285,6 +305,7 @@ export function ObjectivesPanel() {
                         objective={objective}
                         type={type}
                         catalog={catalog}
+                        voiNames={voiNames}
                         unitOf={unitOf}
                         disabled={disabled}
                         setStatus={setStatus}

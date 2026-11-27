@@ -241,7 +241,8 @@ export type FieldType =
   | "json"
   | "group"
   | "color"
-  | "image_ref";
+  | "image_ref"
+  | "voi_ref";
 
 export interface FieldDescriptor {
   /** Key in `values`; dot path inside groups ("setup.sd"). */

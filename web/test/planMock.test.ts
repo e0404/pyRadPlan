@@ -196,6 +196,22 @@ describe("mock backend, package A methods", () => {
     expect(res.structure.objectives).toHaveLength(1);
   });
 
+  it("describes the risk structure of a POLO objective as a VOI reference and stores a name", async () => {
+    const { req } = await loaded();
+    const catalog = await req("objectives.catalog", {});
+    const risk = catalog.objectives.find((o) => o.name === "NTCP POLO")?.parameters.find((p) => p.name === "risk_voi_name");
+    expect(risk).toMatchObject({ type: "voi_ref", default: "Ventricles_4mm" });
+
+    let res = await req("objectives.add", { structure: 1 });
+    const added = res.structure.objectives[res.structure.objectives.length - 1];
+    res = await req("objectives.change_type", { structure: 1, index: added.index, name: "NTCP POLO" });
+    expect(res.structure.objectives[added.index].parameters.risk_voi_name).toBe("Ventricles_4mm");
+    res = await req("objectives.update", { structure: 1, index: added.index, changes: { parameters: { risk_voi_name: "Core" } } });
+    expect(res.structure.objectives[added.index].parameters.risk_voi_name).toBe("Core");
+    const bad = await failure(req("objectives.update", { structure: 1, index: added.index, changes: { parameters: { risk_voi_name: 3 } } }));
+    expect(bad.details).toEqual([{ field: "parameters.risk_voi_name", message: "Input should be a valid string" }]);
+  });
+
   it("records the optimization for the status window and session history", async () => {
     const { req, events } = await loaded();
     await req("workflow.calc_dose_influence", {});

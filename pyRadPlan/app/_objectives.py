@@ -106,6 +106,9 @@ def _parameter_descriptor(name: str, info: Any, references: list[dict]) -> dict[
         entry["type"] = "image_ref"
         entry["choices"] = references
         entry["default"] = None
+    elif kind == "voi_reference":
+        # A VOI name. No choices: a frontend lists the names of the structure set it shows.
+        entry["type"] = "voi_ref"
     else:
         entry["type"] = "float"
         if kind == "reference":
