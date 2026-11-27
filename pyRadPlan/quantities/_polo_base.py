@@ -186,6 +186,11 @@ class POLOBase(FluenceDependentQuantity):
 
     def _on_dose_grid(self, mask: sitk.Image) -> np.ndarray:
         """Resample a binary mask to the dose grid, as a flat boolean array in dij order."""
+        if mask.GetDimension() != 3:
+            raise ValueError(
+                f"{type(self).__name__} does not support 4D structure sets: it evaluates one "
+                f"mask per structure for all CT phases, but got a {mask.GetDimension()}D mask."
+            )
         resampled = resample_image(
             mask,
             target_grid=self._dij.dose_grid,

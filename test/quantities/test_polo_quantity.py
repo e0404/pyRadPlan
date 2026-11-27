@@ -112,6 +112,14 @@ def test_polo_quantity_missing_risk_voi_raises(sample_dij_dense, risk_cst):
         POLO(sample_dij_dense, num_of_fractions=1, cst=cst, risk_voi_name="Absent")
 
 
+def test_polo_rejects_4d_masks(sample_dij_dense):
+    # One risk mask serves all CT phases; a 4D mask cannot be resampled onto the 3D dose grid.
+    phase = sitk.Image(10, 10, 10, sitk.sitkUInt8)
+    phase.SetSpacing((1.5, 1.5, 1.5))
+    with pytest.raises(ValueError, match="4D structure sets"):
+        POLO(sample_dij_dense, num_of_fractions=1, binary_risk_mask=sitk.JoinSeries([phase] * 2))
+
+
 def test_polo_dose_threshold_zeroes_below_domain(sample_dij_dense):
     # Bahn et al. fitted on voxels receiving at least 2 Gy; below that POLO is undefined.
     fluence = xp.ones(10, dtype=xp.float32)  # dij is all ones -> dose 10 Gy everywhere
