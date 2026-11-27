@@ -522,7 +522,7 @@ def test_restore_brings_back_dose_and_helpers(dosed):
 
 
 def test_optimize_uses_scipy_on_the_cpu_and_is_reproducible(dosed, monkeypatch):
-    import pyRadPlan.ai.agents._planning._state as pa  # noqa: PLC0415
+    import pyRadPlan.ai.agents._planning._state_optimize as pa  # noqa: PLC0415
     from pyRadPlan import settings  # noqa: PLC0415
 
     seen = []
