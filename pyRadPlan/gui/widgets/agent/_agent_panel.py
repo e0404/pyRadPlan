@@ -484,8 +484,8 @@ class AgentPanel(WorkspaceWidget):
 
     @property
     def is_busy(self) -> bool:
-        """Whether the agent is running."""
-        return self._thread is not None and self._thread.isRunning()
+        """Whether a run is active: from its start until its result was handled."""
+        return self._thread is not None
 
     def _on_run_clicked(self) -> None:
         if self.is_busy:
@@ -595,7 +595,7 @@ class AgentPanel(WorkspaceWidget):
         self._worker.error.connect(self._on_run_error)
         self._thread.started.connect(self._worker.run)
         self._thread.start()
-        self._set_busy(True)  # after start: is_busy reads the thread
+        self._set_busy(True)
 
     def pause_agent(self) -> None:
         """Pause the run before the agent's next optimization or beam change."""
