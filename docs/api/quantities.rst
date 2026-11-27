@@ -16,6 +16,9 @@ quantities
    AlphaDose
    SqrtBetaDose
    DoseWeightedLET
+   POLOBase
+   POLO
+   LinearPOLO
 
 
 Other Functions

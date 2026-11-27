@@ -195,6 +195,16 @@ try {
   await page.waitForFunction((n) => Number(document.querySelector('[data-testid="obj-count"]')?.textContent?.split(" ")[0]) === n + 1, before);
   expect(true, "objective added");
   const newKey = "Core-1";
+  // A parameter naming a structure (the risk structure of POLO) is a dropdown of the structure set.
+  await pick(`obj-${newKey}-type`, "NTCP POLO");
+  await tid(`obj-${newKey}-risk_voi_name`).waitFor();
+  expect((await tid(`obj-${newKey}-risk_voi_name`).textContent()).includes("(not in structures)"), "structure reference marks a name that is not in the structure set");
+  // The parameters reach beyond the panel here: scroll first, since a scroll closes an open popup.
+  await tid(`obj-${newKey}-risk_voi_name`).scrollIntoViewIfNeeded();
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await pick(`obj-${newKey}-risk_voi_name`, "OuterTarget");
+  await page.waitForFunction(() => document.querySelector('[data-testid="obj-Core-1-risk_voi_name"]')?.getAttribute("data-value") === "OuterTarget");
+  expect(true, "structure reference picked from the structure set");
   await pick(`obj-${newKey}-type`, "Min DVH");
   await tid(`obj-Core-1-v_min`).waitFor();
   await fillSpin(`obj-Core-1-v_min`, "150");

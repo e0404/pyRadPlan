@@ -82,13 +82,15 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         # Pure dependencies (e.g. physical_dose below rbe_x_dose) are evaluated through the
         # quantities using them; computing them here would cost an extra matrix product.
-        self._objective_quantities = [
-            q for q in self._quantities if self._objectives_per_quantity[q.identifier]
-        ]
+        self._objective_quantities = {
+            key: q
+            for key, q in self._quantities_by_key.items()
+            if self._objectives_per_quantity[key]
+        }
         # Position of each flat scenario index in a quantity's cotangent blocks.
         self._scenario_positions = {
-            q.identifier: {int(s): pos for pos, s in enumerate(q.scenarios)}
-            for q in self._objective_quantities
+            key: {int(s): pos for pos, s in enumerate(q.scenarios)}
+            for key, q in self._objective_quantities.items()
         }
 
         self.solver.objective = self._objective_function
@@ -135,7 +137,7 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         xp = array_api_compat.array_namespace(x)
 
-        q_vectors = {q.identifier: q(x) for q in self._objective_quantities}
+        q_vectors = {key: q(x) for key, q in self._objective_quantities.items()}
 
         f_vals = xp.zeros(self._num_objectives, dtype=x.dtype, device=self._device)
 
@@ -171,14 +173,14 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         # One cotangent block per scenario the quantity evaluates, so that each scenario's
         # objective gradient is back-projected through its own influence matrix.
-        for q in self._objective_quantities:
+        for key, q in self._objective_quantities.items():
             if initialize_cache:
                 if self.bypass_objective_jacobian:
                     cache_rows = 1
                 else:
-                    cache_rows = len(self._objectives_per_quantity[q.identifier])
+                    cache_rows = len(self._objectives_per_quantity[key])
 
-                self._grad_cache_intermediate[q.identifier] = xp.zeros(
+                self._grad_cache_intermediate[key] = xp.zeros(
                     (
                         len(q.scenarios),
                         cache_rows,
@@ -189,8 +191,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
                 )
             else:
                 # The trailing ellipsis here is needed for array_api compatibility
-                self._grad_cache_intermediate[q.identifier] = xp_utils.scatter(
-                    self._grad_cache_intermediate[q.identifier], (slice(None), ...), 0.0
+                self._grad_cache_intermediate[key] = xp_utils.scatter(
+                    self._grad_cache_intermediate[key], (slice(None), ...), 0.0
                 )
 
     def _update_objective_grad_cache(self, x: Array, num_objectives: int, q_scenarios: dict):
@@ -213,15 +215,15 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
         else:
             self._grad_cache = xp_utils.scatter(self._grad_cache, (slice(None), ...), 0.0)
 
-        for q in self._objective_quantities:
+        for key, q in self._objective_quantities.items():
             if self.bypass_objective_jacobian:
                 cache_ix = [0]
             else:
-                cache_ix = self._objectives_per_quantity[q.identifier]
+                cache_ix = self._objectives_per_quantity[key]
 
             cotangents = np.empty_like(q._q_cache)
-            for pos, scen_ix in enumerate(q_scenarios[q.identifier]):
-                cotangents.flat[scen_ix] = self._grad_cache_intermediate[q.identifier][pos, ...]
+            for pos, scen_ix in enumerate(q_scenarios[key]):
+                cotangents.flat[scen_ix] = self._grad_cache_intermediate[key][pos, ...]
             # Derived scenarios are folded onto their basis slots by the quantity, so the
             # non-empty slots sum to the full derivative.
             derivatives = q.compute_chain_derivative(cotangents, x)
@@ -243,8 +245,8 @@ class NonLinearFluencePlanningProblem(NonLinearPlanningProblem):
 
         self._set_quantity_imtermediate_gradient_cache()
 
-        q_vectors = {q.identifier: q(x) for q in self._objective_quantities}
-        q_scenarios = {q.identifier: q.scenarios for q in self._objective_quantities}
+        q_vectors = {key: q(x) for key, q in self._objective_quantities.items()}
+        q_scenarios = {key: q.scenarios for key, q in self._objective_quantities.items()}
 
         for term_ix, term in enumerate(self._terms):
             indices, values = self._term_values(xp, q_vectors, term)

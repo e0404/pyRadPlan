@@ -8,6 +8,9 @@ from ._sqrt_beta_dose import SqrtBetaDose
 from ._effect import Effect
 from ._rbe_x_dose import RBExDose
 from ._let import DoseWeightedLET
+from ._polo import POLO
+from ._polo_base import POLOBase, P_MAX, total_ntcp
+from ._linear_polo import LinearPOLO
 
 QUANTITIES = {
     Dose.identifier: Dose,
@@ -17,6 +20,8 @@ QUANTITIES = {
     AlphaDose.identifier: AlphaDose,
     SqrtBetaDose.identifier: SqrtBetaDose,
     DoseWeightedLET.identifier: DoseWeightedLET,
+    POLO.identifier: POLO,
+    LinearPOLO.identifier: LinearPOLO,
 }
 
 
@@ -63,6 +68,11 @@ __all__ = [
     "AlphaDose",
     "SqrtBetaDose",
     "DoseWeightedLET",
+    "POLO",
+    "POLOBase",
+    "P_MAX",
+    "total_ntcp",
+    "LinearPOLO",
     "get_available_quantities",
     "get_quantity",
     "QUANTITIES",

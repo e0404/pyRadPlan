@@ -34,6 +34,7 @@ export function editorKind(f: FieldDescriptor): EditorKind {
     case "choice":
       return f.editable_choice ? "editable-combo" : "combo";
     case "str":
+    case "voi_ref":
       return "text";
     case "number_list":
       return "list";
@@ -137,6 +138,8 @@ export function checkValue(f: FieldDescriptor, value: unknown): string | null {
         if (err) return err;
       }
       return null;
+    case "voi_ref":
+      return typeof value === "string" ? null : "Input should be a valid string";
     case "choice":
     case "image_ref":
       if (f.editable_choice || !f.choices) return null;

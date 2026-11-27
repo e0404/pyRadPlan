@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PlanSummary } from "../src/api/protocol";
 import type { PlanDetail, PlanOptions } from "../src/api/protocol/plan";
-import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity, typeOptions, unlistedRobustness } from "../src/components/objectives/objectivesModel";
+import { objectiveRows, referenceChoices, robustnessOptions, sharedQuantity, typeOptions, unlistedRobustness, voiReferenceChoices } from "../src/components/objectives/objectivesModel";
 import {
   applyBioSelection,
   captureState,
@@ -215,6 +215,17 @@ describe("objectives model", () => {
     const custom = referenceChoices(catalog, { $custom: "Custom image (1×1×1, value 0)" });
     expect(custom.current).toBe("$custom");
     expect(custom.options[0].label).toBe("Custom image (1×1×1, value 0)");
+  });
+
+  it("lists the structures for a VOI reference and marks a name that is not one of them", () => {
+    const names = ["BODY", "Core", "Core", "OuterTarget"];
+    const known = voiReferenceChoices(names, "Core");
+    expect(known).toMatchObject({ current: "Core", missing: false });
+    expect(known.options.map((o) => o.key)).toEqual(["BODY", "Core", "OuterTarget"]);
+    const unknown = voiReferenceChoices(names, "Ventricles_4mm");
+    expect(unknown).toMatchObject({ current: "Ventricles_4mm", missing: true });
+    expect(unknown.options[0]).toEqual({ key: "Ventricles_4mm", label: "Ventricles_4mm (not in structures)" });
+    expect(unknown.options.slice(1)).toEqual(known.options);
   });
 });
 

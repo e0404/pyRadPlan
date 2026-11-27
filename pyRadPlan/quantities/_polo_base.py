@@ -1,0 +1,291 @@
+"""Shared base for the POLO family of fluence-dependent quantities."""
+
+from typing import Optional
+
+import array_api_compat
+import numpy as np
+import SimpleITK as sitk
+
+from ..core.resample import resample_image
+from ..core.xp_utils import to_numpy
+from ..core.xp_utils.typing import Array
+from ._base import FluenceDependentQuantity
+
+# Clip bound for POLO probabilities. Keeps a saturated voxel from driving the product to
+# exactly zero; 1e-6 stays representable in float32. Public because the NTCPPOLO objective
+# clips identically when forming the gradient.
+P_MAX = 1.0 - 1e-6
+
+
+def total_ntcp(values: Array) -> Array:
+    """
+    Aggregate voxel-wise POLO values into a patient-level NTCP.
+
+    ``NTCP = 1 - prod_i (1 - p_i)``, evaluated in log space (Ortkamp et al., Equation 5).
+
+    Parameters
+    ----------
+    values : Array
+        Voxel-wise POLO probabilities. An empty input yields 0.0 (an empty product is 1).
+
+    Returns
+    -------
+    Array
+        The aggregated NTCP, as a 0-d array in the namespace of *values*.
+    """
+    xp = array_api_compat.array_namespace(values)
+    vals = xp.clip(values, 0.0, P_MAX)
+    # expm1 rather than 1 - exp: in float32 the difference cancels for a small NTCP.
+    return -xp.expm1(xp.sum(xp.log1p(-vals)))
+
+
+class POLOBase(FluenceDependentQuantity):
+    """
+    Common machinery for quantities derived from the POLO logistic model.
+
+    Subclasses differ only in what they expose: the linear predictor eta itself
+    (:class:`~pyRadPlan.quantities.LinearPOLO`) or the volume-corrected probability derived
+    from it (:class:`~pyRadPlan.quantities.POLO`). Everything else -- the model coefficients,
+    resolution of the binary risk mask, the volume correction factor and the dose domain of
+    the fit -- lives here.
+
+    The model was fitted on the dose of the whole treatment course, while the dose influence
+    matrix holds the dose of a single fraction. Both doses entering the linear predictor are
+    therefore scaled by ``num_of_fractions`` (identical fractions assumed), independently of
+    ``Plan.dose_convention``. The fitting cohort was treated with 1.8 or 2.0 Gy(RBE) per
+    fraction to prescriptions of 45-60 Gy(RBE) ([1], Table 1). The model has no fraction-size
+    correction, so courses with other fraction sizes (e.g. hypofractionation) lie outside its
+    domain.
+
+    During optimization, :meth:`check_fit_domain` warns about an objective region that
+    overlaps a GTV or no risk voxel, and about a plan with another radiation mode than
+    protons. The remaining conditions of the fit cannot be read from a plan and are the
+    user's responsibility: adult and paediatric low-grade glioma patients, voxels inside
+    the brain, a risk structure that is the ventricles with a 4 mm margin, and
+    contrast-enhancing lesions as the endpoint ([1]). LET from analytical
+    pencil-beam engines differs from the FLUKA Monte Carlo LETd (all charged particles) the
+    model was fitted on; absolute POLO/NTCP values carry a corresponding systematic
+    uncertainty.
+
+    References
+    ----------
+    .. [1] Bahn, E., Bauer, J., Harrabi, S. B., et al. (2020). Late contrast enhancing brain lesions
+           in proton-treated patients with low-grade glioma. Int J Radiat Oncol Biol Phys, 107(3),
+           571-578. https://doi.org/10.1016/j.ijrobp.2020.03.013
+    .. [2] Ortkamp, T., Sallem, H., Harrabi, S., Frank, M., Jaekel, O., Bauer, J., & Wahl, N. (2026).
+           Direct optimization of the probability of lesion origin in proton treatment planning for
+           low-grade glioma patients. Medical Physics, 53, e70395. https://doi.org/10.1002/mp.70395
+    """
+
+    required_dependencies = ("physical_dose", "let_dose")
+    # A probability for the whole course: it does not scale with the number of fractions.
+    fraction_exponent = 0.0
+
+    # Logistic regression coefficients of the POLO model, from Bahn et al. ([1], Table 2) and
+    # restated as Equation 1 in Ortkamp et al. ([2]).
+    INTERCEPT = -26.3
+    BETA_DOSE = 0.19  # beta_1, per Gy
+    BETA_LET_DOSE = 0.018  # beta_2, per keV / (Gy * um)
+    BETA_RISK = 1.19  # beta_3, ventricular proximity (<= 4 mm)
+
+    # Voxel volume of the planning CT the model was fitted on: 0.6 x 0.6 x 3.0 mm^3 ([2], Sec 2.1.2)
+    FIT_VOXEL_VOLUME = 1.08  # mm^3
+
+    # Course dose domain of the fit: Bahn et al. included voxels receiving at least 2 Gy ([1]).
+    DEFAULT_DOSE_THRESHOLD = 2.0  # Gy
+
+    def __init__(
+        self,
+        dij,
+        binary_risk_mask: Optional[Array] = None,
+        cst=None,
+        risk_voi_name: str = "Ventricles_4mm",
+        dose_threshold: float = DEFAULT_DOSE_THRESHOLD,
+        mode=None,
+        dependencies=None,
+        scenarios=None,
+        *,
+        num_of_fractions: int,
+        stf=None,
+    ):
+        """
+        Initialize a POLO-family quantity.
+
+        Parameters
+        ----------
+        dij : Dij
+            Dose influence matrix object.
+        binary_risk_mask : Array, optional
+            Array of shape ``(n_voxels,)`` holding 1 for risk voxels. Takes precedence over
+            a lookup in *cst*.
+        cst : StructureSet, optional
+            Structure set to extract the risk mask from, by name.
+        risk_voi_name : str, optional
+            VOI name in the CST for the periventricular risk structure, by default
+            ``"Ventricles_4mm"``. Pass ``None`` to evaluate without the risk component; the
+            POLO objectives always name a structure.
+        dose_threshold : float, optional
+            Course dose in Gy below which the model is treated as undefined, by default
+            2.0 Gy. Set to 0.0 to disable. The objectives on the linear predictor disable
+            it by default (see :class:`~pyRadPlan.optimization.objectives.LogSumExpConvPOLO`).
+        mode : str, optional
+            Compute mode, ``"direct"`` or ``"indirect"``. Resolved automatically when omitted.
+        dependencies : dict, optional
+            Dependency quantity instances, supplied by the resolver.
+        scenarios : array_like, optional
+            Scenario indices.
+        num_of_fractions : int
+            Number of fractions of the plan. The model is evaluated on the course dose,
+            ``num_of_fractions`` times the per-fraction dose of *dij*. Supplied from the plan
+            during optimization; required when constructing the quantity directly, since a
+            wrong value moves every voxel along the dose axis of the model.
+        stf : SteeringInformation, optional
+            Steering information of the plan, supplied during optimization. Only its radiation
+            modes are read, for :meth:`check_fit_domain`.
+        """
+        if num_of_fractions < 1:
+            raise ValueError(f"num_of_fractions must be at least 1, got {num_of_fractions}.")
+        super().__init__(dij, mode=mode, dependencies=dependencies, scenarios=scenarios)
+        self.num_of_fractions = num_of_fractions
+        self.risk_voi_name = risk_voi_name
+        self.dose_threshold = dose_threshold
+        self._cst = cst
+        self._radiation_modes = sorted(
+            {beam.radiation_mode for beam in getattr(stf, "beams", None) or []}
+        )
+        self.binary_risk_mask = self._resolve_risk_mask(binary_risk_mask, cst, risk_voi_name)
+
+        # Volume correction factor k = v_new / v_old ([2], Equation 4). Applied by subclasses
+        # that expose a probability; the linear predictor is defined before the correction.
+        res = self._dij.dose_grid.resolution
+        self.k = (res["x"] * res["y"] * res["z"]) / self.FIT_VOXEL_VOLUME
+
+    def _resolve_risk_mask(self, binary_risk_mask, cst, risk_voi_name) -> Array:
+        """Resolve the binary risk mask from an explicit array, a CST lookup, or the dij."""
+        if binary_risk_mask is None and cst is not None:
+            # Look up requested risk VOI in CST
+            vois = cst.vois if hasattr(cst, "vois") else (cst if isinstance(cst, list) else [])
+            for voi in vois:
+                if voi.name == risk_voi_name:
+                    binary_risk_mask = voi.mask
+                    break
+
+        if binary_risk_mask is None:
+            binary_risk_mask = getattr(self._dij, "binary_risk_mask", None)
+
+        if hasattr(binary_risk_mask, "mask") or hasattr(binary_risk_mask, "GetSize"):
+            img = binary_risk_mask.mask if hasattr(binary_risk_mask, "mask") else binary_risk_mask
+            binary_risk_mask = self._on_dose_grid(img)
+
+        if binary_risk_mask is None:
+            if risk_voi_name is not None:
+                raise ValueError(
+                    f"POLO risk VOI '{risk_voi_name}' not found in CST and no binary_risk_mask "
+                    "provided. The POLO model was originally fitted using a 'Ventricles_4mm' "
+                    "risk mask; set `risk_voi_name` to the structure that plays this role. "
+                    "Evaluating POLO without the periventricular risk component is possible "
+                    "on the quantity only, constructed with `risk_voi_name=None`."
+                )
+            binary_risk_mask = self.array_backend.zeros(
+                (self._dij.dose_grid.num_voxels,), dtype=self._dtype
+            )
+
+        return self.array_backend.asarray(binary_risk_mask, dtype=self._dtype)
+
+    def _on_dose_grid(self, mask: sitk.Image) -> np.ndarray:
+        """Resample a binary mask to the dose grid, as a flat boolean array in dij order."""
+        if mask.GetDimension() != 3:
+            raise ValueError(
+                f"{type(self).__name__} does not support 4D structure sets: it evaluates one "
+                f"mask per structure for all CT phases, but got a {mask.GetDimension()}D mask."
+            )
+        resampled = resample_image(
+            mask,
+            target_grid=self._dij.dose_grid,
+            extrapolate=0.0,
+            interpolator=sitk.sitkNearestNeighbor,
+        )
+        return sitk.GetArrayViewFromImage(resampled).ravel() > 0.5
+
+    def check_fit_domain(self, regions: dict[str, np.ndarray]) -> list[str]:
+        """
+        Warn about objective regions the model was not fitted for, or cannot act on.
+
+        The model was fitted on voxels outside the GTV ([1]); target structures are matched
+        by type and a name containing "GTV". A region without a single risk voxel leaves the
+        periventricular term inactive, e.g. when overlap handling removed the risk structure
+        from it. The model was fitted on proton plans ([1]); the radiation mode is only known
+        when the planning problem supplied the steering information.
+        """
+        name = type(self).__name__
+        messages = []
+        if regions and any(mode != "protons" for mode in self._radiation_modes):
+            on = ", ".join(f"'{region_name}'" for region_name in regions)
+            messages.append(
+                f"{name} on {on}: the plan's radiation mode is "
+                f"{', '.join(self._radiation_modes)}, but the model was fitted on proton plans."
+            )
+        vois = getattr(self._cst, "vois", None) or []
+        gtvs = [v for v in vois if v.voi_type == "TARGET" and "GTV" in v.name.upper()]
+        gtv_mask = np.zeros(self._dij.dose_grid.num_voxels, dtype=bool)
+        for voi in gtvs:
+            gtv_mask |= self._on_dose_grid(voi.mask)
+        risk = to_numpy(self.binary_risk_mask) > 0.5
+        for region_name, region in regions.items():
+            n_gtv = int(np.count_nonzero(region & gtv_mask))
+            if n_gtv:
+                messages.append(
+                    f"{name} on '{region_name}': {n_gtv} voxels lie inside the GTV "
+                    f"({', '.join(v.name for v in gtvs)}), where the model was not fitted."
+                )
+            if self.risk_voi_name is not None and not np.any(region & risk):
+                messages.append(
+                    f"{name} on '{region_name}': no voxel of the risk structure "
+                    f"'{self.risk_voi_name}' lies in this region, so the periventricular term "
+                    "has no effect. If overlap handling removed it, set overlap_handling='ignore' on "
+                    f"'{region_name}'."
+                )
+        return messages
+
+    def _dose(self, fluence: Array, scenario_index: int) -> Array:
+        """
+        Course dose for one scenario, in the quantity's namespace and dtype.
+
+        *fluence* is passed in rather than read from a cache: the forward pass must evaluate
+        at ``self._w_cache`` and the chain derivative at ``self._grad_fluence``, and those are
+        not guaranteed to hold the same vector.
+        """
+        return self.num_of_fractions * self.array_backend.asarray(
+            self._deps["physical_dose"].compute(fluence).flat[scenario_index],
+            dtype=self._dtype,
+        )
+
+    def _linear_predictor(self, fluence: Array, scenario_index: int) -> tuple[Array, Array]:
+        """Return ``(eta, d)``: the linear predictor and the course dose it was built from."""
+        d = self._dose(fluence, scenario_index)
+        d_x_ld = self.num_of_fractions * self.array_backend.asarray(
+            self._deps["let_dose"].compute(fluence).flat[scenario_index], dtype=self._dtype
+        )
+        eta = (
+            self.INTERCEPT
+            + self.BETA_DOSE * d
+            + self.BETA_LET_DOSE * d_x_ld
+            + self.BETA_RISK * self.binary_risk_mask
+        )
+        return eta, d
+
+    def _in_dose_domain(self, d: Array) -> Array:
+        """Boolean mask of voxels inside the dose domain the model was fitted on."""
+        return d >= self.dose_threshold
+
+    def _backpropagate(self, grad_eta: Array, scenario_index: int) -> Array:
+        """Push a gradient w.r.t. eta back to fluence through both dose dependencies."""
+        # Both dependencies enter eta scaled by num_of_fractions.
+        grad_eta = grad_eta * self.num_of_fractions
+        chain_d = self._deps["physical_dose"]._compute_chain_derivative_single_scenario(
+            grad_eta * self.BETA_DOSE, scenario_index
+        )
+        chain_d_x_ld = self._deps["let_dose"]._compute_chain_derivative_single_scenario(
+            grad_eta * self.BETA_LET_DOSE, scenario_index
+        )
+        return chain_d + chain_d_x_ld

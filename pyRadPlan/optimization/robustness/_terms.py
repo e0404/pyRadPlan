@@ -28,7 +28,9 @@ class TermItem:
     objective : Objective
         The objective.
     quantity : str
-        Identifier of the quantity the objective is evaluated on.
+        Identifier of the quantity the objective is evaluated on. The planning problem
+        replaces it with the resolver's instance key if the objective parameterizes the
+        quantity (see :meth:`QuantityResolver.key`).
     voi_type : str
         Type of the VOI (``"TARGET"``, ``"OAR"``, ...).
     phase_masks : tuple[np.ndarray, ...]

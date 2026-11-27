@@ -18,6 +18,10 @@ from .outcome import (
     OutcomeSklearn,
 )
 from ._variance import Variance
+from ._ntcp_polo import NTCPPOLO
+from ._hellinger_polo import HellingerPOLO
+from ._logsumexp_convpolo import LogSumExpConvPOLO
+from ._hellinger_convpolo import HellingerConvPOLO
 
 from ._factory import (
     get_available_objectives,
@@ -39,6 +43,10 @@ register_objective(OutcomeModel)
 register_objective(OutcomeLR)
 register_objective(OutcomeSklearn)
 register_objective(Variance)
+register_objective(NTCPPOLO)
+register_objective(HellingerPOLO)
+register_objective(LogSumExpConvPOLO)
+register_objective(HellingerConvPOLO)
 
 __all__ = [
     "Objective",
@@ -57,6 +65,10 @@ __all__ = [
     "OutcomeLR",
     "OutcomeSklearn",
     "Variance",
+    "NTCPPOLO",
+    "HellingerPOLO",
+    "LogSumExpConvPOLO",
+    "HellingerConvPOLO",
     "get_available_objectives",
     "get_objective",
     "get_objectives_union",

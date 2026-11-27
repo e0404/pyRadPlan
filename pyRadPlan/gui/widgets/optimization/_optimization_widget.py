@@ -339,6 +339,8 @@ class OptimizationWidget(WorkspaceWidget):
             lay.addWidget(QLabel(f"{name}:"))
             if kind == "image_reference":
                 lay.addWidget(self._build_image_reference_combo(voi_idx, obj_idx, name, value))
+            elif kind == "voi_reference":
+                lay.addWidget(self._build_voi_reference_combo(voi_idx, obj_idx, name, value))
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 spin = AdaptiveDoubleSpinBox()
                 spin.setRange(-1.0e9, 1.0e9)
@@ -381,6 +383,35 @@ class OptimizationWidget(WorkspaceWidget):
             cmb.setToolTip("Reference dose image (picked from the workspace results)")
         cmb.currentIndexChanged.connect(
             lambda idx, c=cmb, v=voi_idx, o=obj_idx, n=name: self._on_image_ref_changed(
+                v, o, n, c.itemData(idx)
+            )
+        )
+        return cmb
+
+    def _build_voi_reference_combo(
+        self, voi_idx: int, obj_idx: int, name: str, value: Any
+    ) -> QComboBox:
+        """Dropdown of the structure set's VOI names for a VOI-reference parameter.
+
+        A value naming no VOI of the structure set (e.g. the objective's default) is kept
+        as a marked first entry, so the mismatch is visible instead of failing only once
+        the optimization starts.
+        """
+        cmb = QComboBox()
+        cmb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        cst = self._ws.cst
+        for voi in cst.vois if cst is not None else []:
+            cmb.addItem(voi.name, voi.name)
+        current = cmb.findData(value)
+        if current < 0:
+            cmb.insertItem(0, f"{value} (not in structures)", value)
+            cmb.setToolTip(f"No structure named '{value}'; pick one from the structure set")
+            current = 0
+        else:
+            cmb.setToolTip("Structure from the structure set")
+        cmb.setCurrentIndex(current)
+        cmb.currentIndexChanged.connect(
+            lambda idx, c=cmb, v=voi_idx, o=obj_idx, n=name: self._on_voi_ref_changed(
                 v, o, n, c.itemData(idx)
             )
         )
@@ -601,6 +632,19 @@ class OptimizationWidget(WorkspaceWidget):
     def _on_param_changed(self, voi_idx: int, obj_idx: int, param: str, value: float) -> None:
         self._update(
             voi_idx, obj_idx, f"Ignored invalid value for {param}", parameters={param: value}
+        )
+
+    def _on_voi_ref_changed(self, voi_idx: int, obj_idx: int, param: str, value: Any) -> None:
+        if value is None:
+            return
+        # Rebuild so that a marked entry for a missing VOI disappears once replaced.
+        self._edit(
+            voi_idx,
+            "update",
+            rejected=f"Rejected structure for {param}",
+            rebuild=True,
+            index=obj_idx,
+            changes={"parameters": {param: value}},
         )
 
     def _on_image_ref_changed(self, voi_idx: int, obj_idx: int, param: str, value: Any) -> None:

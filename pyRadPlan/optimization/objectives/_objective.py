@@ -26,7 +26,8 @@ from ...core.resample import resample_array
 from ..robustness import available_robustness, resolve_robustness_name
 
 ParameterType = Union[
-    Literal["reference", "numeric", "relative_volume", "image_reference"], list[str]
+    Literal["reference", "numeric", "relative_volume", "image_reference", "voi_reference"],
+    list[str],
 ]
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,10 @@ class ParameterMetadata:
         optimization)
     kind : str, optional, default='numeric'
         Type/Meaning of the parameter. Options are 'reference' (relates to the input vector, e.g.
-        the dose when you optimize on dose. Used for normalization), 'numeric', 'relative_volume'.
-        The kind is used in case the parameter needs to pre transformed in context.
+        the dose when you optimize on dose. Used for normalization), 'numeric', 'relative_volume',
+        'image_reference' (a reference image) and 'voi_reference' (the name of a VOI in the
+        structure set). The kind is used in case the parameter needs to pre transformed in
+        context.
 
     Attributes
     ----------
@@ -113,6 +116,13 @@ class Objective(PyRadPlanBaseModel):
 
     name: str = Field(description="Name identifying the objective function type.")
     has_hessian: ClassVar[bool] = False
+    quantity_params: ClassVar[tuple[str, ...]] = ()
+    """Field names this objective forwards to the constructor of its :attr:`quantity`.
+
+    Only fields listed here are passed on by :class:`~pyRadPlan.quantities.QuantityResolver`.
+    The list is opt-in on purpose: matching on attribute names alone would let unrelated
+    objective fields be captured by any quantity that happens to share a parameter name.
+    """
     scenario_aware: ClassVar[bool] = False
     selectable: ClassVar[bool] = True
     priority: float = Field(

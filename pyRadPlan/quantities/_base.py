@@ -5,6 +5,7 @@ import logging
 
 import numpy as np
 import array_api_compat
+import SimpleITK as sitk
 
 from ..core.xp_utils.typing import Array, ArrayNamespace
 
@@ -227,6 +228,26 @@ class FluenceDependentQuantity(RTQuantity, ABC):
                         f"Required dependency {dep_id!r} missing for {type(self).__name__!r}."
                     )
 
+    def check_fit_domain(self, regions: dict[str, np.ndarray]) -> list[str]:
+        """
+        Warn about a plan outside the conditions the quantity's model was fitted for.
+
+        Called by the planning problem once the quantities are resolved. The default has
+        no fitted model and returns no warnings.
+
+        Parameters
+        ----------
+        regions : dict[str, np.ndarray]
+            Boolean voxel masks on the dose grid, after overlap handling, of the VOIs whose
+            objectives use this quantity, keyed by VOI name.
+
+        Returns
+        -------
+        list[str]
+            One message per violated condition.
+        """
+        return []
+
     def _infer_dtype(self, xp: ArrayNamespace):
         quantity = self.identifier if self._mode == "direct" else "physical_dose"
         sample = self._dij.first_matrix(quantity)
@@ -254,6 +275,25 @@ class FluenceDependentQuantity(RTQuantity, ABC):
 
         return self.compute(fluence)
 
+    def _as_backend_array(self, fluence: Array) -> Array:
+        """
+        Move *fluence* onto this quantity's array namespace and device if it is elsewhere.
+
+        A quantity binds its dij to the globally preferred namespace at construction time,
+        which is not necessarily the namespace the caller holds its fluence in. The optimizer
+        returns fluence as NumPy (``PlanningProblem.solve`` calls ``to_numpy``), so evaluating
+        a quantity on an optimization result would otherwise mix, e.g., a CuPy dij with a
+        NumPy fluence. Arrays already in the right place are returned untouched.
+        """
+        if array_api_compat.array_namespace(fluence) is self.array_backend and (
+            self.device is None or array_api_compat.device(fluence) == self.device
+        ):
+            return fluence
+
+        return compute_backend.from_numpy(
+            self.array_backend, compute_backend.to_numpy(fluence), device=self.device
+        )
+
     def compute(self, fluence: Array) -> Array:
         """
         Forward calculation of the quantity from the fluence.
@@ -269,6 +309,7 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             Quantity vector.
         """
 
+        fluence = self._as_backend_array(fluence)
         xp = array_api_compat.array_namespace(fluence)
 
         if not xp.isdtype(fluence.dtype, self._dtype):
@@ -373,6 +414,57 @@ class FluenceDependentQuantity(RTQuantity, ABC):
             computed.extend(k for k in coefficients if k not in computed)
         unique = list(dict.fromkeys(computed))
         return [(i, "compute", None) for i in unique] + derived
+
+    def compute_dose_grid(self, fluence: Array, scenario_index: int = 0) -> "sitk.Image":
+        """
+        Compute the quantity and return it as a SimpleITK image on the dose grid.
+
+        Parameters
+        ----------
+        fluence : Array
+            Fluence vector.
+        scenario_index : int
+            The scenario index to compute the quantity for (default: 0).
+
+        Returns
+        -------
+        sitk.Image
+            The quantity as a SimpleITK image on the dose grid.
+        """
+        q_arr = compute_backend.to_numpy(self.compute(fluence).flat[scenario_index])
+        q_img = sitk.GetImageFromArray(q_arr.reshape(self._dij.dose_grid.dimensions[::-1]))
+        q_img.SetOrigin(tuple(self._dij.dose_grid.origin.tolist()))
+        q_img.SetSpacing(tuple(self._dij.dose_grid.resolution_vector.tolist()))
+        q_img.SetDirection(tuple(self._dij.dose_grid.direction.ravel().tolist()))
+
+        return q_img
+
+    def compute_ct_grid(self, fluence: Array, scenario_index: int = 0) -> "sitk.Image":
+        """
+        Compute the quantity and return it as a SimpleITK image on the CT grid.
+
+        Parameters
+        ----------
+        fluence : Array
+            Fluence vector.
+        scenario_index : int
+            The scenario index to compute the quantity for (default: 0).
+
+        Returns
+        -------
+        sitk.Image
+            The quantity as a SimpleITK image on the CT grid.
+        """
+        q_img = self.compute_dose_grid(fluence, scenario_index=scenario_index)
+
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetInterpolator(sitk.sitkLinear)
+        resampler.SetOutputDirection(tuple(self._dij.ct_grid.direction.ravel().tolist()))
+        resampler.SetOutputOrigin(tuple(self._dij.ct_grid.origin.tolist()))
+        resampler.SetOutputSpacing(tuple(self._dij.ct_grid.resolution_vector.tolist()))
+        resampler.SetSize(tuple(self._dij.ct_grid.dimensions))
+
+        return resampler.Execute(q_img)
 
     def _compute_quantity_cache(self):
         """Compute the quantity from the fluence and write it into the cache."""

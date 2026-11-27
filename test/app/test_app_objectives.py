@@ -60,6 +60,34 @@ def test_add_update_change_type_remove(loaded):
     assert loaded.call("objectives.remove", {"structure": "Core", "index": 99})["error"]
 
 
+def test_voi_reference_parameter(loaded):
+    catalog = loaded.ok("objectives.catalog")["result"]
+    by_name = {o["name"]: o for o in catalog["objectives"]}
+    for name in ("NTCP POLO", "Hellinger POLO", "LogSumExp ConvPOLO", "Hellinger ConvPOLO"):
+        risk = {p["name"]: p for p in by_name[name]["parameters"]}["risk_voi_name"]
+        assert risk["type"] == "voi_ref" and risk["default"] == "Ventricles_4mm"
+        assert "choices" not in risk
+
+    index = loaded.ok("objectives.add", {"structure": "BODY"})["result"]["structure"][
+        "objectives"
+    ][-1]["index"]
+    polo = loaded.ok(
+        "objectives.change_type", {"structure": "BODY", "index": index, "name": "NTCP POLO"}
+    )["result"]["structure"]["objectives"][index]
+    assert polo["parameters"]["risk_voi_name"] == "Ventricles_4mm"
+
+    changes = {"parameters": {"risk_voi_name": "Core"}}
+    updated = loaded.ok(
+        "objectives.update", {"structure": "BODY", "index": index, "changes": changes}
+    )["result"]["structure"]["objectives"][index]
+    assert updated["parameters"]["risk_voi_name"] == "Core"
+
+    bad = {"structure": "BODY", "index": index, "changes": {"parameters": {"risk_voi_name": 3}}}
+    error = loaded.call("objectives.update", bad)["error"]
+    assert error["type"] == "ValidationError"
+    assert _objectives(loaded, "BODY")[index]["parameters"]["risk_voi_name"] == "Core"
+
+
 def test_set_quantity_all(loaded):
     loaded.ok("objectives.set_quantity_all", {"quantity": "rbe_x_dose"})
     structures = loaded.ok("cst.get")["result"]["structures"]

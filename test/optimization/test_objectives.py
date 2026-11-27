@@ -10,6 +10,10 @@ from pyRadPlan.optimization.objectives import (
     MeanDose,
     MinDVH,
     MaxDVH,
+    NTCPPOLO,
+    HellingerPOLO,
+    LogSumExpConvPOLO,
+    HellingerConvPOLO,
     get_available_objectives,
     get_objective,
 )
@@ -30,6 +34,10 @@ def test_objective_availability():
     assert "Mean Dose" in available_objectives
     assert "Min DVH" in available_objectives
     assert "Max DVH" in available_objectives
+    assert "NTCP POLO" in available_objectives
+    assert "Hellinger POLO" in available_objectives
+    assert "LogSumExp ConvPOLO" in available_objectives
+    assert "Hellinger ConvPOLO" in available_objectives
 
 
 def test_get_objective_str():
@@ -492,6 +500,91 @@ def test_SquaredUnderdosing_value_gradient_and_dtype(dtype):
     assert gradient.dtype == dtype
     assert float(value) == pytest.approx((2500.0 + 25.0) / 4)
     np.testing.assert_allclose(np.asarray(gradient), [-25.0, -2.5, 0.0, 0.0])
+
+
+def test_polo_objectives():
+    vals = np.array([0.1, 0.2, 0.05], dtype=np.float64)
+
+    # NTCPPOLO
+    ntcp_obj = NTCPPOLO()
+    assert ntcp_obj.quantity == "polo"
+    res_ntcp = ntcp_obj.compute_objective(vals)
+    grad_ntcp = ntcp_obj.compute_gradient(vals)
+    assert np.isclose(res_ntcp, 0.316)
+    assert np.allclose(grad_ntcp, [0.76, 0.855, 0.72])
+
+    # HellingerPOLO
+    h_obj = HellingerPOLO()
+    assert h_obj.quantity == "polo"
+    assert h_obj.compute_objective(vals) == np.sum(vals)
+    assert np.all(h_obj.compute_gradient(vals) == 1.0)
+
+    # LogSumExpConvPOLO
+    lse_obj = LogSumExpConvPOLO()
+    assert lse_obj.quantity == "linear_polo"
+    assert np.isscalar(lse_obj.compute_objective(vals))
+
+    # HellingerConvPOLO
+    # HellingerConvPOLO: the sum of eta without the model's intercept of -26.3 per voxel
+    hconv_obj = HellingerConvPOLO()
+    assert hconv_obj.quantity == "linear_polo"
+    assert np.isclose(hconv_obj.compute_objective(vals), np.sum(vals) + 3 * 26.3)
+    assert np.all(hconv_obj.compute_gradient(vals) == 1.0)
+    # Voxels outside the dose domain (-inf) add nothing, the intercept included.
+    eta = np.array([-26.3, -25.3, -np.inf], dtype=np.float32)
+    assert np.isclose(hconv_obj.compute_objective(eta), 1.0)
+
+
+def test_polo_objectives_dose_threshold_defaults():
+    # Objectives on the probability keep the 2 Gy filter of Ortkamp et al.; those on the
+    # linear predictor drop it, since it makes them discontinuous in the fluence.
+    for objective_cls, default in [
+        (NTCPPOLO, 2.0),
+        (HellingerPOLO, 2.0),
+        (LogSumExpConvPOLO, 0.0),
+        (HellingerConvPOLO, 0.0),
+    ]:
+        assert objective_cls().dose_threshold == default
+        assert objective_cls(dose_threshold=1.0).dose_threshold == 1.0
+        assert "dose_threshold" in objective_cls.quantity_params
+        assert objective_cls().parameter_names == ["risk_voi_name", "dose_threshold"]
+        assert objective_cls().parameter_types == ["voi_reference", "numeric"]
+        with pytest.raises(ValueError):
+            objective_cls(dose_threshold=-1.0)
+
+    # A course dose threshold of the model, not a reference dose of the objective: the
+    # conversion of total-dose objectives to dose per fraction must leave it alone.
+    assert NTCPPOLO().normalize_to_fraction_num(30).dose_threshold == 2.0
+
+
+def test_logsumexp_convpolo_without_voxels_in_domain():
+    # Only reachable with dose_threshold > 0, where LinearPOLO marks excluded voxels as -inf.
+    lse = LogSumExpConvPOLO(dose_threshold=2.0)
+    vals = np.full(3, -np.inf)
+    assert lse.compute_objective(vals) == 0.0
+    assert np.all(lse.compute_gradient(vals) == 0.0)
+
+    mixed = np.array([-np.inf, -25.0, -26.0])
+    assert np.isclose(lse.compute_objective(mixed), np.log(np.exp(-25.0) + np.exp(-26.0)))
+    grad = lse.compute_gradient(mixed)
+    assert grad[0] == 0.0 and np.isclose(grad.sum(), 1.0)
+
+
+def test_polo_objectives_custom_quantity_preservation():
+    from pyRadPlan.optimization.objectives import Objective, SquaredDeviation
+
+    sq_dev = SquaredDeviation()
+    assert sq_dev.quantity == Objective.model_fields["quantity"].default  # "physical_dose"
+
+    ntcp = NTCPPOLO()
+    assert ntcp.quantity != Objective.model_fields["quantity"].default  # "polo" != "physical_dose"
+    assert ntcp.quantity == "polo"
+
+    lse = LogSumExpConvPOLO()
+    assert (
+        lse.quantity != Objective.model_fields["quantity"].default
+    )  # "linear_polo" != "physical_dose"
+    assert lse.quantity == "linear_polo"
 
 
 def test_objectives_created_in_code_are_registered_but_not_selectable():

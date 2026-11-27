@@ -329,6 +329,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | Robustness combo (per class `available_robustness`) | `:314-333,620-634` | done (mock e2e) | impl | `objectives.catalog`, `objectives.update` |
 | Parameter editors (numeric spins; `f_diff` read-only label in Qt; "—" without parameters) | `:345-374` | verified on Pyodide | impl (bounds and units from descriptors; `f_diff` as a choice, see ambiguities) | `objectives.catalog`, `objectives.update` |
 | Image reference dropdown (Squared Mimicking d_ref: result images or "Custom image (…)") | `:376-447,673-685` | done (mock e2e) | impl | `objectives.catalog.reference_images`, `objectives.update` |
+| VOI reference dropdown (POLO `risk_voi_name`: the structure set's VOIs, a name missing from it marked "(not in structures)") | `_build_voi_reference_combo` | done (mock e2e) | impl (field type `voi_ref`; the names come from the structure list the panel shows, a missing name also gets the red frame of an invalid field) | `objectives.catalog`, `objectives.update` |
 | Remove (no confirmation) | `:339-343,563-570` | verified on Pyodide | impl | `objectives.remove` |
 | Status label (rejected changes) | `:185-186,714-715` | done (mock e2e) | frontend (error messages) | error responses |
 

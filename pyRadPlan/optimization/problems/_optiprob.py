@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Annotated, Any, Optional, Union, ClassVar
 import logging
 
@@ -127,6 +128,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
     _scenario_set: ScenarioSet
 
     _quantities: list[RTQuantity]
+    _quantities_by_key: dict[str, RTQuantity]
     _q_cache_index: list[dict[str, int]]
     _objectives_per_quantity: dict[str, list[int]]
     _num_objectives: int
@@ -333,6 +335,7 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
                     obj.normalize_to_fraction_num(self._num_of_fractions)
             objectives.append((linear_mask, objs))
             quantity_ids.extend([obj.quantity for obj in objs])
+        self._objective_voi_names = [voi.name for voi, _ in voi_objectives]
 
         return voi_objectives, objectives, quantity_ids
 
@@ -481,6 +484,10 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # resampling to dose-grid
         self._ct = self._ct.resample_to_grid(self._dij.dose_grid)
 
+        # Quantities read anatomy (e.g. POLO's risk structure) from the structures as given;
+        # overlap handling only defines the regions objectives are evaluated on.
+        cst_unmodified = self._cst
+
         # apply overlap priorities
         if self.apply_overlap:
             self._cst = self._cst.apply_overlap_priorities()
@@ -509,12 +516,40 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
             self._robustness_options(),
         )
 
+        # Quantities receive problem-level context (and parameters their objectives opt into)
+        # through dependency injection on their ``__init__`` signature. Objectives setting
+        # such parameters differently (e.g. NTCPPOLO with two risk structures) get independent
+        # instances, which still share their dependencies. Terms therefore address their
+        # quantities by instance key rather than by bare identifier.
+        context = {
+            "cst": cst_unmodified,
+            "ct": self._ct,
+            "stf": getattr(self, "_stf", None),
+            "num_of_fractions": self._num_of_fractions,
+        }
+        resolver = QuantityResolver(self._dij, context=context)
+        requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        voi_keys: list[list[str]] = []
+        objective_keys: dict[int, str] = {}
+        for _, objs in self._objective_list:
+            voi_keys.append([])
+            for obj in objs:
+                params = {p: getattr(obj, p) for p in type(obj).quantity_params}
+                key = resolver.key(obj.quantity, params)
+                requests.setdefault(key, (obj.quantity, params))
+                voi_keys[-1].append(key)
+                objective_keys[id(obj)] = key
+        for term in self._terms:
+            term.items = [
+                replace(item, quantity=objective_keys[id(item.objective)]) for item in term.items
+            ]
+
         # Every quantity computes the scenarios its terms need (a dependency the union of its
         # consumers'), so a non-robust objective evaluates the nominal scenario only.
         quantity_scenarios: dict[str, set[int]] = {}
         for term in self._terms:
-            for identifier in term.quantities:
-                quantity_scenarios.setdefault(identifier, set()).update(term.scenario_indices)
+            for key in term.quantities:
+                quantity_scenarios.setdefault(key, set()).update(term.scenario_indices)
         if self.evaluate_all_scenarios:
             for indices in quantity_scenarios.values():
                 indices.update(range(len(self._scenario_set)))
@@ -528,10 +563,29 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Resolve all requested quantities (plus their transitive dependencies) through a
         # shared resolver so that any quantity referenced by multiple roots is instantiated
         # exactly once. Only the quantities the requested ones actually use are evaluated.
-        resolver = QuantityResolver(
-            self._dij, scenarios={k: sorted(v) for k, v in quantity_scenarios.items()}
+        resolver.scenarios = {k: sorted(v) for k, v in quantity_scenarios.items()}
+        roots = resolver.resolve(
+            [requests[key][0] for key in quantity_scenarios],
+            [requests[key][1] for key in quantity_scenarios],
         )
-        self._quantities = resolver.reachable(resolver.resolve(list(quantity_scenarios)))
+        self._quantities = resolver.reachable(roots)
+        self._quantities_by_key = {
+            key: q
+            for key, q in resolver.instances.items()
+            if any(q is reached for reached in self._quantities)
+        }
+
+        for key, q in self._quantities_by_key.items():
+            regions = {
+                name: mask
+                for name, (mask, _), keys in zip(
+                    self._objective_voi_names, self._objective_list, voi_keys
+                )
+                if key in keys
+            }
+            for message in q.check_fit_domain(regions):
+                logger.warning(message)
+                self.report_warning(message)
 
         if len(set([q.array_backend for q in self._quantities])) == 1:
             self._array_backend = self._quantities[0].array_backend
@@ -543,12 +597,12 @@ class PlanningProblem(ConfigurableAlgorithm, ProgressReporter, ABC):
         # Match quantities with terms: per quantity the terms reading it (one cache row each,
         # also for a composite term with several items on it), per term its row per quantity.
         self._q_cache_index = []
-        self._objectives_per_quantity = {q.identifier: [] for q in self._quantities}
+        self._objectives_per_quantity = {key: [] for key in self._quantities_by_key}
         for term_ix, term in enumerate(self._terms):
             rows = {}
-            for identifier in term.quantities:
-                rows[identifier] = len(self._objectives_per_quantity[identifier])
-                self._objectives_per_quantity[identifier].append(term_ix)
+            for key in term.quantities:
+                rows[key] = len(self._objectives_per_quantity[key])
+                self._objectives_per_quantity[key].append(term_ix)
             self._q_cache_index.append(rows)
 
         self._num_objectives = len(self._terms)

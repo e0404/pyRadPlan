@@ -77,3 +77,15 @@ export function referenceChoices(catalog: ObjectivesCatalog, value: unknown): { 
   const label = ref.$custom ?? (ref.$result ? `${ref.$result} (not in the workspace)` : "Custom image");
   return { options: [{ key: "$custom", label }, ...options], current: "$custom" };
 }
+
+/**
+ * VOI-reference dropdown (Qt `_build_voi_reference_combo`): the names of the structure set. A
+ * value naming none of them (e.g. the objective's default) is kept as a marked first entry, so
+ * the mismatch shows here instead of failing once the optimization starts.
+ */
+export function voiReferenceChoices(names: readonly string[], value: unknown): { options: ComboOption[]; current: string; missing: boolean } {
+  const options: ComboOption[] = [...new Set(names)].map((name) => ({ key: name, label: name }));
+  const current = typeof value === "string" ? value : String(value ?? "");
+  if (options.some((o) => o.key === current)) return { options, current, missing: false };
+  return { options: [{ key: current, label: `${current} (not in structures)` }, ...options], current, missing: true };
+}
