@@ -128,11 +128,14 @@ def test_resolve_model_never_forces_a_tool_call_on_anthropic(monkeypatch):
     # it already has a profile for
     pytest.importorskip("anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    from pydantic_ai.models.anthropic import AnthropicModel
+
     # claude-future-9: unknown to pydantic-ai, whose default would force the tool call
     for name in ("anthropic:claude-sonnet-5-5", "claude-sonnet-5-5", "claude-future-9", None):
         model = resolve_model(name)
         assert model.profile["supports_forced_tool_choice"] is False
-        assert model.profile["supports_cache"]  # the provider's profile is kept
+        kept = dict(AnthropicModel(model.model_name).profile, supports_forced_tool_choice=False)
+        assert dict(model.profile) == kept  # the rest of the provider's profile
     assert resolve_model(None).model_name == "claude-sonnet-4-5"
     assert resolve_model("openai:gpt-4o") == "openai:gpt-4o"
     obj = object()
