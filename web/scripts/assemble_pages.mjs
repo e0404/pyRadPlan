@@ -1,7 +1,9 @@
 // Assemble the GitHub Pages site: one directory per channel (e.g. latest/ and develop/), each
 // built from its own checkout, plus a landing page at the root. A Pages deployment replaces the
 // whole site, so every deployment assembles all channels. A checkout without web/ (releases
-// before the web version) gets a static placeholder instead of the app.
+// before the web version) gets a static placeholder instead of the app. The landing page opens the
+// first channel that contains the app (latest, or develop while the newest release has none)
+// after a short countdown, unless the visitor stays or the URL has ?stay.
 //
 //   node web/scripts/assemble_pages.mjs --out _site --channel latest=<checkout> --channel develop=<checkout>
 //        [--build] [--install] [--skip-wheels] [--coi]
@@ -38,7 +40,10 @@ const FALLBACK_ABOUT = {
   disclaimer_title: "NOT FOR CLINICAL USE",
   disclaimer:
     "pyRadPlan is intended for research and education. It is not a medical device and must not be used for clinical treatment planning.",
+  imprint_url: "https://docs.pyradplan.org/en/latest/legal/imprint.html",
+  privacy_url: "https://docs.pyradplan.org/en/latest/legal/privacy.html",
 };
+const REDIRECT_SECONDS = 5;
 
 function run(cmd, cmdArgs, cwd, env = {}) {
   console.log(`$ (${cwd}) ${cmd} ${cmdArgs.join(" ")}`);
@@ -73,6 +78,11 @@ const PAGE_STYLE = `
   .dim { color: var(--dim); font-size: 13px; }
   .disclaimer { color: var(--danger); border: 1px solid var(--danger); border-radius: 4px; padding: 8px 12px; margin: 16px 0; }
   code { font-size: 13px; overflow-wrap: anywhere; }
+  .redirect { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; border-color: var(--link); }
+  .redirect[hidden] { display: none; }
+  .redirect .text { flex: 1 1 260px; }
+  .redirect button { font: inherit; padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; }
+  footer { margin-top: 24px; }
 `;
 
 function page(title, body) {
@@ -96,6 +106,50 @@ ${body}
 const disclaimerHtml = (about) =>
   `<p class="disclaimer"><b>${escapeHtml(about.disclaimer_title)}</b>. ${escapeHtml(about.disclaimer)}</p>`;
 
+const footerHtml = (about, allChannels) =>
+  `<footer class="dim">${allChannels ? `<a href="../?stay">All channels</a> · ` : ""}<a href="https://github.com/e0404/pyRadPlan">Source code</a> ·
+<a href="https://pyradplan.readthedocs.io">Documentation</a> ·
+<a href="${escapeHtml(about.imprint_url)}">Imprint</a> ·
+<a href="${escapeHtml(about.privacy_url)}">Privacy policy</a></footer>`;
+
+// Counts down and opens the target with location.replace, so Back does not return to the landing
+// page and redirect again. "Stay on this page", Escape or ?stay in the URL cancel it.
+const REDIRECT_SCRIPT = `
+(() => {
+  const box = document.getElementById("redirect");
+  if (!box || new URLSearchParams(location.search).has("stay")) return;
+  const counter = document.getElementById("redirect-seconds");
+  let left = Number(box.dataset.seconds);
+  box.hidden = false;
+  const timer = setInterval(() => {
+    left -= 1;
+    counter.textContent = String(Math.max(left, 0));
+    if (left <= 0) {
+      clearInterval(timer);
+      location.replace(box.dataset.target);
+    }
+  }, 1000);
+  const stay = () => {
+    clearInterval(timer);
+    box.hidden = true;
+  };
+  document.getElementById("redirect-stay").addEventListener("click", stay);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") stay(); });
+})();
+`;
+
+function redirectHtml(target, channels) {
+  if (!target) return "";
+  const latest = channels.find((c) => c.name === "latest");
+  const why = latest && !latest.app ? "The newest release does not contain the browser version yet. " : "";
+  return `<div class="card redirect" id="redirect" data-target="./${target.name}/" data-seconds="${REDIRECT_SECONDS}" role="status" aria-live="polite" hidden>
+<div class="text">${why}Opening <b>${escapeHtml(target.name)}</b> (${escapeHtml(target.version)}) in <span id="redirect-seconds">${REDIRECT_SECONDS}</span>&nbsp;s…</div>
+<a href="./${target.name}/">Open now</a>
+<button type="button" id="redirect-stay">Stay on this page</button>
+</div>
+<script>${REDIRECT_SCRIPT}</script>`;
+}
+
 const describe = (c) => [c.version, c.commit && `commit ${c.commit}`].filter(Boolean).join(", ");
 
 function placeholder(channel, apps, about) {
@@ -107,11 +161,12 @@ function placeholder(channel, apps, about) {
 version yet. It is first included in a later release.</p>
 ${others ? `<p>Until then, try the development version: ${others}.</p>` : ""}
 ${disclaimerHtml(about)}
-<p class="dim"><a href="../">All channels</a></p>`,
+${footerHtml(about, true)}`,
   );
 }
 
 function landing(channels, about) {
+  const target = channels.find((c) => c.app);
   const cards = channels
     .map(
       (c) => `<div class="card">
@@ -126,10 +181,10 @@ function landing(channels, about) {
     `<h1>pyRadPlan in the browser</h1>
 <p>pyRadPlan, the Python radiotherapy treatment planning toolkit, running in the browser with
 <a href="https://pyodide.org">Pyodide</a>. All computation and data stay in your browser.</p>
+${redirectHtml(target, channels)}
 ${cards}
 ${disclaimerHtml(about)}
-<p class="dim"><a href="https://github.com/e0404/pyRadPlan">Source code</a> ·
-<a href="https://pyradplan.readthedocs.io">Documentation</a></p>`,
+${footerHtml(about, false)}`,
   );
 }
 
@@ -153,7 +208,7 @@ const channels = args.channel.map((spec) => {
 if (!channels.length) throw new Error("Give at least one --channel name=dir");
 
 const aboutFile = [join(here, "..", "..", "pyRadPlan", "app", "about.json"), ...channels.map((c) => join(c.dir, "pyRadPlan", "app", "about.json"))].find((f) => existsSync(f));
-const about = aboutFile ? JSON.parse(readFileSync(aboutFile, "utf8")) : FALLBACK_ABOUT;
+const about = { ...FALLBACK_ABOUT, ...(aboutFile ? JSON.parse(readFileSync(aboutFile, "utf8")) : {}) };
 
 const out = resolve(args.out);
 rmSync(out, { recursive: true, force: true });

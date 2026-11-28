@@ -436,10 +436,9 @@ def test_basis_and_scenario_input_validation():
         component_names={"setup": ("x", "y", "z")},
     )
     assert scenario.dimension_names == ("setup", "range")
-    assert scenario.model_dump(mode="json")["values"] == {
-        "setup": [1.0, 0.0, 0.0],
-        "range": [0.0, 0.0],
-    }
+    dumped = scenario.model_dump(mode="json")["values"]
+    assert dumped["setup"]["data"] == [1.0, 0.0, 0.0]
+    assert dumped["range"]["data"] == [0.0, 0.0]
     assert isinstance(scenario.model_dump()["values"]["setup"], np.ndarray)
     assert scenario.value("setup.x") == 1.0
     with pytest.raises(KeyError, match="components"):

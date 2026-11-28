@@ -51,10 +51,12 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | `.mat` (matRad) | save + `load_data` round trip with the shim | pln, dij, stf, full workspace (ct, cst, pln, stf, dij): ok. A cst-only `.mat` saves but does not load (`KeyError: 'ct'`, a library limitation, also native). A dose saved as `resultGUI` loads to nothing without its CT |
 | `.npz` | same | container for ct, cst, dose only: cst (with ct) and workspace (ct, cst) ok; pln/dij/stf refused by the exporter ("Nothing to export") |
 | pickle | same | everything round-trips within one runtime (ct, cst, pln, stf, dij, result, dose). **Not across runtimes**: a native pickle fails in the browser (`No module named 'SimpleITK.SimpleITK'`) and vice versa (`No module named 'SimpleITK._image'`). Needs a shim fix (see "Dependencies") |
+| HDF5 workspace (`.h5`) | Pyodide e2e (`npm run e2e:pyodide`, stage reload) | h5py is in the bootstrap package list. Save Workspace (default format) and Save CST write HDF5 in the browser; a workspace saved in the browser loads back there with all of its results, without running code from the file. Loading a native HDF5 file in the browser (and vice versa) is not verified yet; the file holds no pickled SimpleITK objects |
 | DICOM export | `save_data(format="dcm", cst=..., dose=...)` with the shim | writes RTSTRUCT (+ CT series) and RTDOSE natively with the shim (pydicom only). RTSTRUCT contours need `contourpy`, which is in the Pyodide lock but not in the bootstrap package list; not verified in Pyodide |
 | AI (`pydantic_ai`) | Pyodide lock file and `bootstrap.js` package list; FINDINGS #2 | not installed (not in the Pyodide distribution; installation is `deps=False` from a pinned list without it); would also need provider API keys and cross-origin network calls from the browser |
 | IPOPT | `optimization/solvers/__init__.py:19-37` registers it only if `ipyopt` imports; FINDINGS #4 | not registered in Pyodide; ipax and scipy are |
 | GPU / array backends / numba | FINDINGS #5, #7 | numpy only; numba missing; `xp.*` settings have no effect |
+| AI dose engine (`AIBeamlet`) | `dose/engines/_base_ai_beamlet.py`: `is_available` only checks a model named in the plan; models need an ML framework (torch) and are fetched with `huggingface_hub` | neither is in the Pyodide build, so no model can be listed (`plan.form_choices` gives none) or run. The engine is still offered for protons / VHEE and fails only at dose calculation: hiding it needs `is_available` to report "no ML framework installed" (engine change, open) |
 | Monte Carlo engines | FRED/TOPAS (`dose/engines/_fredmc.py`, `_topasmc.py`) run external executables through `subprocess` | Emscripten has no processes; the engines are registered but cannot run |
 | Pause/resume | `core/_progress.py:152-196`: pause blocks in `wait_if_paused` until another thread resumes | Pyodide runs requests synchronously in one thread; no request can arrive to resume. Stop works through the interrupt buffer (`web/docs/frontend.md`) |
 | Host file browser / data folder paths | `menus/_base_data.py:114-117` (`QDesktopServices.openUrl`), settings `base_data_path` | no host file system in the browser (MEMFS); base data added in the browser lives until the page is closed |
@@ -78,6 +80,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Right: Viewer Options | `_main_win.py:261` | verified on Pyodide | impl | – |
 | Right: Structure Visibility (VOIs widget) | `_main_win.py:262` | verified on Pyodide | impl | – |
 | Right: Info | `_main_win.py:263` | verified on Pyodide | frontend | `app.info` |
+| Tablet / phone layouts (configuration row above the viewer, single column on phones; collapsible groups) | none (desktop only) | done (mock e2e, `e2e:responsive`) | frontend (web only) | – |
 | Status bar: "<Widget>: <message>" for 10 s on a widget update failure | `_main_win.py:110-119` | done (mock e2e) | frontend | – |
 | Busy lock: computation disables Plan, Objectives and the whole File menu (Base Data / Settings stay enabled) | `_main_win.py:107,146-150` | done (mock e2e) | frontend | `state.busy` |
 | Close while busy: "Computation running … Quit anyway?" | `_main_win.py:152-174` | done (mock e2e) | frontend (`beforeunload` prompt while busy) | `state.busy` |
@@ -90,16 +93,16 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 
 | Element | Qt | Web | Target | Methods |
 |---|---|---|---|---|
-| Load File… (any supported file; container formats load directly) | `_file.py:66-67` → `_workflow_widget.py:805-819` | verified on Pyodide | impl: accept `.mat`, `.npz`, `.pkl/.pickle`; file filter from capabilities | `data.load_file`, `app.info.capabilities.formats` |
+| Load File… (any supported file; container formats load directly) | `_file.py:66-67` → `_workflow_widget.py:805-819` | verified on Pyodide | impl: accept `.mat`, `.npz`, `.h5/.hdf5`, `.pkl/.pickle`; file filter from capabilities | `data.load_file`, `app.info.capabilities.formats` |
 | Load File… on a bare image (`.nii/.nrrd/.mha/.mhd`) → Import Image dialog | `_workflow_widget.py:816-818` | stub (as Qt; reason from the real capabilities) | stub: needs SimpleITK file IO | – |
 | Load Folder… (DICOM or binary CT + masks) | `_file.py:69-74` → `_workflow_widget.py:908-925` | stub (as Qt; reason from the real capabilities) | stub: DICOM CT/RTDOSE and image files need SimpleITK file IO | – |
 | Open Example Phantom ▸ (grouped by source, tooltips "Shipped with pyRadPlan" / path) | `_file.py:76-80,130-146` | verified on Pyodide | impl: group by source from `base_data.list {kind:"phantoms"}` | `base_data.list`, `data.load_phantom` |
 | Open Example Phantom ▸ Open Phantom Folder | `_file.py:148-151` | stub (as Qt; reason from the real capabilities) | stub: no host file browser | – |
 | Save Plan… (.mat; pending-edit check) | `_file.py:83-84` → `_workflow_widget.py:1515-1534` | verified on Pyodide | impl (mat, pickle) | `export.save {object:"pln"}` |
 | Save Dij… (.mat) | `_file.py:85-86` → `_workflow_widget.py:1536-1537` | verified on Pyodide | impl (mat, pickle) | `export.save {object:"dij"}` |
-| Save CST… format choice + "cannot store objectives" warning | `_file.py:87-89` → `_workflow_widget.py:1540-1616` | verified on Pyodide | impl: mat, pickle, npz, DICOM RTSTRUCT / SEG (zip); label maps NIfTI/NRRD/MetaImage: stub (SimpleITK WriteImage) | `export.save {object:"cst"}`, `app.info.capabilities.formats` |
-| Save Result… (Save Result dialog, then image files) | `_file.py:90-91` → `_workflow_widget.py:1618-1701` | verified on Pyodide | impl with the browser-capable formats (npz, mat `resultGUI`, DICOM RTDOSE; one file or zip); NIfTI/NRRD/MetaImage: stub (WriteImage) | `export.save {object:"result"}` |
-| Save Workspace… (pickle incl. all results and the active name; requires CT; pending-edit check) | `_file.py:94-95` → `_workflow_widget.py:1489-1513` | verified on Pyodide | impl (pickle; cross-runtime compatibility depends on the shim fix) | `export.save {object:"workspace"}` |
+| Save CST… format choice + "cannot store objectives" warning | `_file.py:87-89` → `_workflow_widget.py:1540-1616` | verified on Pyodide | impl: mat, pickle, HDF5, npz, DICOM RTSTRUCT / SEG (zip); label maps NIfTI/NRRD/MetaImage and the NRRD Slicer segmentation: stub (SimpleITK WriteImage) | `export.save {object:"cst"}`, `app.info.capabilities.formats` |
+| Save Result… (Save Result dialog, then image files) | `_file.py:90-91` → `_workflow_widget.py:1618-1701` | verified on Pyodide | impl with the browser-capable formats (npz, mat `resultGUI`, DICOM CT + RTDOSE + RT (Ion) Plan of the active result as zip; one file or zip); NIfTI/NRRD/MetaImage: stub (WriteImage). Qt asks "Image files" or DICOM first | `export.save {object:"result"}` |
+| Save Workspace… (HDF5 by default or pickle, incl. all results and the active name; requires CT; pending-edit check) | `_file.py:94-95` → `_workflow_widget.py:1489-1513` | verified on Pyodide | impl (HDF5, reloads in the browser; pickle: cross-runtime compatibility depends on the shim fix) | `export.save {object:"workspace"}` |
 | UI Mode ▸ Default / Educational (exclusive, tooltips) | `_file.py:98-110,159-161` | verified on Pyodide | impl (frontend setting; plan form locks `advanced` fields) | `app.settings` (optional), descriptors `advanced` |
 | Exit | `_file.py:113-114` | n/a | n/a (closing the tab) | – |
 | Enable rules (pln / dij / cst / result / ct present) | `_file.py:122-128` | done (mock e2e) | impl | `state.actions` (v1 entries `save_*`) |
@@ -233,6 +236,7 @@ What was checked, natively with the Pyodide SimpleITK shim on `sys.path`
 | Machine (editable combo, "(from plan)" entry, default Generic) `[adv]` | `:334-339,726-768` | verified on Pyodide | impl | `plan.options`, `plan.set {machine}` |
 | Dose engine (display name, identifier in popup) `[adv]` | `:649-656,1211-1220` | verified on Pyodide | impl (MC engines disabled with reason) | `plan.options`, `plan.set {engine}` |
 | Dose engine "…" → generic config form | `:657-660,1222-1236` | verified on Pyodide | impl | `plan.form {kind:"engine"}`, `plan.set {engine_config}` |
+| Engine "…" suggested values (AI engine models in an editable combo box, looked up in the background) | `_plan_widget.py` `_on_engine_config`, `_config_form.py` `load_choices` / `set_choices` | done (unit tests) | impl (text input + datalist, added when they arrive) | `plan.form_choices` |
 | Fractions 1..1000 (30) `[adv]` | `:343-345` | verified on Pyodide | done | `plan.set` |
 | Doses: per fraction / total (form default total) `[adv]` | `:347-358` | done (mock e2e) | impl | `plan.set {dose_convention}` |
 | Gantry angles [deg] text | `:376-381` | verified on Pyodide | done | `plan.set` |
@@ -319,6 +323,7 @@ No constraints editor exists in Qt (`:9`); only objectives.
 | "N objective(s)" | `:160,253-257` | verified on Pyodide | frontend | `cst.get` |
 | Table columns VOI / Objective / Penalty / Quantity / Robustness / Parameters / Remove | `:164-182` | verified on Pyodide | impl | `cst.get`, `objectives.catalog` |
 | Objective type combo (type change keeps priority and allowed robustness, resets quantity and parameters) | `:284-290,572-588` | verified on Pyodide | impl | `objectives.change_type` |
+| Objective created in code (not selectable, e.g. an outcome objective): not offered as a type; its row shows its own name with the type combo disabled, the other editors work | `_insert_row` | not run (unit test only) | impl | `objectives.catalog` (not listed), `objectives.change_type` (rejected) |
 | Penalty spin 0..1e9 | `:292-298,590-602` | verified on Pyodide | impl | `objectives.update` |
 | Quantity combo (RTQuantity names, identifiers) | `:300-312,604-618` | done (mock e2e) | impl | `objectives.update` |
 | Robustness combo (per class `available_robustness`) | `:314-333,620-634` | done (mock e2e) | impl | `objectives.catalog`, `objectives.update` |

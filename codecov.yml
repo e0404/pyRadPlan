@@ -1,0 +1,8 @@
+# Coverage is uploaded three times per commit by .github/workflows/tests.yml: once by the
+# main test job (Python 3.11) and once per backend of the test-backends job (torch, jax).
+# Wait for all of them, or the status is first computed without the torch-only tests.
+codecov:
+  notify:
+    after_n_builds: 3
+comment:
+  after_n_builds: 3

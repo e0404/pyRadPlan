@@ -1,0 +1,43 @@
+{
+    "model_name": "DummyDoseCalcNet",
+    "model_params": {
+        "hidden_channels": 4,
+        "dropout": 0.0
+    },
+    "model_preprocessing": {
+        "ct_clip_range": [
+            -1000.0,
+            3000.0
+        ],
+        "max_energy": 250.0,
+        "max_dose": 0.002,
+        "max_let": 5.0,
+        "dose_var_rel": 0.1
+    },
+    "metadata": {
+        "description": "Dummy dose-calc model for pyRadPlan AIBeamletEngine tests. Not trained on real data.",
+        "dose_calc": {
+            "grid_parameters": {
+                "spacing": 4,
+                "lateral_range": 20,
+                "depth_offset_start": -20,
+                "depth_range": 40
+            },
+            "quantities": [
+                "physical_dose",
+                "physical_dose_var",
+                "let_dose"
+            ],
+            "radiation_mode": "protons",
+            "energy_range_mev": [
+                50,
+                250
+            ],
+            "trained_machine": "Generic"
+        },
+        "requirements": [
+            "torch",
+            "safetensors"
+        ]
+    }
+}

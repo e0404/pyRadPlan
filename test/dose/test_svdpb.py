@@ -279,8 +279,8 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     [
         # IEC Y points toward the gantry, i.e. superior (LPS +z) for a head-first supine patient
         ("+Y", (0.0, 0.0, 1.0)),
-        # IEC X points to the patient's right (LPS -x) at gantry and couch angle 0
-        ("+X", (-1.0, 0.0, 0.0)),
+        # IEC X points to the patient's left (LPS +x) at gantry and couch angle 0 (HFS)
+        ("+X", (1.0, 0.0, 0.0)),
     ],
 )
 def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift):

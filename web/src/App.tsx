@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GroupBox, Dialog } from "./components/common";
+import { Dialog, GroupBox, useLayoutMode, type LayoutMode } from "./components/common";
 import { ABOUT } from "./components/help/notice";
 import { NoticeGate, openNoticeDialog } from "./components/help/NoticeDialog";
 import { MenuBar } from "./components/MenuBar";
@@ -68,52 +68,95 @@ function ConfirmDialog() {
   );
 }
 
+type PanelId = "workflow" | "plan" | "objectives" | "log" | "visualization" | "viewerOptions" | "structures" | "info";
+
+// Phones open with only the workflow (and the never-collapsible viewer) expanded.
+const PHONE_COLLAPSED: PanelId[] = ["plan", "objectives", "log", "visualization", "viewerOptions", "structures", "info"];
+
+interface FoldState {
+  layout: LayoutMode;
+  collapsed: ReadonlySet<PanelId>;
+  configCollapsed: boolean;
+}
+
+function initialFold(layout: LayoutMode): FoldState {
+  return { layout, collapsed: new Set(layout === "phone" ? PHONE_COLLAPSED : []), configCollapsed: false };
+}
+
 export function App() {
   const statusMessage = useApp((s) => s.statusMessage);
   const showLog = useApp((s) => s.showLogPanel);
   const kind = useApp((s) => s.backend?.kind);
+  const layout = useLayoutMode();
+  const [fold, setFold] = useState(() => initialFold(layout));
+  if (fold.layout !== layout) setFold(initialFold(layout));
+  const panel = (id: PanelId) =>
+    layout === "desktop"
+      ? {}
+      : {
+          collapsed: fold.collapsed.has(id),
+          onToggle: () =>
+            setFold((f) => {
+              const collapsed = new Set(f.collapsed);
+              if (!collapsed.delete(id)) collapsed.add(id);
+              return { ...f, collapsed };
+            }),
+        };
+  const configCollapsed = layout === "tablet" && fold.configCollapsed;
   return (
-    <div className="main-window">
+    <div className="main-window" data-layout={layout}>
       {kind === "mock" && (
         <div className="mock-banner" role="alert" data-testid="mock-banner">
           MOCK BACKEND: all plans, doses and results are invented for interface development and are not calculated by pyRadPlan. Do not use them for anything.
         </div>
       )}
       <MenuBar />
-      <div className="columns">
-        <div className="column">
-          <GroupBox title="Workflow" testId="panel-workflow">
+      <div className="columns" data-testid="main-columns">
+        <div className={`column config ${configCollapsed ? "collapsed" : ""}`} data-testid="column-config">
+          {layout === "tablet" && (
+            <button
+              type="button"
+              className="config-toggle"
+              aria-expanded={!configCollapsed}
+              onClick={() => setFold((f) => ({ ...f, configCollapsed: !f.configCollapsed }))}
+              data-testid="config-toggle"
+            >
+              <span className="gb-chevron" aria-hidden="true" />
+              Configuration
+            </button>
+          )}
+          <GroupBox title="Workflow" testId="panel-workflow" className="p-workflow" {...panel("workflow")}>
             <WorkflowWidget />
           </GroupBox>
-          <GroupBox title="Plan" testId="panel-plan">
+          <GroupBox title="Plan" testId="panel-plan" className="p-plan" {...panel("plan")}>
             <PlanWidget />
           </GroupBox>
-          <GroupBox title="Objectives & constraints" className="grow2">
+          <GroupBox title="Objectives & constraints" testId="panel-objectives" className="grow2 p-objectives" {...panel("objectives")}>
             <ObjectivesPanel />
           </GroupBox>
           {showLog && (
-            <GroupBox title="Log" className="grow">
+            <GroupBox title="Log" testId="panel-log" className="grow p-log" {...panel("log")}>
               <LogConsole />
             </GroupBox>
           )}
         </div>
-        <div className="column">
+        <div className="column view">
           <LogoBanner />
-          <GroupBox title="Slice Viewer" className="grow">
+          <GroupBox title="Slice Viewer" testId="panel-viewer" className="grow p-viewer">
             <SliceViewer />
           </GroupBox>
-          <GroupBox title="Visualization">
+          <GroupBox title="Visualization" testId="panel-visualization" className="p-visualization" {...panel("visualization")}>
             <VisualizationWidget />
           </GroupBox>
         </div>
-        <div className="column">
-          <GroupBox title="Viewer Options">
+        <div className="column side">
+          <GroupBox title="Viewer Options" testId="panel-viewer-options" className="p-viewer-options" {...panel("viewerOptions")}>
             <ViewerOptionsWidget />
           </GroupBox>
-          <GroupBox title="Structure Visibility" className="grow">
+          <GroupBox title="Structure Visibility" testId="panel-structures" className="grow p-structures" {...panel("structures")}>
             <StructureVisibility />
           </GroupBox>
-          <GroupBox title="Info">
+          <GroupBox title="Info" testId="panel-info" className="p-info" {...panel("info")}>
             <InfoWidget />
           </GroupBox>
         </div>
@@ -124,8 +167,8 @@ export function App() {
         <button type="button" className="status-notice" onClick={() => void openNoticeDialog()} data-testid="status-notice" title="Disclaimer and privacy">
           {ABOUT.disclaimer_title} · data stays in this browser
         </button>
-        <span>{kind === "mock" ? "mock backend" : kind === "pyodide" ? "Pyodide backend" : ""}</span>
-        <span>{globalThis.crossOriginIsolated ? "cross-origin isolated" : "not isolated"}</span>
+        <span className="status-env">{kind === "mock" ? "mock backend" : kind === "pyodide" ? "Pyodide backend" : ""}</span>
+        <span className="status-env">{globalThis.crossOriginIsolated ? "cross-origin isolated" : "not isolated"}</span>
       </div>
       <Splash />
       <ConfirmDialog />

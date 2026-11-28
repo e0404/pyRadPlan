@@ -52,7 +52,7 @@ class PhotonSVDKernel(PyRadPlanBaseModel):
     penumbra: float = Field(
         default=5.0,
         description="The penumbra of an open field as FWHM at Isocenter",
-        alias="penumbarFWHMatIso",
+        alias="penumbraFWHMatIso",
     )
 
     # Tabulated kernel data

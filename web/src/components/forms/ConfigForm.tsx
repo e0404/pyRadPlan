@@ -3,9 +3,11 @@
  * `gui/widgets/_config_form.py`) and its modal wrapper (`ConfigFormDialog`). Editors per
  * descriptor type, collapsible nested groups, live validation (red border + tooltip), and
  * only explicit or edited values reported back. Shared with package C (Preferences).
+ * Suggested values (`suggestions`, Qt's editable combo boxes) are offered on text fields and may
+ * arrive after the form: the input stays the same element, so typing and focus are kept.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { FieldDescriptor, FormSchema, ValidationDetail } from "../../api/protocol";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Choice, FieldDescriptor, FormSchema, ValidationDetail } from "../../api/protocol";
 import { Combo, EditableCombo, choiceOptions } from "./Combo";
 import {
   comboChoices,
@@ -17,6 +19,7 @@ import {
   formValues,
   initFields,
   stepValue,
+  suggestionsOf,
   type FormFields,
 } from "./formModel";
 import { ModalDialog } from "./ModalDialog";
@@ -39,6 +42,8 @@ export interface ConfigFormProps {
   serverErrors?: ValidationDetail[];
   /** Unit of descriptors with `unit_from` (objective parameters). */
   unitFor?: (f: FieldDescriptor) => string | undefined;
+  /** Suggested values per field name (`plan.form_choices`); any other text is still accepted. */
+  suggestions?: Record<string, Choice[]>;
   testId?: string;
 }
 
@@ -153,6 +158,7 @@ export function ConfigForm(props: ConfigFormProps) {
   }, [schema]);
 
   const server = useMemo(() => new Map((props.serverErrors ?? []).map((d) => [d.field, d.message])), [props.serverErrors]);
+  const listPrefix = useId();
 
   const update = (next: FormFields) => {
     setFields(next);
@@ -207,7 +213,7 @@ export function ConfigForm(props: ConfigFormProps) {
         return (
           <EditableCombo
             text={state.text}
-            options={choiceOptions(f.choices ?? [])}
+            options={choiceOptions([...(f.choices ?? []), ...suggestionsOf(f, props.suggestions)])}
             disabled={locked}
             title={title}
             testId={testId}
@@ -243,7 +249,9 @@ export function ConfigForm(props: ConfigFormProps) {
       }
       case "section":
         return null;
-      default:
+      default: {
+        const suggested = suggestionsOf(f, props.suggestions);
+        const listId = suggested.length ? `${listPrefix}-${f.name}` : undefined;
         return (
           <span className={`cf-text${error ? " invalid" : ""}`} title={title}>
             <input
@@ -251,12 +259,21 @@ export function ConfigForm(props: ConfigFormProps) {
               value={state.text}
               disabled={locked}
               placeholder={f.nullable || f.type === "json" ? "None" : undefined}
+              list={listId}
               data-testid={testId}
               onChange={(e) => update(editText(fields, f, e.currentTarget.value))}
             />
+            {listId && (
+              <datalist id={listId} data-testid={testId ? `${testId}-suggestions` : undefined}>
+                {suggested.map((c) => (
+                  <option key={c.label} value={c.label} />
+                ))}
+              </datalist>
+            )}
             {unit && <span className="suffix">{unit}</span>}
           </span>
         );
+      }
     }
   };
 
@@ -307,6 +324,8 @@ export function ConfigFormDialog(props: {
   title?: string;
   loadError?: string | null;
   educational?: boolean;
+  /** Suggested values per field name, see `ConfigForm`. */
+  suggestions?: Record<string, Choice[]>;
   onAccept: (values: Record<string, unknown>) => void;
   onCancel: () => void;
   testId?: string;
@@ -360,6 +379,7 @@ export function ConfigFormDialog(props: {
             <ConfigForm
               schema={schema}
               educational={props.educational}
+              suggestions={props.suggestions}
               testId={props.testId ? `${props.testId}-form` : undefined}
               onChange={(v, s) => {
                 setValues(v);

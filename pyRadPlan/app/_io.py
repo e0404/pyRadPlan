@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import tempfile
+import warnings
 import zipfile
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -151,6 +152,8 @@ class ExportFormat:
     note: Optional[str] = None
     needs_sitk: tuple[str, ...] = ()
     needs_modules: tuple[str, ...] = ()
+    #: Keyword arguments of the exporter, as ``(name, value)`` pairs.
+    options: tuple[tuple[str, Any], ...] = ()
 
     def reason(self) -> Optional[str]:
         """Why the format cannot be written in this runtime, ``None`` if it can."""
@@ -228,6 +231,16 @@ EXPORT_FORMATS: tuple[ExportFormat, ...] = (
     ExportFormat("cst", "pickle", "Pickle (*.pkl)", ".pkl", MIME_BINARY, keeps_objectives=True),
     ExportFormat(
         "cst",
+        "hdf5",
+        "HDF5 (*.h5)",
+        ".h5",
+        MIME_BINARY,
+        keeps_objectives=True,
+        note="Includes the CT",
+        needs_modules=("h5py",),
+    ),
+    ExportFormat(
+        "cst",
         "npz",
         "NumPy (*.npz)",
         ".npz",
@@ -254,6 +267,19 @@ EXPORT_FORMATS: tuple[ExportFormat, ...] = (
         archive=True,
         keeps_objectives=False,
         needs_sitk=_WRITE,
+    ),
+    ExportFormat(
+        "cst",
+        "nrrd",
+        "NRRD Slicer segmentation, keeps overlaps (zip)",
+        ".zip",
+        MIME_ZIP,
+        archive=True,
+        keeps_objectives=False,
+        structure_format="layers",
+        note="One layer per overlapping structure (cst.seg.nrrd)",
+        needs_sitk=_WRITE,
+        options=(("segmentation", "layers"),),
     ),
     ExportFormat(
         "cst",
@@ -312,7 +338,10 @@ EXPORT_FORMATS: tuple[ExportFormat, ...] = (
         ".zip",
         MIME_ZIP,
         archive=True,
-        note="One RTDOSE per quantity",
+        note=(
+            "With the CT, one RTDOSE per physical or RBE-weighted dose and the RT (Ion) Plan "
+            "of the active result"
+        ),
         needs_modules=("pydicom",),
     ),
     ExportFormat(
@@ -342,7 +371,19 @@ EXPORT_FORMATS: tuple[ExportFormat, ...] = (
         note=_SEVERAL_ZIPPED,
         needs_sitk=_WRITE,
     ),
-    ExportFormat("workspace", "pickle", "pyRadPlan workspace (*.pkl)", ".pkl", MIME_BINARY),
+    ExportFormat(
+        "workspace",
+        "hdf5",
+        "pyRadPlan workspace, HDF5 (*.h5)",
+        ".h5",
+        MIME_BINARY,
+        note="Loads without running code from the file",
+        needs_modules=("h5py",),
+        options=(("strict", True),),
+    ),
+    ExportFormat(
+        "workspace", "pickle", "pyRadPlan workspace, pickle (*.pkl)", ".pkl", MIME_BINARY
+    ),
 )
 
 
@@ -438,6 +479,15 @@ def entry_for_filter(selected: str, entries: Sequence[ExportFormat]) -> ExportFo
     return entries[0]
 
 
+def entry_for_extension(path: Any, entries: Sequence[ExportFormat]) -> Optional[ExportFormat]:
+    """Return the first of *entries* whose file endings *path* has, ``None`` if none."""
+    lowered = os.fspath(path).lower()
+    for entry in entries:
+        if lowered.endswith(tuple(e.lower() for e in path_extensions(entry))):
+            return entry
+    return None
+
+
 def load_filter() -> str:
     """Return the Load File dialog filter: every file format this runtime can import.
 
@@ -458,8 +508,16 @@ def import_formats(allow_pickle: bool = True) -> list[dict[str, Any]]:
         ("mat", "MATLAB / matRad (*.mat)", [".mat"], _ALL_OBJECTS, None, None),
         ("npz", "NumPy (*.npz)", [".npz"], ["ct", "cst", "dose"], None, None),
         (
+            "hdf5",
+            "pyRadPlan workspace, HDF5 (*.h5, *.hdf5)",
+            [".h5", ".hdf5"],
+            [*_ALL_OBJECTS, "dose"],
+            module_missing("h5py"),
+            None,
+        ),
+        (
             "pickle",
-            "pyRadPlan workspace (*.pkl)",
+            "pyRadPlan workspace, pickle (*.pkl)",
             [".pkl", ".pickle"],
             [*_ALL_OBJECTS, "dose"],
             pickle_load_reason(allow_pickle),
@@ -614,8 +672,8 @@ def prepare_load_file(session: Any, filename: str, data: Any, kind: str = "auto"
 def load_file(session: Any, filename: str, data: Any, kind: str = "auto") -> None:
     """Load an uploaded file into the session (Qt "Load File").
 
-    ``.mat``, ``.npz`` and ``.pkl`` / ``.pickle`` containers load directly (pickles not in
-    the browser); a workspace pickle brings all of its named results.
+    ``.mat``, ``.npz``, ``.h5`` / ``.hdf5`` and ``.pkl`` / ``.pickle`` containers load
+    directly (pickles not in the browser); a workspace file brings all of its named results.
     """
     session.execute(prepare_load_file(session, filename, data, kind))
 
@@ -1008,19 +1066,64 @@ def _require(obj: Any, what: str) -> None:
         raise PreconditionError(f"No {what} to save", "no_data")
 
 
+def _dicom_plan(ws: Any) -> dict[str, Any]:
+    """Return the plan of the active result for a DICOM export: ``pln``, ``stf``, ``weights``.
+
+    ``pln`` selects the Dose Summation Type. The steering information and weights, which give
+    the RT (Ion) Plan, are left out when there are none or they do not fit together.
+    """
+    plan = {"pln": ws.pln}
+    stf = ws.stf
+    if stf is None:
+        return plan
+    weights = ws.result.fluence if ws.result is not None else None
+    if weights is not None and np.size(weights) != stf.total_number_of_bixels:
+        warnings.warn(
+            "The fluence of the active result does not fit the steering information; "
+            "the DICOM export leaves out the RT plan.",
+            stacklevel=3,
+        )
+        return plan
+    return {**plan, "stf": stf, "weights": weights}
+
+
+def _dicom_doses(images: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the images of *images* DICOM RTDOSE stores (physical and RBE-weighted dose)."""
+    from pyRadPlan.io.dicom._export_dose import RESULT_DOSE_TYPES  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+
+    doses = {k: v for k, v in images.items() if split_result_key(k)[1] in RESULT_DOSE_TYPES}
+    if not doses:
+        raise PreconditionError(
+            "DICOM RTDOSE stores physical and RBE-weighted doses only; select one of them",
+            "no_data",
+        )
+    skipped = [k for k in images if k not in doses]
+    if skipped:
+        warnings.warn(
+            f"DICOM RTDOSE export skips the quantities {', '.join(skipped)}.", stacklevel=3
+        )
+    return doses
+
+
 def _save_inputs(
     session: Any,
     obj: str,
     fmt: str,
     quantities: Optional[Sequence[str]],
     structure_format: Optional[str],
-) -> tuple[ExportFormat, dict[str, Any], Any]:
-    """Check a save and capture what it writes: the format entry, the objects, the CT."""
+) -> tuple[ExportFormat, dict[str, Any], Any, dict[str, Any]]:
+    """Check a save and capture what it writes.
+
+    Returns the format entry, the objects, the CT and further keyword arguments of
+    :func:`write_export` (the plan of a result DICOM export).
+    """
     entry = _export_format(obj, fmt, structure_format)
     reason = entry.reason()
     if reason is not None:
         raise PreconditionError(f"Cannot save {obj} as {entry.label}: {reason}", "not_available")
     ws = session.workspace
+    extra: dict[str, Any] = {}
     if obj == "workspace":
         _require(ws.ct, "CT (a workspace needs one)")
         objects = {key: value for key, value in ws.snapshot().items() if value is not None}
@@ -1028,13 +1131,16 @@ def _save_inputs(
         objects.update(results=ws.results, active_result=ws.active_result)
     elif obj == "result":
         objects = _result_images(session, quantities)
+        if entry.format == "dcm":
+            objects = _dicom_doses(objects)
+            extra = {"plan": _dicom_plan(ws), "active_name": ws.active_result}
     else:
         _require(
             getattr(ws, obj),
             {"pln": "plan", "dij": "dose influence", "cst": "structure set"}[obj],
         )
         objects = {obj: getattr(ws, obj)}
-    return entry, objects, ws.ct
+    return entry, objects, ws.ct, extra
 
 
 def matrad_field(key: str) -> str:
@@ -1046,8 +1152,68 @@ def matrad_field(key: str) -> str:
     return f"{field}_{_safe_name(tag)}" if tag else field
 
 
-def _write_result(
-    entry: ExportFormat, images: dict[str, Any], target: str, ct: Any = None
+def _result_folder(target: str, tag: str, active_name: Optional[str]) -> str:
+    return os.path.join(target, _safe_name(tag or active_name or "active"))
+
+
+def _write_result_dicom(  # noqa: PLR0913 - the export context
+    images: Mapping[str, Any],
+    target: str,
+    ct: Any,
+    plan: Mapping[str, Any],
+    active_name: Optional[str],
+    overwrite: bool,
+) -> list[str]:
+    """Write the doses of each result with the CT into a DICOM folder of its own.
+
+    The doses of the active result reference its RT (Ion) Plan (*plan*). With doses of one
+    result, *target* is that folder, otherwise it holds one subfolder per result.
+    """
+    from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+    from pyRadPlan.result import validate_result  # noqa: PLC0415
+
+    groups: dict[str, dict[str, Any]] = {}
+    for key, image in images.items():
+        tag, quantity = split_result_key(key)
+        groups.setdefault(tag, {})[quantity] = image
+    for tag, doses in groups.items():
+        folder = target if len(groups) == 1 else _result_folder(target, tag, active_name)
+        objects: dict[str, Any] = {"ct": ct, "result": validate_result(doses)}
+        if not tag:
+            objects.update(plan)
+        DicomExporter(folder, overwrite=overwrite).save(**objects)
+    return [target]
+
+
+def existing_dicom_files(
+    entry: ExportFormat,
+    objects: Mapping[str, Any],
+    target: str,
+    active_name: Optional[str] = None,
+) -> list[str]:
+    """Return the DICOM files a save of *objects* as *entry* into *target* would replace."""
+    if entry.format != "dcm":
+        return []
+    from pyRadPlan.io.dicom import find_dicom_files  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+
+    folders = [target]
+    if entry.object == "result":
+        tags = list(dict.fromkeys(split_result_key(key)[0] for key in objects))
+        if len(tags) > 1:
+            folders = [_result_folder(target, tag, active_name) for tag in tags]
+    return [path for folder in folders for path in find_dicom_files(folder)]
+
+
+def _write_result(  # noqa: PLR0913 - the export context
+    entry: ExportFormat,
+    images: dict[str, Any],
+    target: str,
+    ct: Any = None,
+    plan: Optional[Mapping[str, Any]] = None,
+    active_name: Optional[str] = None,
+    overwrite: bool = False,
 ) -> list[str]:
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
@@ -1065,12 +1231,7 @@ def _write_result(
         save_data(file_name=target, format="mat", resultGUI=result_gui)
         return [target]
     if entry.format == "dcm":
-        from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
-
-        for key, image in images.items():
-            subfolder = target if len(images) == 1 else os.path.join(target, _safe_name(key))
-            DicomExporter(subfolder).save(dose=image)
-        return [target]
+        return _write_result_dicom(images, target, ct, plan or {}, active_name, overwrite)
     if len(images) == 1:
         (image,) = images.values()
         return [save_data(file_name=target, format=entry.format, dose=image)]
@@ -1085,23 +1246,40 @@ def _write_result(
     ]
 
 
-def write_export(entry: ExportFormat, objects: Mapping[str, Any], ct: Any, target: str) -> list:
+def write_export(  # noqa: PLR0913 - the export context
+    entry: ExportFormat,
+    objects: Mapping[str, Any],
+    ct: Any,
+    target: str,
+    *,
+    plan: Optional[Mapping[str, Any]] = None,
+    active_name: Optional[str] = None,
+    overwrite: bool = False,
+) -> list:
     """Write *objects* as *entry* to *target* and return the paths written.
 
     *target* is a file, or a folder where :func:`writes_folder` says so. For a result,
     *objects* are the images to write by quantity key; each is written on its own grid,
-    except for matRad, whose cubes are resampled onto the grid of *ct*.
+    except for matRad, whose cubes are resampled onto the grid of *ct*. A result DICOM
+    export adds the CT and the RT (Ion) Plan *plan* of the active result (*active_name*).
+    DICOM replaces DICOM files in the target folder only with *overwrite*.
     """
     from pyRadPlan.io import save_data  # noqa: PLC0415
 
     if entry.object == "result":
-        return _write_result(entry, dict(objects), target, ct)
+        return _write_result(entry, dict(objects), target, ct, plan, active_name, overwrite)
     if entry.archive and entry.format == "dcm":
         from pyRadPlan.io.dicom import DicomExporter  # noqa: PLC0415
 
-        DicomExporter(target, structure_format=entry.structure_format).save(**objects)
+        DicomExporter(target, structure_format=entry.structure_format, overwrite=overwrite).save(
+            **objects
+        )
         return [target]
-    return [save_data(file_name=target, format=entry.format, **objects) or target]
+    options = dict(entry.options) or None
+    return [
+        save_data(file_name=target, format=entry.format, exporter_options=options, **objects)
+        or target
+    ]
 
 
 def _save_label(obj: str) -> str:
@@ -1125,21 +1303,30 @@ def prepare_save_path(  # noqa: PLR0913 - the save options
     quantities: Optional[Sequence[str]] = None,
     structure_format: Optional[str] = None,
     label: Optional[str] = None,
+    overwrite: bool = False,
 ) -> Operation:
     """Write a workspace object to *path* (Qt File > Save ...); returns the paths written.
 
     *path* is a file, or a folder where :func:`writes_folder` says so (structure label maps
     and DICOM, several result quantities, result DICOM). A file without an ending gets the
     format's; another format's ending is refused. Pending plan-form edits are the
-    frontend's to apply first.
+    frontend's to apply first. A DICOM save into a folder that holds DICOM files raises
+    :class:`PreconditionError` ``"exists"`` unless *overwrite* is set, which replaces them.
     """
-    entry, objects, ct = _save_inputs(session, object, format, quantities, structure_format)
+    entry, objects, ct, extra = _save_inputs(session, object, format, quantities, structure_format)
     target = os.fspath(path)
     if not writes_folder(entry, len(objects)):
         target = _file_target(target, entry)
+    existing = existing_dicom_files(entry, objects, target, extra.get("active_name"))
+    if existing and not overwrite:
+        raise PreconditionError(
+            f"The folder already contains {len(existing)} DICOM file(s):\n{target}",
+            "exists",
+            data={"files": existing},
+        )
 
     def compute() -> list:
-        return write_export(entry, objects, ct, target)
+        return write_export(entry, objects, ct, target, overwrite=overwrite, **extra)
 
     return Operation("save_path", label or _save_label(object), compute, lambda written: written)
 
@@ -1179,7 +1366,7 @@ def save(
     writes to a path. Pending plan-form edits are the frontend's to apply first, as the Qt
     widget asks for them before Save Plan and Save Workspace.
     """
-    entry, objects, ct = _save_inputs(session, object, format, quantities, structure_format)
+    entry, objects, ct, extra = _save_inputs(session, object, format, quantities, structure_format)
     base = _safe_name(os.path.splitext(basename)[0]) if basename else None
     if base and basename.lower().endswith(".nii.gz"):
         base = _safe_name(basename[: -len(".nii.gz")])
@@ -1188,7 +1375,7 @@ def save(
         folder = tempfile.mkdtemp(prefix="pyradplan-export-")
         try:
             target, name, zipped = _download_target(entry, objects, folder, base)
-            written = write_export(entry, objects, ct, target)
+            written = write_export(entry, objects, ct, target, **extra)
             if zipped:
                 data, members = _zip_folder(target)
                 return _file_result(name, MIME_ZIP, data, members)

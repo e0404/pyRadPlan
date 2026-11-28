@@ -13,7 +13,7 @@ from pydantic import (
 import numpy as np
 import SimpleITK as sitk
 
-from ..core import PyRadPlanBaseModel, Grid
+from ..core import PyRadPlanBaseModel, Grid, decode_input
 from ..core.resample import resample_array
 from ..ct import CT, validate_ct
 from . import VOI, ExternalVOI, validate_voi, DEFAULT_VOI_COLORS
@@ -44,6 +44,9 @@ class StructureSet(PyRadPlanBaseModel):
         if data.get("vois") is None:
             raise ValueError("No cst provided. Please provide a cst.")
 
+        if "ct_image" not in data and "ctImage" in data:
+            data = {**data, "ct_image": data["ctImage"]}
+            del data["ctImage"]
         if data.get("ct_image") is None:
             raise ValueError("No reference CT provided. Please provide a CT.")
 
@@ -236,6 +239,8 @@ class StructureSet(PyRadPlanBaseModel):
     def _process_native_data(cls, data: dict, info: ValidationInfo) -> dict:
         """Handle data coming from native format."""
         data["ct_image"] = validate_ct(data["ct_image"])
+        if isinstance(data["vois"], list):
+            data["vois"] = [validate_voi(v) if isinstance(v, dict) else v for v in data["vois"]]
         # Handle the case where vois is supplied as a dict.
         if isinstance(data["vois"], dict):
             # Define possible keys and their validation functions
@@ -667,6 +672,10 @@ class StructureSet(PyRadPlanBaseModel):
         lower overlap priority number. VOIs without objectives neither take voxels from
         other VOIs nor lose any, so they keep their full masks.
 
+        A VOI's ``overlap_handling`` refines this: with ``"keep"`` the VOI keeps its
+        voxels but still takes voxels from VOIs with higher priority numbers, with
+        ``"ignore"`` it is left out of the overlap handling like a VOI without objectives.
+
         Returns
         -------
         StructureSet
@@ -696,13 +705,13 @@ class StructureSet(PyRadPlanBaseModel):
                 group_priority = curr_voi.overlap_priority
 
             new_vois[ix_voi] = curr_voi
-            if not curr_voi.objectives:
+            if not curr_voi.objectives or curr_voi.overlap_handling == "ignore":
                 continue
 
             orig_mask = sitk.GetArrayViewFromImage(curr_voi.mask) > 0
             group_mask = group_mask | orig_mask
 
-            if carving_mask.any():
+            if curr_voi.overlap_handling == "cut" and carving_mask.any():
                 curr_mask = orig_mask & ~carving_mask
                 curr_voi.mask = curr_mask.astype(np.uint8)
                 if orig_mask.any() and not curr_mask.any():
@@ -883,8 +892,16 @@ class StructureSet(PyRadPlanBaseModel):
         priority number win voxels that several VOIs share. That VOI keeps the voxel in
         :meth:`apply_overlap_priorities`, since only a lower number takes voxels away, so
         the result is the same with and without overlap priorities applied.
+
+        VOIs with ``overlap_handling="ignore"`` are left out of the overlap handling and of
+        this list, so they never take voxels' tissue data from the other VOIs.
         """
-        return sorted(enumerate(self.vois, 1), key=lambda item: -item[1].overlap_priority)
+        labeled = [
+            (label, voi)
+            for label, voi in enumerate(self.vois, 1)
+            if voi.overlap_handling != "ignore"
+        ]
+        return sorted(labeled, key=lambda item: -item[1].overlap_priority)
 
     def _resample_scenario_columns(self, values: np.ndarray, target_grid: Grid) -> np.ndarray:
         """Nearest-neighbor resample each scenario column of a (num_voxels, num_scen) array."""
@@ -1050,8 +1067,10 @@ def create_cst(
             return cst_data.resample_on_new_ct(ct)
         raise ValueError("CT image mismatch between StructureSet and provided CT")
     elif isinstance(cst_data, dict):
-        cst_data.update(kwargs)
-        cst_data["ct_image"] = ct
+        cst_data = {**decode_input(cst_data), **kwargs}
+        if ct is not None or not {"ct_image", "ctImage"} & cst_data.keys():
+            cst_data.pop("ctImage", None)
+            cst_data["ct_image"] = ct
     else:
         cst_data = {"vois": cst_data, "ct_image": ct, **kwargs}
     return StructureSet(**cst_data)

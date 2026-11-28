@@ -21,6 +21,7 @@ class NpzExporter(BaseExporter):
     name: ClassVar[str] = "NumPy Exporter"
     extensions: ClassVar[tuple[str, ...]] = (".npz",)
     container: ClassVar[bool] = True
+    supports: ClassVar[frozenset[str]] = frozenset({"ct", "cst", "dose"})
 
     def save(
         self,
@@ -68,6 +69,7 @@ class NpzExporter(BaseExporter):
                         "beta_x": voi.tissue_properties.beta_x,
                         "tissue_properties": voi.tissue_properties.model_dump(),
                         "overlap_priority": voi.overlap_priority,
+                        "overlap_handling": voi.overlap_handling,
                         "visible": voi.visible,
                         "color": list(voi.color),
                         "indices_array": key,

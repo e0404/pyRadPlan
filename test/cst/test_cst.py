@@ -681,6 +681,160 @@ def test_apply_overlap_priorities_same_priority(generic_ct, generic_vois):
         assert np.isclose(voi_mask, voi_mask_overlapped).all()
 
 
+def test_overlap_handling_modes(generic_ct):
+    """The three overlap_handling modes in one structure set."""
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}]
+    mask1 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask1[2:8, 2:8, 2:8] = 1  # overlap_priority 2
+
+    mask2 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask2[4:9, 4:9, 4:9] = 1  # overlap_priority 1
+
+    mask3 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask3[6:10, 6:10, 6:10] = 1  # overlap_priority 3
+
+    mask4 = np.zeros((10, 10, 10), dtype=np.uint8)
+    mask4[0:10, 0:10, 0:10] = 1  # overlap_priority 4
+
+    v1 = Target(
+        name="v1",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask1),
+        overlap_priority=2,
+        overlap_handling="cut",
+        objectives=obj,
+    )
+    v2 = Target(
+        name="v2",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask2),
+        overlap_priority=1,
+        overlap_handling="keep",
+        objectives=obj,
+    )
+    v3 = Target(
+        name="v3",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask3),
+        overlap_priority=3,
+        overlap_handling="ignore",
+        objectives=obj,
+    )
+    v4 = Target(
+        name="v4",
+        ct_image=generic_ct,
+        mask=sitk.GetImageFromArray(mask4),
+        overlap_priority=4,
+        overlap_handling="cut",
+        objectives=obj,
+    )
+
+    for v in [v1, v2, v3, v4]:
+        v.mask.CopyInformation(generic_ct.cube_hu)
+
+    cst = StructureSet(ct_image=generic_ct, vois=[v1, v2, v3, v4])
+    cst_overlapped = cst.apply_overlap_priorities()
+
+    m1_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[0].mask)
+    m2_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[1].mask)
+    m3_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[2].mask)
+    m4_out = sitk.GetArrayViewFromImage(cst_overlapped.vois[3].mask)
+
+    # v2 is top priority and "keep", so it's intact
+    assert np.array_equal(m2_out, mask2)
+
+    # v1 is priority 2. Should be cut by v2 because v2 overrides it
+    expected_m1 = mask1.copy()
+    expected_m1[mask2 == 1] = 0
+    assert np.array_equal(m1_out, expected_m1)
+
+    # v3 is "ignore", it remains totally untouched by anything above
+    assert np.array_equal(m3_out, mask3)
+
+    # v4 intersects everything. Cut by v2 and v1, NOT v3!
+    expected_m4 = mask4.copy()
+    expected_m4[mask2 == 1] = 0
+    expected_m4[mask1 == 1] = 0
+    assert np.array_equal(m4_out, expected_m4)
+
+
+def test_overlap_handling_keep_keeps_voxels(generic_ct):
+    """A lower-priority VOI with overlap_handling="keep" keeps its voxels but still cuts lower ones."""
+    obj = [{"name": "Squared Deviation", "d_ref": 60.0}]
+    masks = [np.zeros((10, 10, 10), dtype=np.uint8) for _ in range(3)]
+    masks[0][2:8, 2:8, 2:8] = 1
+    masks[1][4:9, 4:9, 4:9] = 1
+    masks[2][:] = 1
+
+    vois = [
+        Target(
+            name=f"v{i}",
+            ct_image=generic_ct,
+            mask=sitk.GetImageFromArray(m),
+            overlap_priority=i + 1,
+            overlap_handling=mode,
+            objectives=obj,
+        )
+        for i, (m, mode) in enumerate(zip(masks, ["cut", "keep", "cut"]))
+    ]
+    for v in vois:
+        v.mask.CopyInformation(generic_ct.cube_hu)
+
+    out = StructureSet(ct_image=generic_ct, vois=vois).apply_overlap_priorities()
+    m1_out = sitk.GetArrayViewFromImage(out.vois[1].mask)
+    m2_out = sitk.GetArrayViewFromImage(out.vois[2].mask)
+
+    assert np.array_equal(m1_out, masks[1])
+    assert np.array_equal(m2_out, 1 - (masks[0] | masks[1]))
+
+
+def test_tissue_data_ignores_vois_without_overlap_handling(generic_ct, generic_vois):
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+    data = cst.get_tissue_data()
+
+    full_mask = sitk.Image(generic_ct.cube_hu.GetSize(), sitk.sitkUInt8) + 1
+    full_mask.CopyInformation(generic_ct.cube_hu)
+    helper = HelperVOI(
+        name="FULL",
+        ct_image=generic_ct,
+        mask=full_mask,
+        overlap_priority=0,
+        overlap_handling="ignore",
+        tissue_properties=TissueProperties(alpha_x=0.5, beta_x=0.05),
+    )
+    data_with_helper = StructureSet(
+        ct_image=generic_ct, vois=[*generic_vois, helper]
+    ).get_tissue_data()
+
+    for value, value_with_helper in zip(data[:3], data_with_helper[:3]):
+        np.testing.assert_array_equal(value, value_with_helper)
+
+
+def test_overlap_handling_survives_copies_and_is_validated(generic_ct, generic_vois, tmp_path):
+    from pyRadPlan.cst import recreate_voi
+    from pyRadPlan.io import load_data, save_data
+
+    generic_vois[0].overlap_handling = "keep"
+    generic_vois[-1].overlap_handling = "ignore"
+    cst = StructureSet(ct_image=generic_ct, vois=generic_vois)
+    expected = [voi.overlap_handling for voi in cst.vois]
+    assert expected[1] == "cut"
+
+    assert recreate_voi(cst.vois[0], overlap_priority=7).overlap_handling == "keep"
+    for copied in (cst.resample_on_new_ct(generic_ct), cst.apply_overlap_priorities()):
+        assert [voi.overlap_handling for voi in copied.vois] == expected
+
+    # matRad has no equivalent: the export succeeds without the field.
+    assert "overlap_handling" not in cst.vois[0].to_matrad()[4]
+
+    save_data(ct=generic_ct, cst=cst, file_name=str(tmp_path / "p.npz"))
+    restored = load_data(tmp_path / "p.npz")["cst"]
+    assert [voi.overlap_handling for voi in restored.vois] == expected
+
+    with pytest.raises(ValueError):
+        generic_vois[0].model_copy().overlap_handling = None
+
+
 def test_apply_overlap_priorities_ignores_vois_without_objectives(generic_ct, generic_vois):
     ctv, ptv, oar, body, helper = generic_vois
     ctv.objectives = []

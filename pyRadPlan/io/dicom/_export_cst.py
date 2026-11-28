@@ -1,6 +1,7 @@
 """Export a pyRadPlan StructureSet as a DICOM RTSTRUCT file."""
 
 import os
+from typing import Optional
 
 import numpy as np
 import SimpleITK as sitk
@@ -9,14 +10,38 @@ from pydicom.sequence import Sequence
 from pydicom.uid import generate_uid
 
 from pyRadPlan.cst import StructureSet
+from pyRadPlan.io._helpers import RT_ROI_INTERPRETED_TYPES, roi_interpreted_type
 
 from ._export_common import (
     CT_IMAGE_STORAGE,
     DETACHED_STUDY_MANAGEMENT,
     RT_STRUCT_STORAGE,
-    UIDContext,
+    ExportContext,
+    ds_list,
+    first_phase_image,
     populate_common,
+    warn_if_multiphase,
 )
+
+
+def validate_roi_interpreted_types(mapping: Optional[dict[str, str]]) -> dict[str, str]:
+    """Check an ROI name to RT ROI Interpreted Type mapping against the Defined Terms.
+
+    Raises
+    ------
+    ValueError
+        If a value is not a Defined Term of RT ROI Interpreted Type (3006,00A4).
+    """
+    result = {}
+    for roi_name, value in (mapping or {}).items():
+        term = str(value).strip().upper()
+        if term not in RT_ROI_INTERPRETED_TYPES:
+            raise ValueError(
+                f"Unknown RT ROI Interpreted Type {value!r} for ROI {roi_name!r}; "
+                f"expected one of {sorted(RT_ROI_INTERPRETED_TYPES)}."
+            )
+        result[str(roi_name)] = term
+    return result
 
 
 def _slice_contours(mask_slice: np.ndarray) -> list:
@@ -25,10 +50,9 @@ def _slice_contours(mask_slice: np.ndarray) -> list:
         return []
     import contourpy  # noqa: PLC0415 - comes with matplotlib, which is optional at runtime
 
-    gen = contourpy.contour_generator(
-        z=mask_slice.astype(float), line_type=contourpy.LineType.Separate
-    )
-    return [line for line in gen.lines(0.5) if len(line) >= 3]
+    padded = np.pad(mask_slice.astype(float), 1)
+    gen = contourpy.contour_generator(z=padded, line_type=contourpy.LineType.Separate)
+    return [line - 1.0 for line in gen.lines(0.5) if len(line) >= 3]
 
 
 def _voi_contour_sequence(voi, ct_image) -> Sequence:
@@ -45,7 +69,7 @@ def _voi_contour_sequence(voi, ct_image) -> Sequence:
                 phys = ct_image.TransformContinuousIndexToPhysicalPoint(
                     (float(xi), float(yi), float(z))
                 )
-                contour_data.extend([float(phys[0]), float(phys[1]), float(phys[2])])
+                contour_data.extend(ds_list(phys))
             item = Dataset()
             item.ContourGeometricType = "CLOSED_PLANAR"
             item.NumberOfContourPoints = len(line)
@@ -54,7 +78,7 @@ def _voi_contour_sequence(voi, ct_image) -> Sequence:
     return contours
 
 
-def _referenced_frame_of_reference(ctx: UIDContext, ct_info: dict) -> Sequence:
+def _referenced_frame_of_reference(ctx: ExportContext, ct_info: dict) -> Sequence:
     """Build the ReferencedFrameOfReferenceSequence linking the RTSTRUCT to the CT.
 
     When ``ct_info`` carries the CT series and per-slice SOP instance UIDs (from
@@ -89,7 +113,13 @@ def _referenced_frame_of_reference(ctx: UIDContext, ct_info: dict) -> Sequence:
     return Sequence([ref_for])
 
 
-def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict) -> str:
+def export_cst(
+    cst: StructureSet,
+    directory: str,
+    ctx: ExportContext,
+    ct_info: dict,
+    roi_interpreted_types: Optional[dict[str, str]] = None,
+) -> str:
     """
     Write a StructureSet as a DICOM RTSTRUCT file.
 
@@ -99,20 +129,37 @@ def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict
         The StructureSet to export.
     directory : str
         Output directory.
-    ctx : UIDContext
+    ctx : ExportContext
         Shared identifiers.
     ct_info : dict
         The return value of :func:`export_ct`, used for series referencing.
+    roi_interpreted_types : dict, optional
+        Maps ROI names to a Defined Term of RT ROI Interpreted Type, overriding the
+        type derived from the VOI type and name.
 
     Returns
     -------
     str
         The path of the written RTSTRUCT file.
     """
-    ct_image = cst.ct_image.cube_hu
+    overrides = validate_roi_interpreted_types(roi_interpreted_types)
+    ct_image = first_phase_image(cst)
+    warn_if_multiphase(cst, "RTSTRUCT")
 
     ds = Dataset()
-    populate_common(ds, ctx, RT_STRUCT_STORAGE, generate_uid(), "RTSTRUCT", 3)
+    populate_common(
+        ds,
+        ctx,
+        RT_STRUCT_STORAGE,
+        generate_uid(),
+        "RTSTRUCT",
+        3,
+        "pyRadPlan structure set - research use only",
+    )
+    ds.OperatorsName = ""
+    ds.InstanceNumber = 1
+    ds.StructureSetDate = ctx.export_date
+    ds.StructureSetTime = ctx.export_time
     ds.StructureSetLabel = "pyRadPlan"
     ds.StructureSetName = "pyRadPlan"
 
@@ -133,13 +180,17 @@ def export_cst(cst: StructureSet, directory: str, ctx: UIDContext, ct_info: dict
         roi_contour = Dataset()
         roi_contour.ROIDisplayColor = [int(c) for c in voi.color]
         roi_contour.ReferencedROINumber = i
-        roi_contour.ContourSequence = _voi_contour_sequence(voi, ct_image)
+        contour_sequence = _voi_contour_sequence(voi, ct_image)
+        if contour_sequence:
+            roi_contour.ContourSequence = contour_sequence
         contour_seq.append(roi_contour)
 
         obs = Dataset()
         obs.ObservationNumber = i
         obs.ReferencedROINumber = i
-        obs.RTROIInterpretedType = "PTV" if voi.voi_type == "TARGET" else "ORGAN"
+        obs.RTROIInterpretedType = overrides.get(voi.name) or roi_interpreted_type(
+            voi.name, voi.voi_type
+        )
         obs.ROIInterpreter = ""
         obs_seq.append(obs)
 

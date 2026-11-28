@@ -50,6 +50,15 @@ export function AboutDialog(props: { info: AppInfo | null; onClose: () => void; 
             Source code
           </a>
         </div>
+        <div data-testid="about-legal">
+          <a href={ABOUT.imprint_url} target="_blank" rel="noreferrer">
+            Imprint
+          </a>{" "}
+          &nbsp;|&nbsp;{" "}
+          <a href={ABOUT.privacy_url} target="_blank" rel="noreferrer">
+            Privacy policy
+          </a>
+        </div>
         <div>{ABOUT.license_note}</div>
         <div className="disclaimer-box">
           <b>{ABOUT.disclaimer_title}</b>

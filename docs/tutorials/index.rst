@@ -11,8 +11,9 @@ run directly with Python or opened as a notebook in Jupyter.
 
    The documentation of a release shows the outputs of the examples, executed when the
    release was prepared. The development documentation shows the examples without outputs.
-   Examples that need external tools (GUI, Monte Carlo engines, MATLAB/Octave, AI
-   credentials) are always shown without outputs.
+   Examples that need external tools or data (GUI, Monte Carlo engines, MATLAB/Octave, AI
+   credentials, models downloaded from the HuggingFace Hub, patient data and models not
+   shipped with pyRadPlan) are always shown without outputs.
 
 .. toctree::
    :maxdepth: 1

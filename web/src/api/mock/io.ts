@@ -124,9 +124,16 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
       note: "A structure set alone needs a CT when it is loaded again.",
     }),
     exp({ object: "cst", format: "pickle", label: "Pickle (*.pkl)", extension: ".pkl", keeps_objectives: true }),
+    exp({ object: "cst", format: "hdf5", label: "HDF5 (*.h5)", extension: ".h5", keeps_objectives: true, note: "Includes the CT" }),
     exp({ object: "cst", format: "npz", label: "NumPy (*.npz)", extension: ".npz", keeps_objectives: false }),
     labelMap("nifti", "NIfTI", ".nii.gz"),
     labelMap("nrrd", "NRRD", ".nrrd"),
+    {
+      ...labelMap("nrrd", "NRRD", ".zip"),
+      label: "NRRD Slicer segmentation, keeps overlaps (zip)",
+      structure_format: "layers",
+      note: "One layer per overlapping structure (cst.seg.nrrd)",
+    } as ExportFormat,
     labelMap("meta", "MetaImage", ".mha"),
     exp({
       object: "cst",
@@ -150,14 +157,29 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
     }),
     exp({ object: "result", format: "npz", label: "NumPy (*.npz)", extension: ".npz" }),
     exp({ object: "result", format: "mat", label: "MATLAB resultGUI (*.mat)", extension: ".mat", mime: mat }),
-    exp({ object: "result", format: "dcm", label: "DICOM RTDOSE", extension: ".zip", mime: "application/zip", archive: true }),
+    exp({
+      object: "result",
+      format: "dcm",
+      label: "DICOM RTDOSE",
+      extension: ".zip",
+      mime: "application/zip",
+      archive: true,
+      note: "With the CT, one RTDOSE per physical or RBE-weighted dose and the RT (Ion) Plan of the active result",
+    }),
     image("nifti", "NIfTI (*.nii.gz)", ".nii.gz"),
     image("nrrd", "NRRD (*.nrrd)", ".nrrd"),
     image("meta", "MetaImage (*.mha)", ".mha"),
     exp({
       object: "workspace",
+      format: "hdf5",
+      label: "pyRadPlan workspace, HDF5 (*.h5)",
+      extension: ".h5",
+      note: "Loads without running code from the file",
+    }),
+    exp({
+      object: "workspace",
       format: "pickle",
-      label: "pyRadPlan workspace (*.pkl)",
+      label: "pyRadPlan workspace, pickle (*.pkl)",
       extension: ".pkl",
       note: web ? "Not interchangeable with pickles of the native application." : undefined,
     }),
@@ -166,8 +188,14 @@ export function mockCapabilities(runtime: MockRuntime): Capabilities {
     imp({ format: "mat", label: "matRad MATLAB", extensions: [".mat"], objects: ["ct", "cst", "pln", "stf", "dij", "result"] }),
     imp({ format: "npz", label: "NumPy", extensions: [".npz"], objects: ["ct", "cst", "dose"] }),
     imp({
+      format: "hdf5",
+      label: "pyRadPlan workspace, HDF5 (*.h5, *.hdf5)",
+      extensions: [".h5", ".hdf5"],
+      objects: ["ct", "cst", "pln", "stf", "dij", "result", "dose"],
+    }),
+    imp({
       format: "pickle",
-      label: "pyRadPlan workspace (*.pkl)",
+      label: "pyRadPlan workspace, pickle (*.pkl)",
       extensions: [".pkl", ".pickle"],
       objects: ["ct", "cst", "pln", "stf", "dij", "result", "dose"],
       pickle: true,
@@ -476,6 +504,11 @@ function pickleFile(note: string): Uint8Array {
   return new Uint8Array([0x80, 0x04, 0x95, ...text, 0x2e]);
 }
 
+function hdf5File(note: string): Uint8Array {
+  const text = ENC.encode(note);
+  return new Uint8Array([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, ...text]);
+}
+
 function dicomFile(note: string): Uint8Array {
   const out = new Uint8Array(132 + note.length);
   out.set(ENC.encode("DICM"), 128);
@@ -502,9 +535,18 @@ function exportPayload(
   const note = `mock ${object} (${format})`;
   if (object === "result") {
     if (format === "dcm") {
-      const files = quantities.map((q) => `${fileStem(q)}/RD.${fileStem(q)}.dcm`);
-      const data = zip(quantities.map((q, i) => ({ name: files[i], data: dicomFile(`RTDOSE ${q}`) })));
-      return { filename: `${basename ?? "result"}_rtdose.zip`, mime: "application/zip", data, files };
+      const doses = quantities.filter((q) => /(^|\/)(physical_dose|rbe_x_dose)$/.test(q));
+      const results = [...new Set(doses.map((q) => (q.includes("/") ? q.split("/")[0] : "")))];
+      const folder = (result: string) => (results.length > 1 ? `${result || "current"}/` : "");
+      const files = results.flatMap((result) => [
+        `${folder(result)}CT/CT.0001.dcm`,
+        ...doses
+          .filter((q) => (q.includes("/") ? q.split("/")[0] : "") === result)
+          .map((q) => `${folder(result)}RTDOSE_${q.split("/").pop()}.dcm`),
+        ...(result === "" ? [`${folder(result)}RTPLAN.dcm`] : []),
+      ]);
+      const data = zip(files.map((name) => ({ name, data: dicomFile(`mock ${name}`) })));
+      return { filename: `${basename ?? "result"}_dicom.zip`, mime: "application/zip", data, files };
     }
     if (format === "mat") {
       const name = basename ?? (quantities.length === 1 ? fileStem(quantities[0]) : "result");
@@ -521,6 +563,15 @@ function exportPayload(
     const entries = quantities.map(one);
     return { filename: `${basename ?? "result"}.zip`, mime: "application/zip", data: zip(entries), files: entries.map((e) => e.name) };
   }
+  if (format === "nrrd" && structureFormat === "layers") {
+    const files = ["cst.seg.nrrd", "cst.json"];
+    return {
+      filename: `${stem}.zip`,
+      mime: "application/zip",
+      data: zip(files.map((name) => ({ name, data: ENC.encode(`mock ${name}`) }))),
+      files,
+    };
+  }
   if (format === "dcm") {
     const kind = structureFormat === "seg" ? "SEG" : "RTSTRUCT";
     const files = ["CT/CT.0001.dcm", `${kind}.dcm`];
@@ -535,6 +586,7 @@ function exportPayload(
     return { filename: `${stem}${extension}`, mime, data: zip([{ name: "cst.npy", data: npy(values) }]) };
   }
   if (format === "pickle") return { filename: `${stem}${extension}`, mime, data: pickleFile(note) };
+  if (format === "hdf5") return { filename: `${stem}${extension}`, mime, data: hdf5File(note) };
   return { filename: `${stem}${extension}`, mime, data: matFile(note) };
 }
 
@@ -559,7 +611,7 @@ function formSchema(section: { id: SettingsSectionId; title: string; fields: Fie
 
 const IMAGE_EXTENSIONS = /\.(nii|nii\.gz|nrrd|mha|mhd|dcm)$/i;
 const PICKLE_EXTENSIONS = /\.(pkl|pickle)$/i;
-const CONTAINER_EXTENSIONS = /\.(mat|npz|pkl|pickle)$/i;
+const CONTAINER_EXTENSIONS = /\.(mat|npz|h5|hdf5|pkl|pickle)$/i;
 
 /** Handler table plus the process-wide mock state (settings, base data) it works on. */
 export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHandlers {
@@ -647,12 +699,16 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
       const state = ctx.state(s);
       const object = String(params.object ?? "");
       const format = String(params.format ?? "");
-      const structureFormat = params.structure_format === "seg" ? "seg" : params.structure_format === "rtstruct" ? "rtstruct" : undefined;
+      const structureFormat = ["seg", "rtstruct", "layers"].includes(String(params.structure_format))
+        ? String(params.structure_format)
+        : undefined;
+      const variant = (e: ExportFormat) => (e as ExportFormat & { structure_format?: string }).structure_format;
       const entry = capabilities.formats.export.find(
         (e) =>
           e.object === object &&
           e.format === format &&
-          (format !== "dcm" || object !== "cst" || (e as ExportFormat & { structure_format?: string }).structure_format === (structureFormat ?? "rtstruct")),
+          (object !== "cst" ||
+            (format === "dcm" ? variant(e) === (structureFormat ?? "rtstruct") : variant(e) === structureFormat)),
       );
       if (!entry) throw new MethodError("ValueError", `Cannot export ${object} as ${format}`);
       if (!entry.available) throw precondition(entry.reason ?? "This format is not available", "not_available");
@@ -663,6 +719,9 @@ export function createIoHandlers(runtime: MockRuntime = mockRuntime()): MockHand
       // Default: the full quantities of all results, by their component keys.
       const quantities = (params.quantities as string[] | undefined) ?? state.quantities;
       if (object === "result" && quantities.length === 0) throw precondition("The result has no exportable image quantities.", "no_data");
+      if (object === "result" && format === "dcm" && !quantities.some((q) => /(^|\/)(physical_dose|rbe_x_dose)$/.test(q))) {
+        throw precondition("DICOM RTDOSE stores physical and RBE-weighted doses only; select one of them", "no_data");
+      }
       return ctx.run(s, `Saving ${object}`, async () => {
         ctx.progress(s, `Saving ${object}`, null);
         await ctx.sleep(150);
