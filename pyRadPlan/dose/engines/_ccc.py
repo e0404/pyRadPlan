@@ -3,15 +3,13 @@ from typing import Annotated, Any, ClassVar, Literal, Optional, cast
 import logging
 import time
 
-import array_api_compat
 import numpy as np
 import SimpleITK as sitk
 from pydantic import Field
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from pyRadPlan._settings import get_settings
 from pyRadPlan.core import resample_image
-from pyRadPlan.core.xp_utils import free_gpu_memory, import_backend, to_namespace, to_numpy
+from pyRadPlan.core.xp_utils import free_gpu_memory, scatter, to_namespace, to_numpy
 from pyRadPlan.core.xp_utils.typing import Array
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
@@ -24,7 +22,6 @@ from ._base import ct_phase_images
 from ._base_pencilbeam import PencilBeamEngineAbstract
 from ._svdpb import DijSamplingConfig, PhotonPencilBeamSVDEngine
 from . import _collapsed_cone as cc
-from ._collapsed_cone_cuda import gpu_available
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +36,8 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
     tilted along the beam axis or the bixel's ray. The absolute dose is normalized to the
     analytical SVD pencil beam depth dose [2]_ of the machine at a reference depth in water.
 
-    TERMA and transport run on the GPU with CuPy when a CUDA device is available (see
-    ``use_gpu``), otherwise on the CPU with NumPy, compiled with numba when installed.
+    TERMA and transport use Array API operations only and run in the engine's array
+    namespace and device (NumPy, CuPy, PyTorch), see ``settings.xp``.
 
     Parameters
     ----------
@@ -60,14 +57,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         Depth [mm] of the absolute dose normalization to the machine depth dose.
     kernel_file : str, optional
         Kernel data file (matRad format). Default: 6 MV water kernel.
-    use_gpu : bool, optional
-        Compute TERMA and transport on the GPU with CuPy. None (default) follows
-        ``settings.xp.prefer_gpu``; True requests the GPU. Without CuPy and a CUDA device the
-        CPU is used.
-    use_numba : bool
-        Use the numba transport on the CPU if numba is installed.
-    num_threads : int
-        Number of numba threads, 0 for numba's default.
     hardening_correction : bool
         Use the depth dependent effective attenuation ``mu0 / (1 + beta d)`` of the TERMA,
         with ``mu0`` and ``beta`` fitted so that the broad field depth dose matches the
@@ -125,12 +114,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
     kernel_file: Annotated[
         Optional[str], Field(description="Kernel data file, default: 6 MV water kernel")
     ] = None
-    use_gpu: Annotated[
-        Optional[bool],
-        Field(description="Use the GPU (CuPy) if available, default: follow the settings"),
-    ] = None
-    use_numba: bool = True
-    num_threads: Annotated[int, Field(ge=0, description="Number of numba threads (0: all)")] = 0
     hardening_correction: bool = True
     num_scatter_exponentials: Literal[1, 2] = 1
     kernel_tilt: Literal["beam", "ray"] = "beam"
@@ -155,8 +138,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         self._energy_params: dict[float, dict] = {}  # hardening / normalization per energy
         self._dose_dims: Optional[tuple[int, ...]] = None  # dose grid shape (z, y, x)
         self._dose_res: Optional[np.ndarray] = None  # voxel size along (z, y, x) [mm]
-        self._on_gpu = False  # TERMA and transport on the GPU
-        self._cx = np  # array module of TERMA and transport (numpy or cupy)
         super().__init__(pln)
         self._rng = np.random.default_rng(self.random_seed)
 
@@ -197,8 +178,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
                 return available, energy_msg
             if energy_msg:
                 msgs.append(energy_msg)
-        if not cc.NUMBA_AVAILABLE and not gpu_available():
-            msgs.append("numba not installed, the slower NumPy transport will be used!")
         return True, " ".join(msgs)
 
     def _init_dose_calc(
@@ -207,9 +186,8 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         """
         Initialize the dose calculation.
 
-        Loads (and if needed refits) the kernel, sets up the cone directions, selects the
-        device of TERMA and transport and interpolates the relative electron densities of
-        all CT phases on the dose grid.
+        Loads (and if needed refits) the kernel, sets up the cone directions and
+        interpolates the relative electron densities of all CT phases on the dose grid.
 
         Parameters
         ----------
@@ -252,21 +230,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             self._direction_att,
         ) = cc.cone_directions(self._kernel, self.num_azimuthal_angles)
 
-        # Device of TERMA and transport
-        wants_gpu = get_settings().xp.prefer_gpu if self.use_gpu is None else self.use_gpu
-        self._on_gpu = bool(wants_gpu) and gpu_available()
-        if self._on_gpu:
-            self._cx = import_backend("cupy")
-            logger.info("Collapsed cone TERMA and transport on the GPU (CuPy).")
-        else:
-            self._cx = np
-            if self.use_gpu:
-                logger.warning("No CuPy with a CUDA device found, collapsed cone runs on the CPU.")
-            elif self.use_numba and not cc.NUMBA_AVAILABLE:
-                logger.warning(
-                    "numba is not installed, using the slower NumPy collapsed cone transport."
-                )
-
         # Relative electron density of every CT phase on the full dose grid, since the
         # transport also crosses voxels outside the structures
         self._density_cubes = []
@@ -279,8 +242,8 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
                 )
             ).astype(np.float64)
             rho[~np.isfinite(rho) | (rho < 0)] = 0.0
-            self._density_cubes.append(self._cx.asarray(rho))
-        self._dose_dims = self._density_cubes[0].shape
+            self._density_cubes.append(self.xp.asarray(rho, device=self.device))
+        self._dose_dims = tuple(int(n) for n in self._density_cubes[0].shape)
 
         # Voxel size along the numpy axes (z, y, x)
         res = self.dose_grid.resolution
@@ -362,7 +325,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         params = {
             "mu0": mu0,
             "beta": beta,
-            "normalization": normalization,
+            "normalization": float(normalization),
             "sigma": float(kernel.penumbra) / np.sqrt(8 * np.log(2)),
             "primary_fluence": np.asarray(kernel.primary_fluence, dtype=np.float64),
         }
@@ -507,30 +470,25 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         scen_ray["ct_phase"] = scenario.ct_phase
         return scen_ray
 
-    def _as_cx(self, a: Array, dtype: Any = np.float64) -> Array:
+    def _as_xp(self, a: Array, dtype: Any = None) -> Array:
         """
-        Move an array to the device of TERMA and transport.
+        Move an array to the namespace and device of the engine.
 
         Parameters
         ----------
         a : Array
             Array of any supported backend.
         dtype : Any
-            NumPy dtype of the result.
+            Dtype of the result in the engine's namespace, default: float64.
 
         Returns
         -------
         Array
-            A NumPy array, or a CuPy array if the calculation runs on the GPU. CuPy arrays
-            and CUDA torch tensors are not copied to the host.
+            The array in ``self.xp`` on ``self.device``.
         """
-        if not self._on_gpu:
-            return np.asarray(to_numpy(a), dtype=dtype)
-        if cc.is_cupy_array(a):
-            return a.astype(dtype, copy=False)
-        if array_api_compat.is_torch_array(a) and a.is_cuda:
-            return self._cx.from_dlpack(a.contiguous()).astype(dtype, copy=False)
-        return self._cx.asarray(to_numpy(a), dtype=dtype)
+        xp = self.xp
+        a = to_namespace(xp, a, device=self.device)
+        return xp.astype(a, xp.float64 if dtype is None else dtype, copy=False)
 
     def _ray_terma(self, ray: dict) -> Array:
         """
@@ -556,11 +514,28 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             float(ray["bixel_width"]),
             params["primary_fluence"],
             np.asarray(to_numpy(ray["ray_pos_bev"]), dtype=np.float64),
-            self._as_cx(ray["rad_depths"]),
-            self._as_cx(ray["geo_depths"]),
-            self._as_cx(ray["iso_lat_dists"]),
+            self._as_xp(ray["rad_depths"]),
+            self._as_xp(ray["geo_depths"]),
+            self._as_xp(ray["iso_lat_dists"]),
             params["beta"],
         )
+
+    def _subscripts(self, ix: Array) -> tuple[Array, Array, Array]:
+        """
+        Array subscripts (z, y, x) of linear dose grid indices.
+
+        Parameters
+        ----------
+        ix : Array
+            Linear (C order) dose grid indices.
+
+        Returns
+        -------
+        tuple[Array, Array, Array]
+            The subscripts along the three array axes.
+        """
+        _, ny, nx = self._dose_dims
+        return ix // (ny * nx), (ix // nx) % ny, ix % nx
 
     def _source_box(self, ix: Array, terma: Array) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -579,19 +554,20 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             Lowest and highest array subscripts (z, y, x) of the sub-volume, which extends
             ``scatter_cutoff`` around the voxels with more than 1e-6 of the maximum TERMA.
         """
-        cx = self._cx
-        is_source = terma > 1e-6 * terma.max()
-        sub = cx.stack(cx.unravel_index(ix[is_source], self._dose_dims), axis=1)
-        sub_lo = to_numpy(sub.min(axis=0))
-        sub_hi = to_numpy(sub.max(axis=0))
+        xp = self.xp
+        is_source = terma > 1e-6 * xp.max(terma)
+        num_vox = int(np.prod(self._dose_dims))
+        subs = self._subscripts(ix)
+        sub_lo = np.array([int(xp.min(xp.where(is_source, a, num_vox))) for a in subs])
+        sub_hi = np.array([int(xp.max(xp.where(is_source, a, -1))) for a in subs])
         margin = np.ceil(self.scatter_cutoff / self._dose_res).astype(np.int64)
         box_lo = np.maximum(sub_lo - margin, 0)
         box_hi = np.minimum(sub_hi + margin, np.asarray(self._dose_dims) - 1)
         return box_lo, box_hi
 
-    def _box_indices(self, ix: Array, box_lo: np.ndarray, box_hi: np.ndarray) -> tuple:
+    def _box_local(self, ix: Array, box_lo: np.ndarray, box_hi: np.ndarray) -> tuple:
         """
-        Select the dose grid indices inside a sub-volume.
+        Locate dose grid indices in a sub-volume.
 
         Parameters
         ----------
@@ -603,14 +579,23 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         Returns
         -------
         tuple
-            Mask of the indices inside the sub-volume and their subscripts in it.
+            Mask of the indices inside the sub-volume and their linear (C order) indices in
+            it, 0 outside.
         """
-        cx = self._cx
-        sub = cx.stack(cx.unravel_index(ix, self._dose_dims), axis=1)
-        lo = cx.asarray(box_lo)
-        in_box = cx.all((sub >= lo) & (sub <= cx.asarray(box_hi)), axis=1)
-        local = sub[in_box] - lo
-        return in_box, (local[:, 0], local[:, 1], local[:, 2])
+        xp = self.xp
+        subs = self._subscripts(ix)
+        inside = xp.ones(ix.shape, dtype=xp.bool, device=self.device)
+        local = xp.zeros(ix.shape, dtype=ix.dtype, device=self.device)
+        for a, lo, hi in zip(subs, box_lo.tolist(), box_hi.tolist()):
+            inside = inside & (a >= lo) & (a <= hi)
+            local = local * (hi - lo + 1) + (a - lo)
+        return inside, xp.where(inside, local, 0)
+
+    def _check_dose(self, dose: Array) -> None:
+        """Raise an error for NaN, infinite or negative doses unless they are ignored."""
+        xp = self.xp
+        if not self.ignore_invalid_values and bool(xp.any(~xp.isfinite(dose) | (dose < 0))):
+            raise ValueError("Invalid numerical values in collapsed cone dose calculation.")
 
     def _transport_on_box(
         self,
@@ -648,12 +633,16 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         Array
             Dose on ``out_ix``, zero outside the sub-volume.
         """
-        cx = self._cx
+        xp = self.xp
         box = tuple(slice(int(lo), int(hi) + 1) for lo, hi in zip(box_lo, box_hi))
         rho_box = self._density_cubes[ct_phase][box]
-        terma_box = cx.zeros(rho_box.shape)
-        in_source, local = self._box_indices(source_ix, box_lo, box_hi)
-        terma_box[local] = terma[in_source]
+        num_box = int(np.prod(rho_box.shape))
+
+        # TERMA outside the sub-volume is written to an extra element, which is dropped
+        inside, local = self._box_local(source_ix, box_lo, box_hi)
+        terma_box = xp.zeros(num_box + 1, dtype=xp.float64, device=self.device)
+        terma_box = scatter(terma_box, xp.where(inside, local, num_box), terma)
+        terma_box = xp.reshape(terma_box[:num_box], rho_box.shape)
 
         # The transport lattice is anchored to the dose grid through the origin of the box,
         # so that the doses of different sub-volumes are consistent
@@ -665,17 +654,12 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             self._direction_weights,
             self._direction_att,
             origin=box_lo,
-            use_numba=self.use_numba,
-            num_threads=self.num_threads,
         )
 
-        in_out, local = self._box_indices(out_ix, box_lo, box_hi)
-        dose = cx.zeros(out_ix.size)
-        dose[in_out] = normalization * dose_box[local]
-
-        # Check if we have valid dose values
-        if not self.ignore_invalid_values and bool(cx.any(~cx.isfinite(dose) | (dose < 0))):
-            raise ValueError("Invalid numerical values in collapsed cone dose calculation.")
+        inside, local = self._box_local(out_ix, box_lo, box_hi)
+        dose = xp.take(xp.reshape(dose_box, (-1,)), local)
+        dose = normalization * xp.where(inside, dose, 0.0)
+        self._check_dose(dose)
         return dose
 
     def _bixel_dose(self, ray: dict) -> Array:
@@ -692,10 +676,11 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         Array
             Dose per unit bixel weight on ``ray["ix"]``.
         """
-        ix = self._as_cx(ray["ix"], dtype=np.int64)
+        xp = self.xp
+        ix = self._as_xp(ray["ix"], dtype=xp.int64)
         terma = self._ray_terma(ray)
-        if not bool(self._cx.any(terma > 0)):
-            return self._cx.zeros(ix.size)
+        if not bool(xp.any(terma > 0)):
+            return xp.zeros(ix.shape, dtype=xp.float64, device=self.device)
         box_lo, box_hi = self._source_box(ix, terma)
         return self._transport_on_box(
             ix,
@@ -833,7 +818,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         i : int
             Index of the beam.
         """
-        cx = self._cx
+        xp = self.xp
         num_vox = self.dose_grid.num_voxels
         acc = {}
 
@@ -847,20 +832,25 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
                 scen_ray = self._apply_scenario_to_ray(curr_ray, self._scenarios[s])
                 if s not in acc:
                     acc[s] = {
-                        "terma": cx.zeros(num_vox),
-                        "mask": cx.zeros(num_vox, dtype=bool),
+                        "terma": xp.zeros(num_vox, dtype=xp.float64, device=self.device),
+                        "mask": xp.zeros(num_vox, dtype=xp.bool, device=self.device),
                         "ct_phase": scen_ray["ct_phase"],
                         "box_lo": None,
                         "box_hi": None,
                     }
-                ix = self._as_cx(scen_ray["ix"], dtype=np.int64)
-                acc[s]["mask"][ix] = True
-                if ix.size == 0 or weight == 0:
+                ix = self._as_xp(scen_ray["ix"], dtype=xp.int64)
+                if ix.shape[0] == 0:
+                    continue
+                acc[s]["mask"] = scatter(acc[s]["mask"], ix, True)
+                if weight == 0:
                     continue
                 terma = self._ray_terma(scen_ray)
-                if not bool(cx.any(terma > 0)):
+                if not bool(xp.any(terma > 0)):
                     continue
-                acc[s]["terma"][ix] += weight * terma
+                # The voxels of a ray are unique, so gather and scatter accumulate correctly
+                acc[s]["terma"] = scatter(
+                    acc[s]["terma"], ix, xp.take(acc[s]["terma"], ix) + weight * terma
+                )
 
                 # Union of the sub-volumes of the single bixels
                 lo, hi = self._source_box(ix, terma)
@@ -870,25 +860,27 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
                     acc[s]["box_lo"] = np.minimum(acc[s]["box_lo"], lo)
                     acc[s]["box_hi"] = np.maximum(acc[s]["box_hi"], hi)
 
-        # One transport per scenario
+        # One transport per scenario on the union of the sub-volumes
         dirs = curr_beam["ccc"]["beam_dirs"]
         normalization = curr_beam["ccc"]["normalization"]
         for s, a in acc.items():
-            source_ix = cx.flatnonzero(a["terma"] > 0)
-            if a["box_lo"] is None or source_ix.size == 0:
+            if a["box_lo"] is None:
                 continue
-            out_ix = cx.flatnonzero(a["mask"])
-            dose = self._transport_on_box(
-                source_ix,
-                a["terma"][source_ix],
-                a["box_lo"],
-                a["box_hi"],
-                a["ct_phase"],
+            box = tuple(slice(int(lo), int(hi) + 1) for lo, hi in zip(a["box_lo"], a["box_hi"]))
+            dose_box = normalization * cc.transport(
+                xp.reshape(a["terma"], self._dose_dims)[box],
+                self._density_cubes[a["ct_phase"]][box],
+                self._dose_res,
                 dirs,
-                out_ix,
-                normalization,
+                self._direction_weights,
+                self._direction_att,
+                origin=a["box_lo"],
             )
-            dij["physical_dose"][s][to_numpy(out_ix), i] += to_numpy(dose, dtype=np.float32)
+            self._check_dose(dose_box)
+            dose = np.zeros(self._dose_dims, dtype=np.float32)
+            dose[box] = to_numpy(dose_box, dtype=np.float32)
+            out_ix = np.flatnonzero(to_numpy(a["mask"]))
+            dij["physical_dose"][s][out_ix, i] += dose.reshape(-1)[out_ix]
 
         # Bookkeeping of the beam number
         dij["beam_num"][i] = i

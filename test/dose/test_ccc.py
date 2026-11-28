@@ -1,21 +1,47 @@
-import ctypes
-import shutil
-import subprocess
+from types import SimpleNamespace
 
+import array_api_compat
 import numpy as np
 import pytest
 from pymatreader import read_mat
 import scipy.io
 import SimpleITK as sitk
 
-from pyRadPlan import PhotonPlan, generate_stf
+from pyRadPlan import PhotonPlan, generate_stf, settings
+from pyRadPlan.core.xp_utils import cupy_available, to_numpy
 from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_cst
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import PhotonCollapsedConeEngine, get_engine
 from pyRadPlan.dose.engines import _collapsed_cone as cc
-from pyRadPlan.dose.engines import _collapsed_cone_cuda as cuda
 from pyRadPlan.machines import load_from_name
+
+from _ccc_reference import reference_transport
+
+
+def _backend(name):
+    """Namespace, array constructor and engine settings of a backend, skipped if missing."""
+    module = pytest.importorskip("torch" if name.startswith("torch") else name)
+    if name == "cupy" and not cupy_available():
+        pytest.skip("no CuPy with a CUDA device")
+    if name == "torch_cuda" and not module.cuda.is_available():
+        pytest.skip("no CUDA device for torch")
+    xp = array_api_compat.array_namespace(module.asarray([0.0]))
+    device = "cuda" if name == "torch_cuda" else None
+    gpu = name in ("cupy", "torch_cuda")
+    return SimpleNamespace(
+        name=name,
+        xp=xp,
+        asarray=lambda a: xp.asarray(np.asarray(a), device=device),
+        prefer_gpu=gpu,
+        cpu_backend="numpy" if gpu else name,
+        gpu_backend="torch" if name == "torch_cuda" else "cupy",
+    )
+
+
+@pytest.fixture(params=["numpy", "array_api_strict", "torch", "cupy", "torch_cuda"])
+def backend(request):
+    return _backend(request.param)
 
 
 def _directions(n):
@@ -35,6 +61,13 @@ def _directions(n):
     return dirs / np.linalg.norm(dirs, axis=0)
 
 
+def _kernel(n_dirs):
+    """Two kernel components (primary and scatter like) on n_dirs directions."""
+    weights = np.vstack([np.linspace(0.01, 0.05, n_dirs), np.linspace(0.03, 0.01, n_dirs)])
+    att = np.vstack([np.linspace(0.2, 1.5, n_dirs), np.linspace(0.002, 0.02, n_dirs)])
+    return weights, att
+
+
 @pytest.fixture
 def heterogeneous_input():
     """Heterogeneous TERMA and density with two kernel components on 16 directions."""
@@ -42,48 +75,109 @@ def heterogeneous_input():
     terma = np.exp(-0.1 * i) * (1 + 0.5 * np.sin(j)) * (1 + 0.2 * np.cos(k))
     rho = 0.6 + 0.5 * np.sin(0.7 * i + 0.3 * j) * np.cos(0.5 * k)
     rho[4:7, 5:9, 3:6] = 0
-    weights = np.vstack([np.linspace(0.01, 0.05, 16), np.linspace(0.03, 0.01, 16)])
-    att = np.vstack([np.linspace(0.2, 1.5, 16), np.linspace(0.002, 0.02, 16)])
-    return terma, rho, np.array([2.0, 3.0, 2.5]), _directions(16), weights, att
+    return (terma, rho, np.array([2.0, 3.0, 2.5]), _directions(16), *_kernel(16))
+
+
+def _case(name):
+    """Transport inputs and origin of the edge cases compared with the reference."""
+    rng = np.random.default_rng(1)
+    shape = (12, 15, 10)
+    terma = rng.random(shape)
+    rho = 0.5 + rng.random(shape)
+    voxel_size = np.array([2.0, 3.0, 2.5])
+    dirs = _directions(16)
+    origin = (0, 0, 0)
+    if name == "anisotropic":
+        voxel_size = np.array([2.0, 3.0, 5.0])
+        origin = (4, -7, 2)
+    elif name == "low_density":
+        rho = 1e-6 * (1 + rng.random(shape))
+    elif name == "zero_density":
+        rho[3:8, 4:11, 2:7] = 0
+        rho[:, 0, :] = 0
+    elif name == "off_centre_source":
+        terma = np.zeros(shape)
+        terma[9, 2, 7] = 1.0
+        terma[10, 2, 7] = 0.5
+        origin = (11, 3, -5)
+    elif name == "tie_break":
+        # |d| / s is equal along the first two axes: the first one is dominant
+        voxel_size = np.array([1.0, 2.0, 1.0])
+        tie = np.array([1.0, 2.0, 0.3]) / np.linalg.norm([1.0, 2.0, 0.3])
+        assert np.argmax(np.abs(tie) / voxel_size) == 0
+        dirs = np.column_stack([tie, -tie, [-1.0, 2.0, 0.3] / np.linalg.norm([1.0, 2.0, 0.3])])
+    return terma, rho, voxel_size, dirs, *_kernel(dirs.shape[1]), origin
+
+
+_CASES = ["heterogeneous", "anisotropic", "low_density", "zero_density", "off_centre_source"]
+
+
+@pytest.mark.parametrize("case", [*_CASES, "tie_break"])
+def test_transport_matches_reference(backend, case):
+    """The Array API transport equals the independent NumPy reference on every backend."""
+    terma, rho, voxel_size, dirs, weights, att, origin = _case(case)
+    ref = reference_transport(terma, rho, voxel_size, dirs, weights, att, origin)
+    dose = cc.transport(
+        backend.asarray(terma), backend.asarray(rho), voxel_size, dirs, weights, att, origin
+    )
+    assert array_api_compat.array_namespace(dose) is backend.xp
+    # The rounding errors of both recursions scale with the released energy, which at very
+    # low density is far above the deposited dose
+    scale = max(ref.max(), terma.max() * weights.sum())
+    np.testing.assert_allclose(to_numpy(dose), ref, rtol=0, atol=1e-12 * scale)
+
+
+@pytest.mark.parametrize("origin", [(0, 0, 0), (5, -3, 7)])
+def test_transport_heterogeneous_matches_reference(backend, heterogeneous_input, origin):
+    """Heterogeneous TERMA and density with void voxels, also on a shifted lattice."""
+    terma, rho, *kernel = heterogeneous_input
+    ref = reference_transport(terma, rho, *kernel, origin=origin)
+    dose = cc.transport(backend.asarray(terma), backend.asarray(rho), *kernel, origin=origin)
+    np.testing.assert_allclose(to_numpy(dose), ref, rtol=0, atol=1e-12 * ref.max())
+
+
+def test_transport_single_precision(backend, heterogeneous_input):
+    """A float32 TERMA gives a float32 dose close to the double precision result."""
+    terma, rho, *kernel = heterogeneous_input
+    xp = backend.xp
+    ref = reference_transport(terma, rho, *kernel)
+    dose = cc.transport(
+        xp.astype(backend.asarray(terma), xp.float32),
+        xp.astype(backend.asarray(rho), xp.float32),
+        *kernel,
+    )
+    assert dose.dtype == xp.float32
+    np.testing.assert_allclose(to_numpy(dose), ref, rtol=0, atol=1e-5 * ref.max())
 
 
 def test_transport_finite_and_non_negative(heterogeneous_input):
-    """The NumPy transport gives a finite, non-negative dose of the TERMA's shape."""
-    dose = cc.transport(*heterogeneous_input, use_numba=False)
+    """The transport gives a finite, non-negative dose of the TERMA's shape."""
+    dose = cc.transport(*heterogeneous_input)
     assert dose.shape == heterogeneous_input[0].shape
     assert np.all(np.isfinite(dose))
     assert np.all(dose >= 0)
     assert np.any(dose > 0)
 
 
-@pytest.mark.skipif(not cc.NUMBA_AVAILABLE, reason="numba not installed")
-@pytest.mark.parametrize("origin", [(0, 0, 0), (5, -3, 7)])
-def test_transport_numba_matches_numpy(heterogeneous_input, origin):
-    """The numba transport equals the NumPy reference, also on a shifted lattice."""
-    ref = cc.transport(*heterogeneous_input, origin=origin, use_numba=False)
-    jit = cc.transport(*heterogeneous_input, origin=origin, use_numba=True, num_threads=2)
-    np.testing.assert_allclose(jit, ref, rtol=0, atol=1e-12 * ref.max())
+def test_transport_without_terma_is_zero(backend):
+    """No TERMA gives no dose."""
+    zeros = backend.asarray(np.zeros((4, 5, 6)))
+    dose = cc.transport(zeros, zeros + 1, [1, 1, 1], _directions(3), *_kernel(3))
+    assert not bool(backend.xp.any(dose != 0))
 
 
-@pytest.mark.parametrize("use_numba", [False, True])
-def test_transport_sub_volume_consistency(heterogeneous_input, use_numba):
+def test_transport_sub_volume_consistency(backend, heterogeneous_input):
     """A sub-volume with its origin gives the dose of the full volume inside it."""
     terma, rho, voxel_size, dirs, weights, att = heterogeneous_input
     terma = np.zeros_like(terma)
     terma[5:8, 6:10, 4:7] = 1 + np.arange(1, 37).reshape(3, 4, 3, order="F") / 36
-    full = cc.transport(terma, rho, voxel_size, dirs, weights, att, use_numba=use_numba)
+    kernel = (voxel_size, dirs, weights, att)
+    full = to_numpy(cc.transport(backend.asarray(terma), backend.asarray(rho), *kernel))
     box = (slice(2, 12), slice(3, 15), slice(1, 10))
     sub = cc.transport(
-        terma[box],
-        rho[box],
-        voxel_size,
-        dirs,
-        weights,
-        att,
-        origin=(2, 3, 1),
-        use_numba=use_numba,
+        backend.asarray(terma[box]), backend.asarray(rho[box]), *kernel, origin=(2, 3, 1)
     )
-    np.testing.assert_allclose(sub, full[box], rtol=0, atol=1e-15)
+    np.testing.assert_allclose(to_numpy(sub), full[box], rtol=0, atol=1e-15)
 
 
 def test_transport_component_linearity(heterogeneous_input):
@@ -91,11 +185,8 @@ def test_transport_component_linearity(heterogeneous_input):
     terma, rho, voxel_size, dirs, weights, att = heterogeneous_input
     w = np.vstack([weights, 0.5 * weights[1]])
     a = np.vstack([att, 3 * att[1]])
-    dose_all = cc.transport(terma, rho, voxel_size, dirs, w, a, use_numba=False)
-    dose_sum = sum(
-        cc.transport(terma, rho, voxel_size, dirs, w[[c]], a[[c]], use_numba=False)
-        for c in range(3)
-    )
+    dose_all = cc.transport(terma, rho, voxel_size, dirs, w, a)
+    dose_sum = sum(cc.transport(terma, rho, voxel_size, dirs, w[[c]], a[[c]]) for c in range(3))
     np.testing.assert_allclose(dose_all, dose_sum, rtol=0, atol=1e-12 * dose_all.max())
 
 
@@ -145,6 +236,29 @@ def test_transport_axis_mirror_symmetry(axis):
     fwd = cc.transport(terma, np.ones_like(terma), *args, direction, *kernel)
     bwd = cc.transport(terma, np.ones_like(terma), *args, -direction, *kernel)
     np.testing.assert_allclose(bwd, np.flip(fwd, axis), rtol=0, atol=1e-15)
+
+
+def test_calc_terma_matches_numpy(backend):
+    """The TERMA is the same on every backend, and zero on voxels without a valid depth."""
+    rng = np.random.default_rng(2)
+    n = 500
+    rad_depths = 300 * rng.random(n)
+    geo_dists = 900 + 200 * rng.random(n)
+    lat = 60 * (rng.random((n, 2)) - 0.5)
+    rad_depths[:3] = [np.nan, np.inf, 10.0]
+    geo_dists[2] = 0.0
+    fluence = np.column_stack([np.linspace(0, 200, 50), np.linspace(1.0, 0.8, 50)])
+    args = (1000.0, 0.005, 2.0, 7.0, fluence, np.array([5.0, 0.0, -3.0]))
+    ref = cc.calc_terma(*args, rad_depths, geo_dists, lat, 1e-3)
+    terma = cc.calc_terma(
+        *args,
+        backend.asarray(rad_depths),
+        backend.asarray(geo_dists),
+        backend.asarray(lat),
+        1e-3,
+    )
+    assert np.all(ref[:3] == 0) and np.any(ref > 0)
+    np.testing.assert_allclose(to_numpy(terma), ref, rtol=1e-13, atol=1e-300)
 
 
 def _synthetic_edk():
@@ -483,77 +597,24 @@ def test_kernel_energy_mismatch_raises(tmp_path):
     assert not available and "does not match" in msg
 
 
-_HOST_DRIVER = r"""
-extern "C" void host_direction(ll num_lines, const double* terma, const double* rho,
-    double* dose, const ll* sh1, const ll* sh2, const ll* bounds, ll nk, ll n1, ll n2,
-    ll sk, ll s1, ll s2, ll ul1, ll uh1, ll ul2, ll uh2, ll ml1, ll ml2, ll nl1,
-    double step, int forward, int nc, const double* w, const double* att) {
-    for (ll line = 0; line < num_lines; ++line)
-        ccc_line(line, terma, rho, dose, sh1, sh2, bounds, nk, n1, n2, sk, s1, s2, ul1, uh1,
-                 ul2, uh2, ml1, ml2, nl1, step, forward, nc, w, att);
-}
-"""
-
-
-@pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler")
-def test_cuda_kernel_source_matches_cpu_transport(tmp_path, heterogeneous_input):
-    """The CUDA kernel source, compiled for the host one line after the other."""
-    source = tmp_path / "ccc_host.cpp"
-    source.write_text("#define CCC_HOST\n" + cuda.KERNEL_SOURCE + _HOST_DRIVER)
-    library = tmp_path / "ccc_host.so"
-    subprocess.run(["g++", "-O2", "-shared", "-fPIC", "-o", str(library), str(source)], check=True)
-    lib = ctypes.CDLL(str(library))
-    ptr = np.ctypeslib.ndpointer
-    i64, f64, i32 = ctypes.c_longlong, ctypes.c_double, ctypes.c_int
-    lib.host_direction.argtypes = (
-        [i64, ptr(np.float64), ptr(np.float64), ptr(np.float64)]
-        + [ptr(np.int64)] * 3
-        + [i64] * 13
-        + [f64, i32, i32, ptr(np.float64), ptr(np.float64)]
-    )
-
-    terma, rho, voxel_size, dirs, weights, att = heterogeneous_input
-    terma = np.ascontiguousarray(terma)
-    terma[:, :, :3] = 0
-    origin = np.array([5, -3, 7])
-    dose = np.zeros_like(terma)
-    bounds, union = cuda.source_bounds(np.stack(np.nonzero(terma)), terma.shape)
-    for d in range(dirs.shape[1]):
-        s = cuda.direction_setup(terma.shape, voxel_size, origin, dirs[:, d], union)
-        k = s["k"]
-        lib.host_direction(
-            s["num_lines1"] * s["num_lines2"], terma, np.ascontiguousarray(rho), dose,
-            s["sh1"], s["sh2"], np.ascontiguousarray(bounds[k].ravel()), s["nk"], s["n1"],
-            s["n2"], *s["strides"], *union[k], s["min_line1"], s["min_line2"],
-            s["num_lines1"], s["step"], s["forward"], weights.shape[0],
-            np.ascontiguousarray(weights[:, d]), np.ascontiguousarray(att[:, d]),
-        )  # fmt: skip
-    ref = cc.transport(terma, rho, voxel_size, dirs, weights, att, origin=origin)
-    np.testing.assert_allclose(dose, ref, rtol=0, atol=1e-12 * ref.max())
-
-
-@pytest.mark.skipif(not cuda.gpu_available(), reason="no CuPy with a CUDA device")
-def test_gpu_transport_matches_cpu(heterogeneous_input):
-    """The CUDA transport equals the CPU transport."""
-    cupy = pytest.importorskip("cupy")
-    terma, rho, voxel_size, dirs, weights, att = heterogeneous_input
-    ref = cc.transport(terma, rho, voxel_size, dirs, weights, att, origin=(5, -3, 7))
-    gpu = cc.transport(
-        cupy.asarray(terma), cupy.asarray(rho), voxel_size, dirs, weights, att, origin=(5, -3, 7)
-    )
-    np.testing.assert_allclose(cupy.asnumpy(gpu), ref, rtol=0, atol=1e-12 * ref.max())
-
-
-@pytest.mark.skipif(not cuda.gpu_available(), reason="no CuPy with a CUDA device")
-@pytest.mark.parametrize("beam_forward", [True, False])
-def test_gpu_engine_matches_cpu(beam_forward):
-    """The engine gives the same dose on the GPU and on the CPU."""
+def _engine_dose(monkeypatch, backend, **dose_calc):
+    """Forward dose of a small two-beam plan computed in the namespace of a backend."""
+    monkeypatch.setattr(settings.xp, "prefer_gpu", backend.prefer_gpu)
+    monkeypatch.setattr(settings.xp, "preferred_cpu_array_backend", backend.cpu_backend)
+    monkeypatch.setattr(settings.xp, "preferred_gpu_array_backend", backend.gpu_backend)
     ct, cst = _water_box(16, 6.0, 4, low_density_rows=slice(6, 9))
-    doses = []
-    for use_gpu in (False, True):
-        pln = _plan(6.0, 12.0, [0.0, 120.0], use_gpu=use_gpu, beam_forward=beam_forward)
-        stf = generate_stf(ct, cst, pln)
-        doses.append(
-            sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln).physical_dose.values)
-        )
-    np.testing.assert_allclose(doses[1], doses[0], rtol=0, atol=1e-5 * doses[0].max())
+    pln = _plan(6.0, 12.0, [0.0, 120.0], **dose_calc)
+    stf = generate_stf(ct, cst, pln)
+    w = np.linspace(0.5, 1.5, stf.total_number_of_bixels)
+    return sitk.GetArrayFromImage(calc_dose_forward(ct, cst, stf, pln, w).physical_dose.values)
+
+
+@pytest.mark.parametrize("beam_forward", [True, False])
+@pytest.mark.parametrize("backend_name", ["array_api_strict", "torch", "cupy", "torch_cuda"])
+def test_engine_backend_matches_numpy(monkeypatch, backend_name, beam_forward):
+    """The engine gives the same dose in every namespace and on the GPU as with NumPy."""
+    backend = _backend(backend_name)
+    dose = _engine_dose(monkeypatch, backend, beam_forward=beam_forward)
+    ref = _engine_dose(monkeypatch, _backend("numpy"), beam_forward=beam_forward)
+    assert ref.max() > 0
+    np.testing.assert_allclose(dose, ref, rtol=0, atol=1e-5 * ref.max())
