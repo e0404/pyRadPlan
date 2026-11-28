@@ -12,449 +12,28 @@ References
 .. [2] Bortfeld, Schlegel, Rhein, Med. Phys. 20, 311 (1993)
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional, Union
 import logging
-import os
 
 import array_api_compat
 import numpy as np
-from pymatreader import read_mat
-from scipy.optimize import minimize, minimize_scalar
 
 from pyRadPlan.core.xp_utils import erf, interp1d, scatter, to_numpy
 from pyRadPlan.core.xp_utils.typing import Array
+from pyRadPlan.machines import PhotonCollapsedConeKernel
+from pyRadPlan.machines.photons._collapsed_cone_fit import _fminbnd
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_KERNEL_FILE = (
-    Path(__file__).resolve().parents[2] / "data" / "kernels" / "photons_collapsedCone_6MV.mat"
-)
-
-
-@dataclass
-class CollapsedConeKernel:
-    """
-    Collapsed cone kernel fitted per polar bin.
-
-    The energy fraction deposited per unit radial distance r (mm of water) in a polar bin is
-    ``A a exp(-a r) + sum_k B_k b_k exp(-b_k r)`` (primary and scatter component).
-
-    Attributes
-    ----------
-    polar_angles : np.ndarray
-        Solid angle bisectors of the polar bins [deg], shape ``(n_bins,)``.
-    polar_edges : np.ndarray
-        Polar bin edges [deg], shape ``(n_bins + 1,)``.
-    A, a : np.ndarray
-        Primary weights and attenuation coefficients [1/mm], shape ``(1, n_bins)``.
-    B, b : np.ndarray
-        Scatter weights and attenuation coefficients [1/mm], shape ``(n_terms, n_bins)``.
-    min_radius : float
-        Smallest radius [mm] included in the fit.
-    scatter_max_radius : float
-        Largest radius [mm] included in the fit of the scatter component.
-    residual : dict
-        Fit residuals per bin (see :func:`fit_collapsed_cone_kernel`).
-    """
-
-    polar_angles: np.ndarray
-    polar_edges: np.ndarray
-    A: np.ndarray
-    a: np.ndarray
-    B: np.ndarray
-    b: np.ndarray
-    min_radius: float = 0.0
-    scatter_max_radius: float = np.inf
-    residual: dict = field(default_factory=dict)
-
-    @property
-    def num_polar_angles(self) -> int:
-        """Number of polar bins."""
-        return int(self.polar_angles.size)
-
-    @property
-    def num_scatter_exponentials(self) -> int:
-        """Number of exponential terms of the scatter component."""
-        return int(self.B.shape[0])
-
-    @property
-    def weights(self) -> np.ndarray:
-        """Weights of all components, shape ``(n_components, n_bins)``."""
-        return np.vstack([self.A, self.B])
-
-    @property
-    def attenuations(self) -> np.ndarray:
-        """Attenuation coefficients of all components, shape ``(n_components, n_bins)``."""
-        return np.vstack([self.a, self.b])
-
-
-@dataclass
-class CollapsedConeKernelData:
-    """
-    Contents of a collapsed cone kernel file.
-
-    Attributes
-    ----------
-    fit : CollapsedConeKernel
-        The stored fit.
-    cones : dict, optional
-        Conical kernel data (``angleEdges``, ``radiusEdges``, ``primary``, ``scatter``),
-        needed to refit the kernel.
-    meta : dict
-        Meta information, e.g. the ``nominalEnergy`` [MV].
-    """
-
-    fit: CollapsedConeKernel
-    cones: Optional[dict] = None
-    meta: dict = field(default_factory=dict)
-
-
-def _as_rows(values) -> np.ndarray:
-    """Fit parameters as ``(n_terms, n_bins)``, also when stored as a vector."""
-    return np.atleast_2d(np.asarray(values, dtype=np.float64))
-
-
-def load_kernel_file(
-    filename: Union[str, os.PathLike, None] = None,
-) -> CollapsedConeKernelData:
-    """
-    Read a matRad collapsed cone kernel file (struct ``ccKernel``).
-
-    Parameters
-    ----------
-    filename : str or PathLike, optional
-        Kernel file. Default: the 6 MV water kernel shipped with pyRadPlan.
-
-    Returns
-    -------
-    CollapsedConeKernelData
-        The stored fit, the conical kernel data (if present) and the meta information.
-    """
-    filename = Path(DEFAULT_KERNEL_FILE if filename is None else filename)
-    if not filename.is_file():
-        raise FileNotFoundError(f"Collapsed cone kernel file {filename} not found!")
-    data = read_mat(str(filename))
-    if "ccKernel" not in data:
-        raise ValueError(f"Kernel file {filename} does not contain a collapsed cone kernel!")
-    cc = data["ccKernel"]
-    fit = cc["fit"]
-    kernel = CollapsedConeKernel(
-        polar_angles=np.atleast_1d(np.asarray(fit["polarAngles"], dtype=np.float64)),
-        polar_edges=np.atleast_1d(np.asarray(fit["polarEdges"], dtype=np.float64)),
-        A=_as_rows(fit["A"]),
-        a=_as_rows(fit["a"]),
-        B=_as_rows(fit["B"]),
-        b=_as_rows(fit["b"]),
-        min_radius=float(fit.get("minRadius", 0.0)),
-        scatter_max_radius=float(fit.get("scatterMaxRadius", np.inf)),
-        residual=dict(fit.get("residual", {})),
-    )
-    cones = None
-    if "cones" in cc:
-        cones = {
-            key: np.asarray(cc["cones"][key], dtype=np.float64)
-            for key in ("angleEdges", "radiusEdges", "primary", "scatter")
-        }
-    meta = dict(cc.get("meta", {}))
-    return CollapsedConeKernelData(fit=kernel, cones=cones, meta=meta)
-
-
-def load_kernel(
-    filename: Union[str, os.PathLike, None],
-    num_polar_angles: int,
-    num_scatter_exponentials: int = 1,
-) -> tuple[CollapsedConeKernel, dict]:
-    """
-    Load a kernel and refit it if another number of polar bins or scatter terms is requested.
-
-    Parameters
-    ----------
-    filename : str or PathLike or None
-        Kernel file, None for the default 6 MV kernel.
-    num_polar_angles : int
-        Number of polar bins.
-    num_scatter_exponentials : int
-        Number of exponential terms of the scatter component (1 or 2).
-
-    Returns
-    -------
-    tuple[CollapsedConeKernel, dict]
-        The kernel and the meta information of the file.
-    """
-    data = load_kernel_file(filename)
-    fit = data.fit
-    if (
-        fit.num_polar_angles == num_polar_angles
-        and fit.num_scatter_exponentials == num_scatter_exponentials
-    ):
-        return fit, data.meta
-    if data.cones is None:
-        raise ValueError(
-            f"Kernel file {filename} cannot be refitted, it contains no conical kernel data."
-        )
-    kernel = fit_collapsed_cone_kernel(
-        data.cones,
-        num_polar_angles,
-        fit.min_radius,
-        num_scatter_exponentials,
-        fit.scatter_max_radius,
-    )
-    return kernel, data.meta
-
-
-def check_kernel_energy(meta: dict, energy: Optional[float]) -> tuple[bool, str]:
-    """
-    Compare the nominal energy of the kernel with the beam energy.
-
-    Returns
-    -------
-    tuple[bool, str]
-        ``False`` and a message on a mismatch; ``True`` and a warning message if one of the
-        energies is unknown; ``True`` and an empty message otherwise.
-    """
-    nominal = meta.get("nominalEnergy")
-    if nominal is None or energy is None:
-        return True, (
-            "Nominal energy of the collapsed cone kernel or the machine unknown, "
-            "energies not checked."
-        )
-    if abs(float(nominal) - float(energy)) > 1e-6:
-        return False, (
-            f"Collapsed cone kernel for {float(nominal):g} MV does not match the beam energy of "
-            f"{float(energy):g} MV. Generate a kernel with matRad's tools/collapsedConeKernels "
-            "and set kernel_file."
-        )
-    return True, ""
-
-
-def fit_collapsed_cone_kernel(
-    edk: dict,
-    num_polar_angles: int,
-    min_radius: float = 0.0,
-    num_scatter_exponentials: int = 1,
-    scatter_max_radius: float = np.inf,
-) -> CollapsedConeKernel:
-    """
-    Collapse a conical energy deposition kernel into polar bins and fit exponentials.
-
-    For each polar bin the primary and scatter energy fractions are taken from the Monte
-    Carlo data (no renormalization) and the attenuation coefficients (and for two scatter
-    terms the split of the scatter energy) are fitted to the normalized cumulative radial
-    energy distribution of each component.
-
-    Parameters
-    ----------
-    edk : dict
-        Conical kernel with ``angleEdges`` [deg], ``radiusEdges`` [mm], ``primary`` and
-        ``scatter`` (``n_cones x n_shells``).
-    num_polar_angles : int
-        Number of polar bins, must divide the number of cones.
-    min_radius : float
-        Smallest radius [mm] included in the fit and in the residuals.
-    num_scatter_exponentials : int
-        Number of exponential terms of the scatter component (1 or 2).
-    scatter_max_radius : float
-        Largest radius [mm] included in the fit of the scatter component.
-
-    Returns
-    -------
-    CollapsedConeKernel
-        The fitted kernel. ``residual`` holds per bin the maximum absolute error of the
-        normalized cumulative energy for r >= min_radius (``primaryCum``, ``scatterCum``),
-        r <= 10 mm (``...CumNear``) and r >= 100 mm (``...CumFar``), and the negative
-        fraction of the modeled energy beyond the kernel range (``...Energy``).
-    """
-    if num_scatter_exponentials not in (1, 2):
-        raise ValueError("Only one or two scatter exponentials are supported.")
-
-    # Polar bins of cones_per_bin cones, with the solid angle bisectors as polar angles
-    primary = np.atleast_2d(edk["primary"])
-    n_cones = primary.shape[0]
-    if n_cones % num_polar_angles != 0:
-        raise ValueError(
-            f"Number of polar angles ({num_polar_angles}) must divide the number of kernel "
-            f"cones ({n_cones})."
-        )
-    cones_per_bin = n_cones // num_polar_angles
-
-    angle_edges = np.asarray(edk["angleEdges"], dtype=np.float64).ravel()
-    polar_edges = angle_edges[::cones_per_bin]
-    cos_edges = np.cos(np.deg2rad(polar_edges))
-    polar_angles = np.rad2deg(np.arccos(0.5 * (cos_edges[:-1] + cos_edges[1:])))
-
-    # Residual masks: whole fit range, near (r <= 10 mm) and far (r >= 100 mm)
-    r_outer = np.asarray(edk["radiusEdges"], dtype=np.float64).ravel()[1:]
-    in_fit = r_outer >= min_radius
-    masks = (in_fit, in_fit & (r_outer <= 10), in_fit & (r_outer >= 100))
-    suffix = ("Cum", "CumNear", "CumFar")
-
-    results = {}
-    residual = {}
-    for comp, num_terms, max_radius in (
-        ("primary", 1, np.inf),
-        ("scatter", num_scatter_exponentials, scatter_max_radius),
-    ):
-        val = np.atleast_2d(edk[comp])
-        weight = np.zeros((num_terms, num_polar_angles))
-        att = np.ones((num_terms, num_polar_angles))
-        err = np.zeros((3, num_polar_angles))
-        tail = np.zeros(num_polar_angles)
-        for p in range(num_polar_angles):
-            # Energy of the bin per radial shell and its normalized cumulative distribution
-            y = val[p * cones_per_bin : (p + 1) * cones_per_bin, :].sum(axis=0)
-            energy = y.sum()
-            if energy <= 0:
-                continue
-            cum_data = np.cumsum(y) / energy
-            sel = in_fit & (r_outer <= max_radius)
-            frac, att[:, p] = _fit_cumulative_exponentials(r_outer[sel], cum_data[sel], num_terms)
-            # The weights keep the Monte Carlo energy of the bin (no renormalization)
-            weight[:, p] = energy * frac
-            model = 1 - frac @ np.exp(-np.outer(att[:, p], r_outer))
-            for m, mask in enumerate(masks):
-                if np.any(mask):
-                    err[m, p] = np.max(np.abs(model[mask] - cum_data[mask]))
-            tail[p] = -frac @ np.exp(-att[:, p] * r_outer[-1])
-        results[comp] = (weight, att)
-        for m in range(3):
-            residual[comp + suffix[m]] = err[m]
-        residual[comp + "Energy"] = tail
-
-    return CollapsedConeKernel(
-        polar_angles=polar_angles,
-        polar_edges=polar_edges,
-        A=results["primary"][0],
-        a=results["primary"][1],
-        B=results["scatter"][0],
-        b=results["scatter"][1],
-        min_radius=float(min_radius),
-        scatter_max_radius=float(scatter_max_radius),
-        residual=residual,
-    )
-
-
-def _fminbnd(fun, lo: float, hi: float, xatol: float) -> tuple[float, float]:
-    """
-    Minimize a scalar function on an interval, like MATLAB's ``fminbnd``.
-
-    Parameters
-    ----------
-    fun : callable
-        Function of one variable.
-    lo, hi : float
-        Interval.
-    xatol : float
-        Absolute tolerance of the minimizer.
-
-    Returns
-    -------
-    tuple[float, float]
-        Minimizer and minimum.
-    """
-    if lo == hi:
-        return lo, float(fun(lo))
-    res = minimize_scalar(fun, bounds=(lo, hi), method="bounded", options={"xatol": xatol})
-    return float(res.x), float(res.fun)
-
-
-def _fit_cumulative_exponentials(
-    r: np.ndarray, cum_data: np.ndarray, num_terms: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Fit ``1 - sum_k f_k exp(-a_k r)`` to a normalized cumulative radial distribution.
-
-    Parameters
-    ----------
-    r : np.ndarray
-        Outer radii of the shells [mm].
-    cum_data : np.ndarray
-        Normalized cumulative energy at ``r``.
-    num_terms : int
-        Number of exponential terms (1 or 2).
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        Fractions ``f_k`` (summing to 1) and attenuation coefficients ``a_k`` [1/mm], in
-        descending order of the coefficients.
-    """
-    # One term: grid search of the log coefficient, refined on the neighboring interval
-    if num_terms == 1:
-
-        def cost(log_att):
-            return float(np.sum((1 - np.exp(-np.exp(log_att) * r) - cum_data) ** 2))
-
-        log_grid = np.linspace(np.log(1e-5), np.log(20), 300)
-        i_best = int(np.argmin([cost(lg) for lg in log_grid]))
-        lo = log_grid[max(i_best - 1, 0)]
-        hi = log_grid[min(i_best + 1, log_grid.size - 1)]
-        log_att, _ = _fminbnd(cost, lo, hi, 1e-10)
-        return np.ones(1), np.array([np.exp(log_att)])
-
-    # Two terms: grid search of both log coefficients (the fraction is solved for), refined
-    # with Nelder-Mead as matRad's fminsearch
-    log_grid = np.linspace(np.log(1e-5), np.log(20), 80)
-    best_cost = np.inf
-    best_log = np.zeros(2)
-    for i in range(log_grid.size):
-        for j in range(i):
-            c, _ = _two_term_cost(log_grid[[i, j]], r, cum_data)
-            if c < best_cost:
-                best_cost = c
-                best_log = log_grid[[i, j]]
-    res = minimize(
-        lambda la: _two_term_cost(la, r, cum_data)[0],
-        best_log,
-        method="Nelder-Mead",
-        options={"xatol": 1e-10, "fatol": 1e-14, "maxfev": 4000, "maxiter": 4000},
-    )
-    _, f1 = _two_term_cost(res.x, r, cum_data)
-    att = np.exp(res.x)
-    frac = np.array([f1, 1 - f1])
-    order = np.argsort(-att, kind="stable")
-    return frac[order], att[order]
-
-
-def _two_term_cost(log_att, r, cum_data) -> tuple[float, float]:
-    """
-    Least squares cost of a two term fit with the optimal fraction of the first term.
-
-    Parameters
-    ----------
-    log_att : array_like
-        Logarithms of the two attenuation coefficients.
-    r : np.ndarray
-        Outer radii of the shells [mm].
-    cum_data : np.ndarray
-        Normalized cumulative energy at ``r``.
-
-    Returns
-    -------
-    tuple[float, float]
-        The cost and the fraction of the first term, clipped to [0, 1].
-    """
-    e1 = np.exp(-np.exp(log_att[0]) * r)
-    e2 = np.exp(-np.exp(log_att[1]) * r)
-    target = 1 - cum_data - e2
-    basis = e1 - e2
-    f1 = np.sum(target * basis) / max(np.sum(basis**2), np.finfo(float).tiny)
-    f1 = min(max(f1, 0.0), 1.0)
-    cost = np.sum((f1 * e1 + (1 - f1) * e2 - (1 - cum_data)) ** 2)
-    return float(cost), float(f1)
-
-
 def cone_directions(
-    kernel: CollapsedConeKernel, num_azimuthal_angles: int
+    kernel: PhotonCollapsedConeKernel, num_azimuthal_angles: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Cone directions in the local frame (polar axis along z) and their kernel components.
 
     Parameters
     ----------
-    kernel : CollapsedConeKernel
+    kernel : PhotonCollapsedConeKernel
         The kernel.
     num_azimuthal_angles : int
         Number of azimuthal cones per polar bin.
@@ -666,7 +245,7 @@ def analytical_depth_dose(
 
 
 def broad_field_depth_dose(
-    kernel: CollapsedConeKernel, mu: float, depths: np.ndarray, dz: float, beta: float = 0.0
+    kernel: PhotonCollapsedConeKernel, mu: float, depths: np.ndarray, dz: float, beta: float = 0.0
 ) -> np.ndarray:
     """
     Collapsed cone broad field central axis depth dose in water (no inverse square).
@@ -677,7 +256,7 @@ def broad_field_depth_dose(
 
     Parameters
     ----------
-    kernel : CollapsedConeKernel
+    kernel : PhotonCollapsedConeKernel
         The kernel.
     mu : float
         Attenuation coefficient at the surface [1/mm].
@@ -721,7 +300,7 @@ def broad_field_depth_dose(
 
 
 def fit_hardening(
-    kernel: CollapsedConeKernel,
+    kernel: PhotonCollapsedConeKernel,
     reference_depth_dose,
     m: float,
     dz: float,
@@ -735,7 +314,7 @@ def fit_hardening(
 
     Parameters
     ----------
-    kernel : CollapsedConeKernel
+    kernel : PhotonCollapsedConeKernel
         The kernel.
     reference_depth_dose : callable
         Reference depth dose as a function of the depth [mm].

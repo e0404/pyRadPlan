@@ -13,7 +13,9 @@ from pyRadPlan.core.xp_utils import free_gpu_memory, scatter, to_namespace, to_n
 from pyRadPlan.core.xp_utils.typing import Array
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
-from pyRadPlan.machines import PhotonLINAC, PhotonSVDKernel
+from pyRadPlan.machines import PhotonCollapsedConeKernel, PhotonLINAC, PhotonSVDKernel
+from pyRadPlan.machines.photons import load_collapsed_cone_kernel
+from pyRadPlan.machines.photons._collapsed_cone_fit import load_kernel
 from pyRadPlan.plan import PhotonPlan
 from pyRadPlan.scenarios import Scenario
 from pyRadPlan.stf import FieldShape, SteeringInformation
@@ -129,8 +131,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
     _sample_dij = PhotonPencilBeamSVDEngine._sample_dij
 
     def __init__(self, pln: PhotonPlan = None):
-        self._kernel: Optional[cc.CollapsedConeKernel] = None  # fitted kernel
-        self._kernel_meta: dict = {}  # meta information of the kernel file
+        self._kernel: Optional[PhotonCollapsedConeKernel] = None  # fitted kernel
         self._local_directions: Optional[np.ndarray] = None  # cone directions, polar axis z
         self._direction_weights: Optional[np.ndarray] = None  # kernel weights per direction
         self._direction_att: Optional[np.ndarray] = None  # attenuation per direction
@@ -166,14 +167,14 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         if pln is not None and getattr(pln, "prop_dose_calc", None):
             kernel_file = pln.prop_dose_calc.get("kernel_file")
         try:
-            meta = cc.load_kernel_file(kernel_file).meta
+            stored = load_collapsed_cone_kernel(kernel_file)
         except (FileNotFoundError, ValueError) as err:
             return available, str(err)
 
         # The kernel is computed for one nominal energy, which every beam energy has to match
         msgs = []
         for kernel in machine.pb_kernels.values():
-            ok, energy_msg = cc.check_kernel_energy(meta, kernel.energy)
+            ok, energy_msg = stored.check_energy(kernel.energy)
             if not ok:
                 return available, energy_msg
             if energy_msg:
@@ -221,7 +222,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             )
 
         # Kernel and cone directions in the local frame (polar axis along z)
-        self._kernel, self._kernel_meta = cc.load_kernel(
+        self._kernel = load_kernel(
             self.kernel_file, self.num_polar_angles, self.num_scatter_exponentials
         )
         (
@@ -282,7 +283,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         if energy in self._energy_params:
             return self._energy_params[energy]
 
-        ok, msg = cc.check_kernel_energy(self._kernel_meta, energy)
+        ok, msg = self._kernel.check_energy(energy)
         if not ok:
             raise ValueError(msg)
         if msg:

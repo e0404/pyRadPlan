@@ -10,7 +10,7 @@ from .base import (
     create_bld,
     register_machine,
 )
-from .photons import PhotonLINAC, PhotonSVDKernel
+from .photons import PhotonLINAC, PhotonSVDKernel, PhotonCollapsedConeKernel
 from .particles import (
     ParticlePencilBeamKernel,
     LateralCutOff,
@@ -43,6 +43,7 @@ __all__ = [
     "create_bld",
     "PhotonLINAC",
     "PhotonSVDKernel",
+    "PhotonCollapsedConeKernel",
     "ParticlePencilBeamKernel",
     "LateralCutOff",
     "IonAccelerator",

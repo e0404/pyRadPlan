@@ -1,8 +1,12 @@
 """Collapsed cone kernel: file data, refit into polar bins and energy check."""
 
 import numpy as np
+import pytest
+from pydantic import ValidationError
 
-from pyRadPlan.dose.engines import _collapsed_cone as cc
+from pyRadPlan.machines import PhotonCollapsedConeKernel
+from pyRadPlan.machines.photons import load_collapsed_cone_kernel
+from pyRadPlan.machines.photons._collapsed_cone_fit import fit_collapsed_cone_kernel, load_kernel
 
 
 def _synthetic_edk():
@@ -51,19 +55,19 @@ def test_fit_kernel_synthetic():
         "primary": np.outer(cone_a, np.exp(-0.3 * r1) - np.exp(-0.3 * r2)),
         "scatter": np.outer(cone_b, np.exp(-0.02 * r1) - np.exp(-0.02 * r2)),
     }
-    kernel = cc.fit_collapsed_cone_kernel(edk, 12)
+    kernel = fit_collapsed_cone_kernel(edk, 12)
     assert kernel.num_polar_angles == 12
     np.testing.assert_allclose(kernel.polar_edges, np.arange(0, 181, 15))
-    np.testing.assert_allclose(kernel.A.sum(), edk["primary"].sum(), rtol=1e-12)
-    np.testing.assert_allclose(kernel.B.sum(), edk["scatter"].sum(), rtol=1e-12)
-    np.testing.assert_allclose(kernel.a, 0.3, rtol=1e-4)
-    np.testing.assert_allclose(kernel.b, 0.02, rtol=1e-3)
+    np.testing.assert_allclose(kernel.primary_weights.sum(), edk["primary"].sum(), rtol=1e-12)
+    np.testing.assert_allclose(kernel.scatter_weights.sum(), edk["scatter"].sum(), rtol=1e-12)
+    np.testing.assert_allclose(kernel.primary_attenuations, 0.3, rtol=1e-4)
+    np.testing.assert_allclose(kernel.scatter_attenuations, 0.02, rtol=1e-3)
     assert np.all(kernel.residual["primaryCum"] < 1e-4)
 
-    kernel = cc.fit_collapsed_cone_kernel(edk, 12, 1.5, 1, 200)
+    kernel = fit_collapsed_cone_kernel(edk, 12, 1.5, 1, 200)
     assert kernel.min_radius == 1.5
     assert kernel.scatter_max_radius == 200
-    np.testing.assert_allclose(kernel.b, 0.02, rtol=1e-3)
+    np.testing.assert_allclose(kernel.scatter_attenuations, 0.02, rtol=1e-3)
 
 
 def test_fit_kernel_two_scatter_terms():
@@ -79,31 +83,70 @@ def test_fit_kernel_two_scatter_terms():
         "primary": 0.02 * np.outer(np.ones(48), shell(0.3)),
         "scatter": np.outer(np.ones(48), 0.006 * shell(0.1) + 0.004 * shell(0.02)),
     }
-    kernel = cc.fit_collapsed_cone_kernel(edk, 12, 0, 2)
-    assert kernel.B.shape == (2, 12)
-    np.testing.assert_allclose(kernel.B.sum(), edk["scatter"].sum(), rtol=1e-10)
-    np.testing.assert_allclose(kernel.b[0], 0.1, rtol=0.02)
+    kernel = fit_collapsed_cone_kernel(edk, 12, 0, 2)
+    assert kernel.scatter_weights.shape == (2, 12)
+    np.testing.assert_allclose(kernel.scatter_weights.sum(), edk["scatter"].sum(), rtol=1e-10)
+    np.testing.assert_allclose(kernel.scatter_attenuations[0], 0.1, rtol=0.02)
 
 
 def test_default_kernel_data():
     """The 6 MV kernel is valid and its energy does not change with refitting."""
-    kernel, meta = cc.load_kernel(None, 12)
-    assert kernel.A.shape == (1, 12)
-    assert np.all((kernel.A >= 0) & (kernel.B >= 0) & (kernel.a > 0) & (kernel.b > 0))
-    total = kernel.A.sum() + kernel.B.sum()
+    kernel = load_kernel(None, 12)
+    assert kernel.primary_weights.shape == (12,)
+    assert np.all(
+        (kernel.primary_weights >= 0)
+        & (kernel.scatter_weights >= 0)
+        & (kernel.primary_attenuations > 0)
+        & (kernel.scatter_attenuations > 0)
+    )
+    total = kernel.primary_weights.sum() + kernel.scatter_weights.sum()
     assert 0.9 < total < 1
-    assert meta["nominalEnergy"] == 6
-    kernel6, _ = cc.load_kernel(None, 6)
-    np.testing.assert_allclose(kernel6.A.sum() + kernel6.B.sum(), total, rtol=1e-10)
-    kernel2, _ = cc.load_kernel(None, 12, 2)
-    assert kernel2.B.shape == (2, 12)
-    np.testing.assert_allclose(kernel2.A.sum() + kernel2.B.sum(), total, rtol=1e-10)
+    assert kernel.nominal_energy == 6
+    kernel6 = load_kernel(None, 6)
+    np.testing.assert_allclose(
+        kernel6.primary_weights.sum() + kernel6.scatter_weights.sum(), total, rtol=1e-10
+    )
+    kernel2 = load_kernel(None, 12, 2)
+    assert kernel2.scatter_weights.shape == (2, 12)
+    np.testing.assert_allclose(
+        kernel2.primary_weights.sum() + kernel2.scatter_weights.sum(), total, rtol=1e-10
+    )
 
 
 def test_check_kernel_energy():
-    """Matching, mismatching and unknown kernel energies."""
-    assert cc.check_kernel_energy({"nominalEnergy": 6.0}, 6.0) == (True, "")
-    ok, msg = cc.check_kernel_energy({"nominalEnergy": 6.0}, 18.0)
-    assert not ok and "18" in msg
-    ok, msg = cc.check_kernel_energy({}, 6.0)
-    assert ok and msg
+    """A kernel of another nominal energy is refused, an unknown energy only warned about."""
+    kernel = load_collapsed_cone_kernel()
+    assert kernel.check_energy(6.0) == (True, "")
+    ok, msg = kernel.check_energy(18.0)
+    assert not ok and "does not match" in msg
+    ok, msg = kernel.model_copy(update={"nominal_energy": None}).check_energy(6.0)
+    assert ok and "unknown" in msg
+
+
+def test_kernel_model_round_trip():
+    """The kernel validates its own dump with matRad's field names (A, a, B, b)."""
+    kernel = load_kernel(None, 6, 2)
+    data = kernel.model_dump(by_alias=True)
+    assert {"A", "a", "B", "b", "polarAngles", "polarEdges"} <= set(data)
+    copy = PhotonCollapsedConeKernel.model_validate(data)
+    np.testing.assert_array_equal(copy.weights, kernel.weights)
+    np.testing.assert_array_equal(copy.attenuations, kernel.attenuations)
+    assert copy.num_polar_angles == 6 and copy.num_scatter_exponentials == 2
+
+
+def test_kernel_model_rejects_inconsistent_shapes():
+    """Bins, edges and components have to match."""
+    kernel = load_collapsed_cone_kernel()
+    data = kernel.model_dump(by_alias=True)
+    with pytest.raises(ValidationError, match="one entry more"):
+        PhotonCollapsedConeKernel.model_validate({**data, "polarEdges": data["polarEdges"][:-1]})
+    with pytest.raises(ValidationError, match="one entry per polar bin"):
+        PhotonCollapsedConeKernel.model_validate({**data, "A": data["A"][:-1]})
+    with pytest.raises(ValidationError, match="do not match"):
+        PhotonCollapsedConeKernel.model_validate({**data, "b": np.vstack([data["b"], data["b"]])})
+
+
+def test_missing_kernel_file():
+    """A missing or foreign file is reported."""
+    with pytest.raises(FileNotFoundError):
+        load_collapsed_cone_kernel("does_not_exist.mat")

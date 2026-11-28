@@ -15,6 +15,8 @@ from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import PhotonCollapsedConeEngine, get_engine
 from pyRadPlan.dose.engines import _collapsed_cone as cc
 from pyRadPlan.machines import load_from_name
+from pyRadPlan.machines.photons._collapsed_cone_fit import load_kernel
+from pyRadPlan.machines.photons._collapsed_cone_kernel import DEFAULT_KERNEL_FILE
 
 
 def _skip_unavailable(name):
@@ -78,7 +80,7 @@ def test_hardening_fit():
             svd.kernel_data[ix], svd.kernel_pos, svd.kernel_betas, svd.m, d
         )
 
-    kernel, _ = cc.load_kernel(None, 12)
+    kernel = load_kernel(None, 12)
     mu0, beta = cc.fit_hardening(kernel, reference, svd.m, 5, 100)
     assert mu0 > 0 and beta > 0
     depths = np.array([30.0, 100.0, 200.0, 300.0])
@@ -296,7 +298,7 @@ def test_depth_dose_matches_svd(gantry_angle):
 
 def test_kernel_energy_mismatch_raises(tmp_path, water_box):
     """A kernel of another energy than the beam is refused."""
-    data = read_mat(str(cc.DEFAULT_KERNEL_FILE))
+    data = read_mat(str(DEFAULT_KERNEL_FILE))
     data["ccKernel"]["meta"]["nominalEnergy"] = 18.0
     kernel_file = tmp_path / "kernel_18MV.mat"
     scipy.io.savemat(kernel_file, {"ccKernel": data["ccKernel"]})
