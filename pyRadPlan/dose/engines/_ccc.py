@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from typing import Annotated, Any, ClassVar, Literal, Optional, TypedDict, cast
+from typing import Annotated, Any, ClassVar, Literal, Optional, TypedDict, Union, cast
 import logging
 import time
 
@@ -166,15 +166,19 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         self._rng = np.random.default_rng(self.random_seed)
 
     @staticmethod
-    def is_available(pln: Optional[PhotonPlan], machine: Any) -> tuple[bool, str]:
+    def is_available(pln: Union[PhotonPlan, str, None], machine: Any = None) -> tuple[bool, str]:
         """
-        Check whether the engine can compute the plan with the machine.
+        Check whether the engine can compute the plan (with the machine, if given).
+
+        The engine factory calls this with ``machine=None`` and a plan or a radiation mode; the
+        kernel file is then checked, the energies of the machine only when a machine is given.
 
         Parameters
         ----------
-        pln : PhotonPlan, optional
-            The plan, whose ``prop_dose_calc["kernel_file"]`` selects the kernel.
-        machine : Any
+        pln : PhotonPlan or str, optional
+            The plan, whose ``prop_dose_calc["kernel_file"]`` selects the kernel, or a
+            radiation mode.
+        machine : Any, optional
             The machine.
 
         Returns
@@ -182,24 +186,25 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         tuple[bool, str]
             Availability and a message with the reason or the warnings.
         """
-        available = False
-        if not isinstance(machine, PhotonLINAC) or not machine.pb_kernels:
-            return available, "Machine has no photon pencil beam data."
-
         kernel_file = None
-        if pln is not None and getattr(pln, "prop_dose_calc", None):
-            kernel_file = pln.prop_dose_calc.get("kernel_file")
+        prop_dose_calc = getattr(pln, "prop_dose_calc", None)
+        if isinstance(prop_dose_calc, dict):
+            kernel_file = prop_dose_calc.get("kernel_file")
         try:
             stored = load_collapsed_cone_kernel(kernel_file)
         except (FileNotFoundError, ValueError) as err:
-            return available, str(err)
+            return False, str(err)
+        if machine is None:
+            return True, ""
+        if not isinstance(machine, PhotonLINAC) or not machine.pb_kernels:
+            return False, "Machine has no photon pencil beam data."
 
         # The kernel is computed for one nominal energy, which every beam energy has to match
         msgs = []
         for kernel in machine.pb_kernels.values():
             ok, energy_msg = stored.check_energy(kernel.energy)
             if not ok:
-                return available, energy_msg
+                return False, energy_msg
             if energy_msg:
                 msgs.append(energy_msg)
         return True, " ".join(msgs)

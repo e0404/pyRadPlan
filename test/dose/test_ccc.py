@@ -12,7 +12,7 @@ from pyRadPlan.core.xp_utils import cupy_available, to_numpy
 from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_cst
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
-from pyRadPlan.dose.engines import PhotonCollapsedConeEngine, get_engine
+from pyRadPlan.dose.engines import PhotonCollapsedConeEngine, get_available_engines, get_engine
 from pyRadPlan.dose.engines._collapsed_cone import (
     analytical_depth_dose,
     broad_field_depth_dose,
@@ -127,6 +127,17 @@ def test_is_available():
     pln.prop_dose_calc = {"kernel_file": "does_not_exist.mat"}
     available, msg = PhotonCollapsedConeEngine.is_available(pln, machine)
     assert not available and "not found" in msg
+
+
+def test_engine_factory_offers_the_engine():
+    """The factory, which checks the availability without a machine, selects the engine."""
+    assert "CCC" in get_available_engines("photons")
+    assert PhotonCollapsedConeEngine.is_available(PhotonPlan(machine="Generic"), None) == (
+        True,
+        "",
+    )
+    pln = PhotonPlan(machine="Generic", prop_dose_calc={"engine": "CCC"})
+    assert isinstance(get_engine(pln), PhotonCollapsedConeEngine)
 
 
 def _water_box(num_vox, res, target_size, low_density_rows=None):
