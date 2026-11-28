@@ -7,7 +7,9 @@ from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_cst
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import get_engine
-from pyRadPlan.machines import create_bld, load_from_name
+from pyRadPlan.geometry import lps
+from pyRadPlan.machines import MLC, create_bld, load_from_name
+from pyRadPlan.result._beam_sequence import BeamSequence
 from pyRadPlan.visualization._plot_slice import plot_slice
 
 
@@ -53,8 +55,7 @@ def test_photons_field_based():
         "gantry_angles": [0.0],
         "couch_angles": [0.0],
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": [mlc],
+        "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0])],
         "resolution": 2.0,
         "energy": 6.0,
     }
@@ -84,6 +85,53 @@ def test_photons_field_based():
     #     plt_show = True,
     #     use_global_max = False,
     # )
+
+
+def _mlc(opening: float) -> MLC:
+    boundaries = np.array([-20.0, -10.0, 0.0, 10.0, 20.0])
+    positions = np.tile([-opening, opening], (len(boundaries), 1))
+    return MLC(
+        device_type="MLCX",
+        leaf_position_boundaries=boundaries,
+        leaf_positions=positions,
+        leaf_width=10.0,
+    )
+
+
+def _forward_dose(ct, cst, mlc_sequence, weights, extra_blds=None):
+    pln = PhotonPlan(machine="Generic")
+    beam_sequence = BeamSequence.from_shapes(mlc_sequence, weights, jaws=extra_blds)
+    pln.prop_stf = {
+        "gantry_angles": [0.0],
+        "couch_angles": [0.0],
+        "generator": "photonSingleBixel",
+        "beam_sequences": [beam_sequence],
+        "resolution": 1.0,
+        "energy": 6.0,
+    }
+    # Lateral dij sampling randomizes the dose tail, which breaks dose linearity
+    pln.prop_dose_calc["enable_dij_sampling"] = False
+    stf = generate_stf(ct, cst, pln)
+    result = calc_dose_forward(ct, cst, stf, pln)
+    return sitk.GetArrayFromImage(result.physical_dose.values), stf
+
+
+def test_grouped_shapes_dose_equals_sum_of_individual_shape_doses():
+    ct, cst = load_tg119()
+
+    mlc_a = _mlc(opening=15.0)
+    mlc_b = _mlc(opening=8.0)
+    weight_a, weight_b = 1.0, 0.6
+
+    combined_dose, stf_combined = _forward_dose(ct, cst, [mlc_a, mlc_b], [weight_a, weight_b])
+    assert len(stf_combined.beams[0].rays) == 1  # grouped into one ray
+
+    dose_a, stf_a = _forward_dose(ct, cst, [mlc_a], [weight_a])
+    dose_b, stf_b = _forward_dose(ct, cst, [mlc_b], [weight_b])
+    assert len(stf_a.beams[0].rays) == 1
+    assert len(stf_b.beams[0].rays) == 1
+
+    np.testing.assert_allclose(combined_dose, dose_a + dose_b, rtol=1e-4, atol=1e-6)
 
 
 def test_bixel_based_lateral_cutoff_includes_half_diagonal(test_data_photons):
@@ -262,8 +310,7 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
             "gantry_angles": [0.0],
             "couch_angles": [0.0],
             "generator": "photonSingleBixel",
-            "field_based": True,
-            "blds": [mlc],
+            "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0])],
             "resolution": 1.0,
             "energy": 6.0,
         }
@@ -274,24 +321,42 @@ def test_field_dose_mirror_symmetric_with_kernel_cutoff():
     assert _max_mirror_difference(sitk.GetArrayFromImage(dose)) < 1e-5
 
 
+@pytest.mark.parametrize("gantry_angle", [0.0, 90.0, 225.0])
 @pytest.mark.parametrize(
     ("open_half", "expected_shift"),
     [
-        # IEC Y points toward the gantry, i.e. superior (LPS +z) for a head-first supine patient
+        # Beam limiting devices are positioned in the beam's eye view frame of the ray matrix:
+        # at gantry and couch angle 0, Y is LPS +z ...
         ("+Y", (0.0, 0.0, 1.0)),
-        # IEC X points to the patient's left (LPS +x) at gantry and couch angle 0 (HFS)
+        # ... and X is LPS +x. For a head-first supine patient these are IEC 61217 Y (toward
+        # the gantry) and X (the patient's left) of DICOM RT, which agrees with the dose of a
+        # planning system for single fields with asymmetric jaws and an MLC shape (XiO 4.64
+        # phantom plans of the SlicerRtData repository).
         ("+X", (1.0, 0.0, 0.0)),
+        # Jaws only, with the MLC fully open
+        ("JAWX", (1.0, 0.0, 0.0)),
+        ("JAWY", (0.0, 0.0, 1.0)),
     ],
 )
-def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift):
-    """The dose of a half-open MLC field lies on the side of the opening."""
+def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift, gantry_angle):
+    """The dose of a half-open MLC or jaw field lies on the side of the opening.
+
+    The shift is given in the beam's eye view at gantry angle 0 and rotates with the gantry,
+    so the field shape is applied in the beam's eye view, not in LPS.
+    """
     ct, cst = water_sphere
     leaf_width = 5.0
     boundaries = np.arange(-20.0, 20.0, leaf_width)
+    jaws = []
     if open_half == "+Y":
         positions = [[-20.0, 20.0] if b >= 0 else [0.0, 0.0] for b in boundaries]
-    else:
+    elif open_half == "+X":
         positions = [[0.0, 20.0]] * len(boundaries)
+    else:
+        positions = [[-20.0, 20.0]] * len(boundaries)
+        jaws = [
+            create_bld({"device_type": open_half, "positions": [0.0, 20.0], "field_width": 40.0})
+        ]
     mlc = create_bld(
         {
             "device_type": "MLC",
@@ -304,11 +369,10 @@ def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift)
     )
     pln = PhotonPlan(machine="Generic")
     pln.prop_stf = {
-        "gantry_angles": [0.0],
+        "gantry_angles": [gantry_angle],
         "couch_angles": [0.0],
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": [mlc],
+        "beam_sequences": [BeamSequence.from_shapes([mlc], [1.0], jaws=jaws)],
         "resolution": 1.0,
         "energy": 6.0,
     }
@@ -325,11 +389,15 @@ def test_field_dose_follows_mlc_opening(water_sphere, open_half, expected_shift)
     )
     shift = centroid - center
 
-    lateral = [0, 2]
-    expected = np.asarray(expected_shift)[lateral]
+    # Lateral axes of the beam (ray_pos_bev x and z) in LPS; the depth axis is left out, as
+    # the depth dose moves the centroid along the beam
+    rotation = lps.get_beam_rotation_matrix(gantry_angle, 0.0)
+    lateral = rotation[:, [0, 2]]
+    shift_bev = lateral.T @ shift
+    expected = np.asarray(expected_shift)[[0, 2]]
     # The centroid of the 20 mm wide half field lies about 10 mm off the central axis
-    assert shift[lateral] @ expected > 5.0
-    assert np.abs(shift[lateral] - (shift[lateral] @ expected) * expected).max() < 1.0
+    assert shift_bev @ expected > 5.0
+    assert np.abs(shift_bev - (shift_bev @ expected) * expected).max() < 1.0
 
 
 def test_dij_sampling_keeps_total_dose(test_data_photons):

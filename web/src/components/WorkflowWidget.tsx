@@ -74,6 +74,9 @@ export function WorkflowWidget() {
   const dijSupported = hasMethod("data.load_dij");
   const dijEnabled = idle && dijSupported && state?.actions.load_dij !== false;
   const snapshotEnabled = idle && hasMethod("workflow.snapshot") && Boolean(state?.actions.snapshot);
+  const sequencing = state?.sequencing;
+  const sequencingSupported = hasMethod("workflow.sequence") && (!connected || sequencing !== undefined);
+  const sequenceTip = !sequencingSupported ? "This backend cannot run sequencing." : sequencing?.available ? undefined : (sequencing?.reason ?? undefined);
 
   /** Qt resolves unapplied plan edits before these steps (optimize and recalc outdate the dij). */
   const guarded = (step: string, outdatesInput: boolean, run: () => unknown) => async () => {
@@ -182,7 +185,15 @@ export function WorkflowWidget() {
           Import from Binary
         </button>
         <span />
-        <span />
+        <button
+          className="btn"
+          disabled={!idle || !sequencingSupported || !sequencing?.available}
+          title={sequenceTip}
+          onClick={() => void guarded("Run Sequencing", false, () => actions.sequence())()}
+          data-testid="btn-sequence"
+        >
+          Run Sequencing
+        </button>
         <span />
       </div>
 

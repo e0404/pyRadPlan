@@ -117,15 +117,42 @@ production host must send the same headers (or use a service-worker shim such as
 - The workflow grid follows the Qt widget's columns; the protocol's five stages map to its three
   dots: Loading = `data`, Dose Influence = worst of `stf`/`dij` (missing if `dij` is missing),
   Result Computation = `optimization`. The buttons are the Qt ones in the Qt places (Load File /
-  Load Folder / Import from Binary, Calc. Dose Influence / Load Dij, Optimize / Recalculate Dose,
-  Snapshot Result); there is no Run All, Generate STF or phantom selector, phantoms are opened from
-  File > Open Example Phantom as in Qt. "Load Folder" (capability reason) and "Import from Binary"
+  Load Folder / Import from Binary, Calc. Dose Influence / Load Dij, Optimize / Recalculate Dose /
+  Run Sequencing, Snapshot Result); there is no Run All, Generate STF or phantom selector, phantoms
+  are opened from File > Open Example Phantom as in Qt. "Load Folder" (capability reason) and "Import from Binary"
   ("Not yet implemented", as Qt) are disabled. While busy the status label shows the progress label,
   detail and fraction (Qt shows the progress levels there); there is no separate detail line.
   `workflow.run_all` and `workflow.generate_stf` stay protocol methods (tests, app smoke).
   Calc. Dose Influence generates the stf again every time (v1 amendment 20), so its dot turns
   green for both `stf` and `dij`; a structure edit leaves the stf "done" (as in Qt) and the next
   calculation still places the beams at the new automatic isocenter.
+- Run Sequencing (amendment 29) is enabled by `state.sequencing.available`, not by
+  `state.actions`; while disabled its tooltip is `state.sequencing.reason`. It runs
+  `workflow.sequence` like the other steps (busy bar, Stop, unapplied plan edits offered first)
+  and the views refetch by revision: the active result gains the `"<identifier>_sequenced"`
+  quantities, which `results/resultGroups.ts` names "<name> (sequenced)" for backends without
+  `state.results`. A backend without `state.sequencing` or `workflow.sequence` leaves the button
+  disabled.
+- Show Sequence (amendment 30; Qt `SequenceWindow` with `ApertureViewerWidget`) is enabled by
+  `state.sequencing.sequenced` (and `view.sequence` among `app.info.methods`).
+  `components/sequence/SequenceWindow.tsx` is a non-modal window like the analysis window
+  (`sequenceOpen` in the viewer slice). `showSequence()` (`store/appStore.ts`) opens it on the
+  beam of the shown per-beam quantity (`"…_beam <n>"`); `actions.sequence` calls it after a
+  successful run, as Qt opens the window when sequencing finishes. The window fetches
+  `view.sequence` whenever `revisions.workspace.result` changes, resets its view options and
+  players with each fetched sequence, and closes when the active result has none (`sequenced`
+  false, or `PreconditionError` / `no_sequence`). Every beam tab keeps its own mounted player
+  (shape, Play, speed, Loop), so a hidden tab keeps playing as in Qt. What is drawn is computed
+  by pure functions in `sequenceModel.ts`, one per helper of
+  `pyRadPlan/visualization/_plot_aperture_info.py` (leaf rows, blocked rectangles, weight
+  colour, MLC outlines, bixel grid, colour limits, dwell time, titles incl. Python's `%.2g`);
+  `SequencePlot.tsx` draws both panels on one canvas with the plot theme. The vertical axis
+  increases upwards: row 0 of a fluence map and the first leaf row are the lowest stack
+  position, bixels without a ray (NaN) stay empty, and the target outline is the 0.5
+  marching-squares contour of `target.mask` (bin centres at `origin + index * spacing`). The
+  aperture panel fills its half (matplotlib `aspect="auto"`), the fluence panel keeps the
+  aspect ratio. Mock: `api/mock/sequence.ts` derives shapes, fluence maps and target from the
+  phantom's target and the plan's beams.
 - Structure visibility starts from `structures[].visible` and stays a viewer setting (not sent back).
 - Volume `range` entries that are `null` fall back to `[0, 1]` (quantity) / `[-1000, 1000]` (CT).
 - `iso_center` as a list of per-beam points: the viewer and the plan form show the first one; the plan
@@ -206,6 +233,10 @@ Files: `src/api/protocol/plan.ts` (v1 types; the shared v1 block lives in `proto
   the pending re-list so a click right after a mode change cannot send the old mode's engine. The
   tissue dialog and its "…" checks send the unapplied form as `draft`. The form registers as
   pending-changes source and as beam editor and reports edited angles with `setDraftBeams`.
+  The sequencing row (Run sequencing, sequencer, "…") lists `plan.options.sequencers` and is
+  disabled for a radiation mode without any (`planModel.applySequencers`, Qt
+  `_update_sequencing_availability`); its three fields are tracked like the others and sent
+  together as `plan.set {sequencing}`, which outdates no stage.
 - **Objectives** read `structureDetails` (filled from `cst.get` by `revisions.ts`) and merge the
   `structure` returned by every `objectives.*` write.
 - **Status window** opens when an optimization starts (`busy` label or the first `progress.data`
@@ -219,7 +250,9 @@ Files: `src/api/protocol/plan.ts` (v1 types; the shared v1 block lives in `proto
 `npm run e2e:pyodide` (`e2e/pyodide.mjs`) clicks through the GUI on TG119 with the web profile
 (5 × 5 × 5 mm dose grid, `total` doses) against the real worker: boot, phantom, plan widget and its
 engine / scenario / optimization dialogs, objectives (add, edit, change type, remove), Calc. Dose
-Influence + Optimize with the status window, 5 beams, viewer (beams, quantity selector incl.
+Influence + Optimize with the status window, sequencing of the default plan (sequencer form, Run
+Sequencing, the sequenced dose, the sequence window checked against the `view.sequence` data),
+5 beams, viewer (beams, quantity selector incl.
 per-beam, isolines, planes), snapshot + analysis compare, VOI edit, every available File-menu save,
 reload of workspace pickle / plan .mat / Load Dij, base data add + remove, Preferences, licenses,
 About, log level, dark mode, educational mode, a robust 1-beam plan (worst-case grid, voxel-wise

@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from ._forms import FormValidationError, build_form, comparison_key, jsonable, validate_values
 from ._plan import DEFAULT_PLAN, plan_summary
+from ._stages import sequencing_settings
 
 logger = logging.getLogger(__name__)
 
@@ -506,7 +507,48 @@ def plan_form_values(pln: Any) -> Optional[dict[str, Any]]:
             "values": {} if model == "explicit" else _scenario_overrides(pln.scenarios),
         },
         **optimization_change(problem, values),
+        "sequencing": sequencing_change(pln),
     }
+
+
+def sequencing_change(pln: Any) -> dict[str, Any]:
+    """``plan.set`` ``sequencing`` param of a plan: ``run``, ``sequencer`` and its ``values``.
+
+    A plan that does not ask for sequencing has no sequencer here, as its form shows none.
+    """
+    run, name, values = sequencing_settings(pln)
+    if not run:
+        return {"run": False, "sequencer": None, "values": {}}
+    return {"run": True, "sequencer": name, "values": deepcopy(values)}
+
+
+def _prop_seq(pln: Any, mode: str, same_mode: bool, sequencing: Mapping[str, Any]) -> dict:
+    from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+    def invalid(message: str) -> FormValidationError:
+        return FormValidationError(message, [{"field": "sequencing", "message": message}])
+
+    unknown = sorted(set(sequencing) - {"run", "sequencer", "values"})
+    if unknown:
+        raise invalid(f"sequencing takes run, sequencer and values, not {unknown}")
+    sequencers = get_available_sequencers(mode)
+    # Only the entries the form edits are replaced; others are kept.
+    prop_seq = deepcopy(dict(pln.prop_seq or {})) if same_mode else {}
+    edited = {"run_sequencing", "sequencer"}.union(
+        *(cls.config_model().model_fields for cls in sequencers.values())
+    )
+    for key in edited:
+        prop_seq.pop(key, None)
+    if not sequencing.get("run"):
+        return prop_seq
+    name = sequencing.get("sequencer")
+    if name not in sequencers:
+        raise invalid(f"sequencer {name!r} is not available for {mode}")
+    values = dict(sequencing.get("values") or {})
+    if values:
+        values = _check_form("sequencer", name, mode, values)
+    prop_seq.update(run_sequencing=True, sequencer=name, **values)
+    return prop_seq
 
 
 #: ``plan.set`` params sent together: couch angles follow the gantry angles, an engine's
@@ -673,6 +715,7 @@ def plan_detail(pln: Any, cst: Any) -> Optional[dict[str, Any]]:
         },
         "problem": {"name": problem, "values": jsonable(problem_values)},
         "solver": {"name": solver, "values": jsonable(solver_values)},
+        "sequencing": jsonable(sequencing_change(pln)),
     }
 
 
@@ -749,8 +792,6 @@ def _plan_fields(locked: set[str], default_plan: Mapping[str, Any]) -> list[dict
             choices=[{"value": "auto", "label": "auto"}],
             **off,
         ),  # fmt: skip
-        field("run_sequencing", "Run sequencing", "bool", default=False, **off),
-        field("sequencing_levels", "Levels", "int", default=7, min=1, max=100, **off),
         field("run_dao", "Run DAO", "bool", default=False, **off),
         field("conformal", "3D conformal", "bool", default=False, **off),
     ]
@@ -794,6 +835,16 @@ def engine_choices(radiation_mode: str) -> list[dict]:
             )  # fmt: skip
         )
     return engines
+
+
+def sequencer_choices(radiation_mode: str) -> list[dict]:
+    """Sequencers of a radiation mode (none for the modes without sequencing)."""
+    from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+    return [
+        _choice(name, getattr(cls, "name", name) or name, name)
+        for name, cls in get_available_sequencers(radiation_mode).items()
+    ]
 
 
 def scenario_choices(explicit: bool = False) -> list[dict]:
@@ -919,6 +970,7 @@ def plan_options(
         "scenario_models": scenario_choices(explicit),
         "problems": problem_choices(mode),
         "solvers": solver_choices(),
+        "sequencers": sequencer_choices(mode),
         "default_solver": default_solver(first_problem) if first_problem else None,
         "beam_presets": presets,
         "fields": _plan_fields(locked, default_plan),
@@ -1067,6 +1119,13 @@ def _form_class(kind: str, name: str, mode: str) -> type:
         if cls is None:
             raise ValueError(f"Solver {name!r} is not available")
         return cls
+    if kind == "sequencer":
+        from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+        cls = get_available_sequencers(mode).get(name)
+        if cls is None:
+            raise ValueError(f"No sequencer {name!r} for {mode}")
+        return cls
     raise ValueError(f"Unknown form kind {kind!r}")
 
 
@@ -1085,6 +1144,8 @@ def form_model(kind: str, name: str, mode: str) -> tuple[type, str, frozenset, d
     if kind == "problem":
         exclude = PROBLEM_FORM_EXCLUDE | frozenset(getattr(cls, "solver_properties", ()))
         return cls.config_model(), f"Configure {cls.name}", exclude, {}
+    if kind == "sequencer":
+        return cls.config_model(), f"Configure {cls.name}", frozenset(), {}
     return cls.config_model(), f"Configure {cls.name}", frozenset(), _solver_defaults(cls)
 
 
@@ -1174,6 +1235,9 @@ def _plan_values(pln: Any, kind: str, name: str, mode: str) -> dict[str, Any]:
         if getattr(pln.scenarios, "short_name", None) != name:
             return {}
         return _scenario_overrides(pln.scenarios)
+    if kind == "sequencer":
+        _, sequencer, sequencer_values = sequencing_settings(pln)
+        return dict(sequencer_values) if sequencer == name else {}
     problem, values = _problem_of(pln, mode)
     if kind == "problem":
         values.pop("solver", None)
@@ -1290,6 +1354,10 @@ def resolve_changes(pln: Any, changes: Mapping[str, Any]) -> tuple[dict, dict]:
             if values:
                 _check_form("scenario", model, mode, values)
             overrides["scenarios"] = {"model": model, **values}
+
+    sequencing = changes.pop("sequencing", None)
+    if sequencing is not None:
+        overrides["prop_seq"] = _prop_seq(pln, mode, same_mode, sequencing)
 
     problem = changes.pop("problem", None)
     solver = changes.pop("solver", None)

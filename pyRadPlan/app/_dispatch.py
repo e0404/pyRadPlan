@@ -230,6 +230,12 @@ def _recalc(session: Session, physical_only: bool = False) -> dict:
     return session.state()
 
 
+@method("workflow.sequence")
+def _sequence(session: Session) -> dict:
+    session.sequence()
+    return session.state()
+
+
 @method("workflow.run_all")
 def _run_all(
     session: Session,
@@ -374,6 +380,11 @@ def _view_beams(session: Session, draft: Optional[dict] = None) -> dict:
 
     ws = session.workspace
     return beam_geometry(ws.pln, ws.stf, ws.cst, draft)
+
+
+@method("view.sequence")
+def _view_sequence(session: Session) -> dict:
+    return session.sequence_view()
 
 
 @method("analysis.qi")

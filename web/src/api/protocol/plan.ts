@@ -37,6 +37,16 @@ export interface PlanDetail extends PlanSummary {
   scenario: { model: string; values: Record<string, unknown> };
   problem: { name: string; values: Record<string, unknown> };
   solver: NamedValues;
+  /** Amendment 27; absent from older backends. */
+  sequencing?: SequencingSettings;
+}
+
+/** The plan's sequencing settings (`prop_seq`), as `plan.set` takes and `plan.get {detail}` returns them. */
+export interface SequencingSettings {
+  run: boolean;
+  /** null while `run` is false. */
+  sequencer: string | null;
+  values?: Record<string, unknown>;
 }
 
 /** Value of the "(from plan)" machine entry (v1 amendment 11). */
@@ -109,6 +119,8 @@ export interface PlanOptions {
   bio_selection?: BioSelection;
   scenario_models: Choice[];
   problems: Choice[];
+  /** Amendment 27: empty for radiation modes without sequencing; absent from older backends. */
+  sequencers?: Choice[];
   solvers: SolverChoice[];
   default_solver: string;
   beam_presets: BeamPreset[];
@@ -116,7 +128,7 @@ export interface PlanOptions {
   fields: FieldDescriptor[];
 }
 
-export type FormKind = "engine" | "bio_model" | "scenario" | "problem" | "solver";
+export type FormKind = "engine" | "bio_model" | "scenario" | "problem" | "solver" | "sequencer";
 
 /**
  * Suggested values per field of an algorithm form (`plan.form_choices`, v1 amendment 28): what
@@ -138,6 +150,7 @@ export type PlanSetParams = Partial<Omit<PlanSummary, "bio_model">> & {
   scenarios?: { model: string; values: Record<string, unknown> };
   problem?: { name: string; values: Record<string, unknown> };
   solver?: string | { name: string; values: Record<string, unknown> };
+  sequencing?: SequencingSettings;
 };
 
 export interface TissueCheckResult {
@@ -294,6 +307,7 @@ export interface PlanMethods {
     params: { solver?: string; max_iter?: number };
     result: SessionState & { optimization?: OptimizationSummary };
   };
+  "workflow.sequence": { params: Record<string, never>; result: SessionState };
   "session.pause": { params: Record<string, never>; result: Record<string, never> };
   "session.resume": { params: Record<string, never>; result: Record<string, never> };
 }

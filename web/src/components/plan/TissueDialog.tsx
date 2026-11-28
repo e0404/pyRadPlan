@@ -103,35 +103,65 @@ function rowNote(row: TissueRow): string {
 
 const fmt = (v: unknown) => (typeof v === "number" ? String(Number(v.toPrecision(6))) : v === null || v === undefined ? "" : String(v));
 
+export interface EvaluationQueue<P, R> {
+  /** Evaluates now, superseding a scheduled evaluation (the caller sends the latest rows). */
+  run(params: P): Promise<R | null>;
+  /** Evaluates after the debounce delay unless another evaluation is scheduled or run first. */
+  schedule(params: P): void;
+  cancel(): void;
+}
+
+/**
+ * Debounced evaluations of the rows. A result is applied unless a newer evaluation was started
+ * meanwhile; the result of an operation (`apply_pick`, `match`, …) always is, since it changes the rows.
+ */
+export function evaluationQueue<P extends { op?: TissueOp }, R>(
+  evaluate: (params: P) => Promise<R>,
+  onResult: (result: R, params: P) => void,
+  onError: (err: unknown) => void,
+  delayMs: number,
+): EvaluationQueue<P, R> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let seq = 0;
+  const cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  const run = async (params: P) => {
+    cancel();
+    const n = ++seq;
+    try {
+      const result = await evaluate(params);
+      if (n === seq || (params.op ?? "none") !== "none") onResult(result, params);
+      return result;
+    } catch (err) {
+      onError(err);
+      return null;
+    }
+  };
+  const schedule = (params: P) => {
+    cancel();
+    timer = setTimeout(() => void run(params), delayMs);
+  };
+  return { run, schedule, cancel };
+}
+
 /** Debounced `tissue.evaluate` of a set of rows. */
 function useTissueEvaluate(onResult: (r: TissueEvaluateResult, params: TissueEvaluateParams) => void, draft?: PlanDraftContext) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seq = useRef(0);
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  const run = useCallback(
-    async (params: TissueEvaluateParams) => {
-      const n = ++seq.current;
-      try {
-        const result = await request("tissue.evaluate", draftRef.current ? { ...params, draft: draftRef.current } : params);
-        if (n === seq.current || params.op) onResult(result, params);
-        return result;
-      } catch (err) {
-        log("warning", `Tissue parameters: ${errorText(err)}`);
-        return null;
-      }
-    },
-    [onResult],
+  const onResultRef = useRef(onResult);
+  onResultRef.current = onResult;
+  const [queue] = useState(() =>
+    evaluationQueue<TissueEvaluateParams, TissueEvaluateResult>(
+      (params) => request("tissue.evaluate", draftRef.current ? { ...params, draft: draftRef.current } : params),
+      (result, params) => onResultRef.current(result, params),
+      (err) => log("warning", `Tissue parameters: ${errorText(err)}`),
+      EVALUATE_DELAY_MS,
+    ),
   );
-  const schedule = useCallback(
-    (params: TissueEvaluateParams) => {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => void run(params), EVALUATE_DELAY_MS);
-    },
-    [run],
-  );
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  return { run, schedule };
+  useEffect(() => queue.cancel, [queue]);
+  return queue;
 }
 
 // ---------------------------------------------------------------------------

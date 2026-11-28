@@ -183,6 +183,84 @@ def available_actions(present: Iterable[str]) -> dict[str, bool]:
     }
 
 
+def sequencing_settings(pln: Any) -> tuple[bool, Optional[str], dict[str, Any]]:
+    """Whether a plan asks for sequencing, its sequencer and that sequencer's settings.
+
+    The settings are the ``prop_seq`` entries of the sequencer's configuration, as stored.
+    """
+    prop_seq = getattr(pln, "prop_seq", None)
+    if not isinstance(prop_seq, Mapping):
+        return False, None, {}
+    run = bool(prop_seq.get("run_sequencing"))
+    name = prop_seq.get("sequencer")
+    if not isinstance(name, str):
+        return run, None, {}
+    from pyRadPlan.sequencing.sequencer import get_available_sequencers  # noqa: PLC0415
+
+    cls = get_available_sequencers(pln.radiation_mode).get(name)
+    fields = cls.config_model().model_fields if cls is not None else ()
+    return run, name, {key: prop_seq[key] for key in fields if key in prop_seq}
+
+
+def only_sequencing_changed(previous: Any, current: Any) -> bool:
+    """Whether two plans differ in their sequencing settings (``prop_seq``) at most.
+
+    Sequencing runs on the optimized result, so its settings outdate neither the dose
+    influence nor the result. Base data a plan carries itself is compared by identity.
+    """
+    from ._forms import comparison_key  # noqa: PLC0415
+
+    if previous is None or current is None or type(previous) is not type(current):
+        return False
+    if previous is current:
+        # Edited in place, so the previous state is gone: assume more has changed.
+        return False
+    fields = getattr(type(current), "model_fields", None)
+    if fields is None:
+        return False
+    for name in fields:
+        if name == "prop_seq":
+            continue
+        old, new = getattr(previous, name, None), getattr(current, name, None)
+        if old is new:
+            continue
+        if name == "machine" and not (isinstance(old, str) and isinstance(new, str)):
+            return False
+        try:
+            if comparison_key(old) != comparison_key(new):
+                return False
+        except Exception:  # noqa: BLE001 - values that cannot be compared count as changed
+            return False
+    return True
+
+
+def sequencing_blocker(present: Iterable[str], tracker: StageTracker, pln: Any) -> Optional[str]:
+    """Why sequencing cannot run on the active result, addressed to the user (else ``None``).
+
+    Sequencing needs the dose influence matrix to recompute the delivered dose, and a
+    result that is current: an outdated one no longer belongs to the plan and its beams.
+    """
+    have = set(present)
+    if getattr(pln, "radiation_mode", None) != "photons":
+        return "Sequencing is only available for photon plans."
+    if not {"stf", "dij"} <= have:
+        return (
+            "Sequencing needs steering information and a dose influence matrix to "
+            "recompute the delivered dose — calculate or load a dose influence first."
+        )
+    if "result" not in have:
+        return "No result available to sequence."
+    if tracker.result_stale:
+        return (
+            "Result is outdated relative to the current plan (e.g. after switching "
+            "radiation mode) — recalculate dose influence and re-optimize before "
+            "sequencing."
+        )
+    if not sequencing_settings(pln)[0]:
+        return "Enable 'Run sequencing' in the Plan panel first."
+    return None
+
+
 def status_text(present: Iterable[str], tracker: StageTracker) -> str:
     """One-line workflow status, as the Qt widget shows it."""
     have = set(present)

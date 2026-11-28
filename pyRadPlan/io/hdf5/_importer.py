@@ -9,9 +9,8 @@ import SimpleITK as sitk
 from pyRadPlan.cst import StructureSet, validate_cst
 from pyRadPlan.ct import CT, validate_ct
 from pyRadPlan.dij import validate_dij
-from pyRadPlan.machines import create_bld
 from pyRadPlan.plan import validate_pln
-from pyRadPlan.result import validate_result
+from pyRadPlan.result import BeamSequence, validate_result
 from pyRadPlan.stf import validate_stf
 
 from ..base import BaseImporter
@@ -20,8 +19,10 @@ from ._codec import FORMAT_NAME, FORMAT_VERSION, read_tree
 
 def _validate_pln(tree: Any) -> Any:
     prop_stf = tree.get("prop_stf") if isinstance(tree, dict) else None
-    if isinstance(prop_stf, dict) and isinstance(prop_stf.get("blds"), list):
-        prop_stf["blds"] = [create_bld(bld) for bld in prop_stf["blds"]]
+    if isinstance(prop_stf, dict) and isinstance(prop_stf.get("beam_sequences"), list):
+        prop_stf["beam_sequences"] = [
+            BeamSequence.model_validate(beam) for beam in prop_stf["beam_sequences"]
+        ]
     return validate_pln(tree)
 
 

@@ -49,6 +49,11 @@ export interface PlanDraft {
   scenarioProps: Record<string, Record<string, unknown>>;
   problem: string;
   problemProps: Record<string, ProblemProps>;
+  /** "Run sequencing"; only ticked while the radiation mode has sequencers. */
+  sequencing: boolean;
+  /** Selected sequencer ("" when the radiation mode has none). */
+  sequencer: string;
+  sequencerProps: Record<string, Record<string, unknown>>;
   res: [string, string, string];
 }
 
@@ -88,6 +93,7 @@ export function draftFromPlan(plan: PlanSummary | null, detail: PlanDetail | nul
   const engine = plan?.engine ?? null;
   const bioModel = detail?.bio.model ?? plan?.bio_model ?? "none";
   const problem = detail?.problem.name ?? "nonlin_fluence";
+  const sequencer = detail?.sequencing?.sequencer ?? "";
   return {
     radiation_mode: plan?.radiation_mode ?? "photons",
     machine: detail?.machine_source === "plan" ? PLAN_MACHINE : (plan?.machine ?? "Generic"),
@@ -113,6 +119,9 @@ export function draftFromPlan(plan: PlanSummary | null, detail: PlanDetail | nul
         solver: detail?.solver.name ? { name: detail.solver.name, values: clone(detail.solver.values) } : null,
       },
     },
+    sequencing: Boolean(detail?.sequencing?.run && sequencer),
+    sequencer,
+    sequencerProps: sequencer ? { [sequencer]: clone(detail?.sequencing?.values ?? {}) } : {},
     res: (plan?.dose_grid_resolution ?? fallbackGrid).map((v) => v.toFixed(2)) as [string, string, string],
   };
 }
@@ -151,6 +160,9 @@ export type FieldKey =
   | "iso"
   | "scenario"
   | "scenario_props"
+  | "sequencing"
+  | "sequencer"
+  | "sequencer_props"
   | "res_x"
   | "res_y"
   | "res_z";
@@ -179,6 +191,9 @@ export function captureState(d: PlanDraft): Record<FieldKey, string> {
     iso: JSON.stringify([d.isoAuto, d.perBeamIso !== null, d.isoAuto ? null : d.iso]),
     scenario: d.scenario,
     scenario_props: json(d.scenarioProps[d.scenario] ?? {}),
+    sequencing: String(d.sequencing),
+    sequencer: d.sequencer,
+    sequencer_props: json(d.sequencerProps[d.sequencer] ?? {}),
     res_x: num(d.res[0]),
     res_y: num(d.res[1]),
     res_z: num(d.res[2]),
@@ -282,6 +297,12 @@ export function planSetParams(d: PlanDraft, clean: Record<FieldKey, string>, opt
     out.problem = { name: d.problem, values: clone(props.values) };
     if (props.solver) out.solver = Object.keys(props.solver.values).length ? clone(props.solver) : props.solver.name;
   }
+  if (mod.has("sequencing") || mod.has("sequencer") || mod.has("sequencer_props")) {
+    if (d.sequencing && !d.sequencer) throw new Error("no sequencing algorithm available for this radiation mode");
+    out.sequencing = d.sequencing
+      ? { run: true, sequencer: d.sequencer, values: clone(d.sequencerProps[d.sequencer] ?? {}) }
+      : { run: false, sequencer: null, values: {} };
+  }
   if (mod.has("res_x") || mod.has("res_y") || mod.has("res_z")) {
     const f = fieldOf(options, "dose_grid_resolution");
     out.dose_grid_resolution = d.res.map((t, i) => numberIn(t, `dose_grid_resolution.${"xyz"[i]}`, f, { min: 0.1, max: 50 })) as Vec3;
@@ -302,6 +323,7 @@ export function fieldKeyOf(name: string): FieldKey | null {
       scenarios: "scenario_props",
       problem: "problem_props",
       solver: "problem_props",
+      sequencer: "sequencer_props",
     };
     if (form[head]) return form[head];
   }
@@ -320,6 +342,7 @@ export function fieldKeyOf(name: string): FieldKey | null {
     scenarios: "scenario_props",
     problem: "problem_props",
     solver: "problem_props",
+    sequencing: "sequencing",
     dose_grid_resolution: "res_x",
   };
   return map[head] ?? null;
@@ -339,6 +362,18 @@ export function pickMachine(current: string, options: PlanOptions): string {
 export function pickIdentifier(current: string | null, choices: PlanOptions["engines"]): string | null {
   if (current && choices.some((c) => c.value === current && c.enabled !== false)) return current;
   return String(choices.find((c) => c.enabled !== false)?.value ?? choices[0]?.value ?? "") || null;
+}
+
+type SequencingDraft = Pick<PlanDraft, "sequencing" | "sequencer">;
+
+/**
+ * The draft's sequencing fields for a radiation mode's sequencers (Qt
+ * `_update_sequencing_availability` / `_refresh_sequencers`): the selected sequencer if the mode
+ * has it, else its first one; a mode without sequencers unticks "Run sequencing".
+ */
+export function applySequencers(d: SequencingDraft, options: PlanOptions): SequencingDraft {
+  const names = (options.sequencers ?? []).map((c) => String(c.value));
+  return { sequencing: d.sequencing && names.length > 0, sequencer: names.includes(d.sequencer) ? d.sequencer : (names[0] ?? "") };
 }
 
 type BioDraft = Pick<PlanDraft, "bioOption" | "bioModel" | "bioParams">;

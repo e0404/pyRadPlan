@@ -1,6 +1,6 @@
 /**
  * Mock handlers of package A (PROTOCOL.md v1: plan detail / options / forms, tissues,
- * objectives, optimization history). Per-session data lives in `MockSession.ext.plan`; the
+ * objectives, optimization history, sequencing). Per-session data lives in `MockSession.ext.plan`; the
  * catalogues and forms are the recorded app responses of `./planData`.
  */
 import type {
@@ -25,12 +25,13 @@ import type {
   PlanDetail,
   PlanOptions,
   PlanSetParams,
+  SequencingSettings,
   TissueEvaluateParams,
   TissueEvaluateResult,
 } from "../protocol/plan";
 import { checkValue } from "../../components/forms/formModel";
 import { BROWSER_REASONS } from "./io";
-import { mockReferenceImages, mockResultKeys } from "./viewer";
+import { addMockSequencedQuantities, mockReferenceImages, mockResultKeys } from "./viewer";
 import { MethodError, precondition, resolveStructure, type MockContext, type MockHandlers, type MockSession } from "./mockBackend";
 import {
   DEFAULT_SOLVER,
@@ -74,6 +75,7 @@ interface PlanExt {
   scenario: { model: string; values: Record<string, unknown> };
   problem: { name: string; values: Record<string, unknown> };
   solver: { name: string | null; values: Record<string, unknown> };
+  sequencing: Required<SequencingSettings>;
   structures: MockStructure[];
   /** Phantom the structures were built from (rebuilt after a reload). */
   phantom: unknown;
@@ -87,6 +89,8 @@ function noBio(): PlanExt["bio"] {
   return { option: option ? String(option.value) : null, values: {} };
 }
 
+const noSequencing = (): PlanExt["sequencing"] => ({ run: false, sequencer: null, values: {} });
+
 function ext(s: MockSession): PlanExt {
   let e = s.ext.plan as PlanExt | undefined;
   if (!e) {
@@ -99,6 +103,7 @@ function ext(s: MockSession): PlanExt {
       scenario: { model: "nomScen", values: {} },
       problem: { name: "nonlin_fluence", values: {} },
       solver: { name: null, values: {} },
+      sequencing: noSequencing(),
       structures: [],
       phantom: null,
       history: null,
@@ -191,13 +196,29 @@ export function planStateExtension(s: MockSession, state: SessionState): Partial
     default_plan: { ...defaultPlanFor(e.profile) },
     locked_fields: [...e.lockedFields],
   };
+  const blocker = s.busy ? `${s.busy} is still running` : sequencingBlocker(s, state);
   return {
     options,
+    sequencing: { available: blocker === null, reason: blocker },
     structures: state.structures.map((st) => {
       const m = e.structures[st.index];
       return m ? { ...st, overlap_priority: m.overlap_priority, num_objectives: m.objectives.length, num_voxels: m.num_voxels } : st;
     }),
   };
+}
+
+/** Why the active result cannot be sequenced, else null (`pyRadPlan.app._stages.sequencing_blocker`). */
+function sequencingBlocker(s: MockSession, state: Pick<SessionState, "has" | "stages">): string | null {
+  if (s.plan?.radiation_mode !== "photons") return "Sequencing is only available for photon plans.";
+  if (!state.has.stf || !state.has.dij) {
+    return "Sequencing needs steering information and a dose influence matrix to recompute the delivered dose — calculate or load a dose influence first.";
+  }
+  if (!state.has.result) return "No result available to sequence.";
+  if (state.stages.optimization === "stale") {
+    return "Result is outdated relative to the current plan (e.g. after switching radiation mode) — recalculate dose influence and re-optimize before sequencing.";
+  }
+  if (!ext(s).sequencing.run) return "Enable 'Run sequencing' in the Plan panel first.";
+  return null;
 }
 
 function defaultPlanFor(profile: Profile): PlanSummary {
@@ -271,6 +292,7 @@ function planDetail(s: MockSession): PlanDetail | null {
     scenario: structuredClone(e.scenario),
     problem: { name: e.problem.name, values: structuredClone(shownProblemValues(e.problem.name, e.problem.values, true)) },
     solver: structuredClone(e.solver),
+    sequencing: structuredClone(e.sequencing),
   };
 }
 
@@ -387,6 +409,9 @@ function planForm(s: MockSession, p: Record<string, unknown>) {
       }
       break;
     }
+    case "sequencer":
+      values = given ?? (e.sequencing.sequencer === name ? e.sequencing.values : {});
+      break;
     default:
       throw new MethodError("ValueError", `Unknown form kind '${String(kind)}'`);
   }
@@ -411,6 +436,7 @@ const PLAN_SET_FIELDS = new Set([
   "scenarios",
   "problem",
   "solver",
+  "sequencing",
 ]);
 
 function planSet(ctx: MockContext, s: MockSession, p: PlanSetParams): SessionState {
@@ -517,6 +543,23 @@ function planSet(ctx: MockContext, s: MockSession, p: PlanSetParams): SessionSta
     if (sv && sv.enabled !== false) details.push(...validateValues(formFields("solver", spec.name, ""), spec.values ?? {}, "solver."));
     solver = { name: spec.name, values: structuredClone(spec.values ?? {}) };
   }
+  // `prop_seq` survives only within the same radiation mode.
+  let sequencing = modeChanged ? noSequencing() : e.sequencing;
+  if (p.sequencing) {
+    const unknownKeys = Object.keys(p.sequencing).filter((k) => !["run", "sequencer", "values"].includes(k));
+    const name = p.sequencing.sequencer;
+    if (unknownKeys.length) {
+      details.push({ field: "sequencing", message: `sequencing takes run, sequencer and values, not ${unknownKeys.join(", ")}` });
+    } else if (!p.sequencing.run) {
+      sequencing = noSequencing();
+    } else if (!name || !(context.sequencers ?? []).some((c) => c.value === name)) {
+      details.push({ field: "sequencing", message: `sequencer ${JSON.stringify(name)} is not available for ${next.radiation_mode}` });
+    } else {
+      const values = structuredClone(p.sequencing.values ?? {});
+      details.push(...validateValues(formFields("sequencer", name, next.radiation_mode), values, "sequencer."));
+      sequencing = { run: true, sequencer: name, values };
+    }
+  }
 
   if (details.length) throw validationError(details);
 
@@ -527,8 +570,11 @@ function planSet(ctx: MockContext, s: MockSession, p: PlanSetParams): SessionSta
   e.scenario = scenario;
   e.problem = problem;
   e.solver = solver;
+  e.sequencing = sequencing;
   s.plan = next;
-  ctx.touch(s, "plan");
+  // A change of the sequencing settings alone outdates no stage (amendment 29).
+  const sent = Object.keys(p);
+  if (!sent.length || sent.some((k) => k !== "sequencing")) ctx.touch(s, "plan");
   ctx.log(s, "info", `Plan updated: ${next.radiation_mode}, ${next.gantry_angles.length} beam(s)`);
   return ctx.publish(s);
 }
@@ -634,7 +680,30 @@ function writeCheck(ctx: MockContext): void {
 
 const quantityKnown = (quantity: string) => OBJECTIVES.quantities.some((q) => q.value === quantity);
 
+/** `workflow.sequence`: the delivered doses of the active result, sequenced per beam. */
+function sequence(ctx: MockContext, s: MockSession): Promise<SessionState> {
+  return ctx.run(s, "Sequencing", async () => {
+    const blocker = sequencingBlocker(s, ctx.state(s));
+    if (blocker) throw new MethodError("PreconditionError", blocker);
+    const { sequencer, values } = ext(s).sequencing;
+    const levels = Math.max(1, Number(values.num_of_levels ?? 5));
+    const n = s.plan?.gantry_angles.length ?? 1;
+    ctx.log(s, "info", `Sequencing ${n} beam(s) with ${sequencer} (${levels} levels)…`);
+    for (let b = 0; b < n; b++) {
+      ctx.progress(s, "Sequencing", b / n, `beam ${b + 1}/${n}`);
+      await ctx.sleep(150);
+    }
+    ctx.progress(s, "Sequencing", 1);
+    // Fewer levels deliver the optimized fluence less closely.
+    const added = addMockSequencedQuantities(s, 1 - 0.1 / levels, { sequencer, levels });
+    ctx.touch(s, "optimization");
+    ctx.log(s, "info", `Sequencing finished: ${added.filter((key) => !key.includes(" ")).join(", ")}`);
+    return ctx.publish(s);
+  });
+}
+
 export const planHandlers: MockHandlers = {
+  "workflow.sequence": (_p, ctx) => sequence(ctx, ctx.session()),
   async "session.create"(p, ctx) {
     const result = (await ctx.fallback()) as { session: string };
     const s = ctx.sessionById(result.session);

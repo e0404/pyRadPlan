@@ -170,6 +170,21 @@ describe("result groups", () => {
     expect(resultKey("A", "physical_dose_beam 1")).toBe("A/physical_dose_beam 1");
   });
 
+  it("names the quantities of a sequenced fluence after their quantity", () => {
+    const groups = groupResultKeys(["physical_dose", "physical_dose_sequenced", "physical_dose_sequenced_beam 0", "A/rbe_x_dose_sequenced", "alpha_sequenced"]);
+    expect(groups.map((g) => [g.base, g.label, g.meta_label, g.unit])).toEqual([
+      ["physical_dose", "dose", "Dose", "Gy"],
+      ["physical_dose_sequenced", "dose (sequenced)", "Dose", "Gy"],
+      ["rbe_x_dose_sequenced", "RBExDose (sequenced) (A)", "RBE-weighted Dose", "Gy (RBE)"],
+      ["alpha_sequenced", "alpha_sequenced", "Quantity", ""],
+    ]);
+    expect(groups[1].components.map((c) => [c.key, c.label, c.kind])).toEqual([
+      ["physical_dose_sequenced", "full", "full"],
+      ["physical_dose_sequenced_beam 0", "beam 0", "beam"],
+    ]);
+    expect(keyLabel(groups, "physical_dose_sequenced_beam 0")).toBe("dose (sequenced), beam 0");
+  });
+
   it("groups components by result and quantity like group_result_keys", () => {
     const keys = [
       "physical_dose",

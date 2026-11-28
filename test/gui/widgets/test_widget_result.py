@@ -39,6 +39,26 @@ def _result_for(ct):
     return create_result({"physical_dose": sitk.Cast(ct.cube_hu, sitk.sitkFloat32)})
 
 
+def _sequenced_result_for(ct):
+    """A minimal validated PlanResult with a two-beam sequence attached."""
+    from pyRadPlan.machines import create_bld
+    from pyRadPlan.result._beam_sequence import BeamSequence
+    from pyRadPlan.result import Sequence
+
+    result = _result_for(ct)
+
+    mlc_info = {
+        "device_type": "MLCX",
+        "device_orientation": "X",
+        "leaf_position_boundaries": [-20, -10, 0, 10],
+        "leaf_positions": [[-10, 5], [-10, 0], [-5, 0], [0, 0]],
+        "leaf_width": 10.0,
+        "leaf_leakage": 0.1,
+    }
+    beam = BeamSequence.from_shapes([create_bld(mlc_info)], [1.0])
+    return result.model_copy(update={"sequence": Sequence(beams=[beam, beam])})
+
+
 def test_viewing_widget_init(qapp):
     widget = ViewingWidget()
     assert widget is not None
@@ -326,6 +346,74 @@ def test_viewing_widget_deprecated_set_data(qapp):
 
     assert widget.quantity_widget._ct is not None
     assert widget.quantity_widget.get_available_quantities()
+
+
+def test_viewing_widget_sequence_button(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _result_for(ct))
+    ws_seq = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+    widget_seq = ViewingWidget(ws_seq)
+
+    assert not widget.vis_widget.sequence_btn.isEnabled()
+    assert widget_seq.vis_widget.sequence_btn.isEnabled()
+
+    ws_seq.clear()
+    assert not widget_seq.vis_widget.sequence_btn.isEnabled()
+
+
+def test_viewing_widget_show_sequence(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+
+    widget._on_show_sequence()
+
+    assert widget._sequence_window is not None
+    assert widget._sequence_window.viewer.tabs.count() == 2
+
+    widget.quantity_widget._active_quantity_name = "physical_dose_beam 1"
+    widget._on_show_sequence()
+    assert widget._sequence_window.viewer.tabs.currentIndex() == 1
+
+
+def test_show_sequence_reuses_the_same_window(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+
+    widget._on_show_sequence()
+    first = widget._sequence_window
+    widget._on_show_sequence()
+
+    assert widget._sequence_window is first
+
+
+def test_sequence_window_is_top_level_for_its_own_taskbar_entry(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+    widget._on_show_sequence()
+
+    assert widget._sequence_window.parent() is None
+
+
+def test_reshowing_the_same_sequence_does_not_rebuild_the_viewer(qapp, test_data_photons):
+    ct, cst, _ = test_data_photons
+
+    ws = _make_workspace(ct, cst, _sequenced_result_for(ct))
+    widget = ViewingWidget(ws)
+
+    widget._on_show_sequence()
+    tabs = widget._sequence_window.viewer._beam_widgets[:]
+
+    widget._on_show_sequence()
+
+    assert widget._sequence_window.viewer._beam_widgets == tabs
 
 
 def test_beam_overlay_derived_from_plan(qapp, test_data_photons):

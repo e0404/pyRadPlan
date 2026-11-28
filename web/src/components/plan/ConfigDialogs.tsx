@@ -1,8 +1,8 @@
 /**
- * The plan form's "…" dialogs for the dose engine, the biological model and the scenario
- * model (Qt `ConfigFormDialog` opened by `_on_engine_config` / `_on_bio_config` /
- * `_on_scenario_config`), loaded with `plan.form`; suggested values (`plan.form_choices`) are
- * added when they arrive, as Qt's `ConfigFormDialog.load_choices` does.
+ * The plan form's "…" dialogs for the dose engine, the biological model, the scenario model
+ * and the sequencer (Qt `ConfigFormDialog` opened by `_on_engine_config` / `_on_bio_config` /
+ * `_on_scenario_config` / `_on_sequencer_config`), loaded with `plan.form`; suggested values
+ * (`plan.form_choices`) are added when they arrive, as Qt's `ConfigFormDialog.load_choices` does.
  */
 import { useEffect, useState } from "react";
 import type { Choice, FormSchema } from "../../api/protocol";
@@ -79,4 +79,8 @@ export function BioModelDialog(props: PlanConfigDialogProps) {
 
 export function ScenarioDialog(props: PlanConfigDialogProps) {
   return <PlanConfigDialog {...props} kind="scenario" testId="scenario-dialog" />;
+}
+
+export function SequencerDialog(props: PlanConfigDialogProps) {
+  return <PlanConfigDialog {...props} kind="sequencer" testId="sequencer-dialog" />;
 }

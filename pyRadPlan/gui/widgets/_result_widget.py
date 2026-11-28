@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import warnings
 from typing import Callable, Optional, Sequence
 
@@ -26,6 +27,8 @@ from pyRadPlan.core.resample import resample_image
 from pyRadPlan.ct import CT
 from pyRadPlan.cst import StructureSet
 from pyRadPlan.gui.windows._analysis_win import show_analysis
+from pyRadPlan.gui.widgets.result.aperture_widget import SequenceViewContext
+from pyRadPlan.gui.windows._sequence_win import show_sequence_viewer
 from pyRadPlan.gui.workspace import WorkspaceManager
 from pyRadPlan.result import PlanResult
 
@@ -226,6 +229,9 @@ class ViewingWidget(WorkspaceWidget):
         self.vis_widget.isolines_set.connect(self._on_isolines_set)
         self.vis_widget.recenter_requested.connect(self._on_recenter)
         self.vis_widget.show_analysis_requested.connect(self._on_show_analysis)
+        self.vis_widget.show_sequence_requested.connect(self._on_show_sequence)
+        self._sequence_window = None
+        self._shown_sequence = None
 
         self.quantity_widget = QuantityWidget(self)
 
@@ -315,6 +321,12 @@ class ViewingWidget(WorkspaceWidget):
         if data_changed:
             self._apply_ct_and_result(ct, ws.cst, ws.result_entries())
             self._has_data = True
+            has_sequence = bool(
+                isinstance(ws.result, PlanResult)
+                and ws.result.sequence is not None
+                and ws.result.sequence.beams
+            )
+            self.vis_widget.set_sequence_enabled(has_sequence)
 
         if cst_changed:
             self._apply_vois(ws.cst)
@@ -343,6 +355,7 @@ class ViewingWidget(WorkspaceWidget):
         self.vois_widget.set_vois([])
         self.quantity_widget.clear_data()
         self.vis_widget.update_quantity_selector([], None)
+        self.vis_widget.set_sequence_enabled(False)
         self.vis_widget.set_beams_available(False)
 
     def _ct_array(self, ct: CT) -> np.ndarray:
@@ -781,3 +794,43 @@ class ViewingWidget(WorkspaceWidget):
             voi_types=voi_types,
             scenario_labels=self._scenario_labels,
         )
+
+    def _on_show_sequence(self) -> None:
+        """Show the delivery sequence viewer for the workspace's sequenced result."""
+        result = self.workspace.result
+        if not isinstance(result, PlanResult) or result.sequence is None:
+            return
+
+        initial_beam_ix = None
+        active_name = self.quantity_widget._active_quantity_name or ""
+        match = re.search(r"_beam (\d+)$", active_name)
+        if match:
+            initial_beam_ix = int(match.group(1))
+
+        context = SequenceViewContext(
+            stf=self.workspace.stf,
+            result=result,
+            ct=self.workspace.ct,
+            cst=self.workspace.cst,
+        )
+
+        if self._sequence_window is not None:
+            if result.sequence is not self._shown_sequence:
+                self._sequence_window.viewer.set_sequence(
+                    result.sequence, stf=self.workspace.stf, context=context
+                )
+                self._shown_sequence = result.sequence
+            if initial_beam_ix is not None:
+                self._sequence_window.viewer.set_current_beam(initial_beam_ix)
+            self._sequence_window.show()
+            self._sequence_window.raise_()
+            self._sequence_window.activateWindow()
+            return
+
+        self._sequence_window = show_sequence_viewer(
+            result.sequence,
+            stf=self.workspace.stf,
+            initial_beam_ix=initial_beam_ix,
+            context=context,
+        )
+        self._shown_sequence = result.sequence

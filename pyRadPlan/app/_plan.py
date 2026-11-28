@@ -191,8 +191,8 @@ def build_plan(
     -----
     *overrides* carries the v1 settings resolved by :mod:`pyRadPlan.app._planform`:
     ``engine_props`` (engine-specific ``prop_dose_calc`` entries, replacing the current
-    ones), and ready plan fields ``prop_opt`` and ``scenarios``. ``dose_convention`` may
-    be given in *changes*.
+    ones), and ready plan fields ``prop_opt``, ``prop_seq`` and ``scenarios``.
+    ``dose_convention`` may be given in *changes*.
     """
     overrides = dict(overrides or {})
     unknown = set(changes) - set(PLAN_SUMMARY_FIELDS) - {"dose_convention"}
@@ -240,7 +240,7 @@ def build_plan(
         plan_data["bio_model"] = merged.get("bio_model")
     if changes.get("dose_convention") is not None:
         plan_data["dose_convention"] = changes["dose_convention"]
-    for key in ("prop_opt", "scenarios"):
+    for key in ("prop_opt", "prop_seq", "scenarios"):
         if key in overrides:
             plan_data[key] = overrides[key]
     return _plan_class(radiation_mode)(**plan_data)

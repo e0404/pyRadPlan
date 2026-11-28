@@ -156,3 +156,43 @@
   max-width: 60%;
   text-overflow: ellipsis;
 }
+
+/* Sequence window: the analysis window's frame around one aperture / fluence plot per beam. */
+.sequence-window {
+  width: min(900px, calc(100vw - 32px));
+  height: min(700px, calc(100vh - 60px));
+  z-index: 81;
+}
+
+.sequence-overlays {
+  gap: 8px;
+}
+
+.sequence-tabs {
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.sequence-beam {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sequence-beam > .row {
+  gap: 8px;
+}
+
+.sequence-plot {
+  flex: 1;
+  min-height: 160px;
+  position: relative;
+  border: 1px solid var(--border, #c9c9c9);
+}
+
+.sequence-speed {
+  width: 56px;
+  margin-right: 2px;
+}

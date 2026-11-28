@@ -17,7 +17,7 @@ from pyRadPlan.io import Hdf5Handler, load_data, save_data
 from pyRadPlan.io._factory import detect_format, is_container_format
 from pyRadPlan.io.hdf5._codec import COMPRESSION_THRESHOLD, INLINE_THRESHOLD
 from pyRadPlan.machines import create_bld
-from pyRadPlan.result import validate_result
+from pyRadPlan.result import BeamSequence, validate_result
 
 
 def assert_same(a, b, path="obj"):
@@ -187,23 +187,21 @@ def test_dose_roundtrip_and_overwrite(tmp_path, tg119):
 
 def test_photon_field_based_stf(tmp_path, tg119):
     ct, cst = tg119
-    blds = [
-        create_bld(
-            {
-                "device_type": "JAW",
-                "device_orientation": "Y",
-                "positions": [-20, 12],
-                "field_width": 120,
-            }
-        )
-    ]
+    jaw = create_bld(
+        {
+            "device_type": "JAW",
+            "device_orientation": "Y",
+            "positions": [-20, 12],
+            "field_width": 120,
+        }
+    )
+    beam = BeamSequence.from_shapes(None, [1.0], jaws=[jaw])
     pln = PhotonPlan(machine="Generic", num_of_fractions=3)
     pln.prop_stf = {
         "gantry_angles": [0, 90],
         "couch_angles": [0, 0],
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": blds,
+        "beam_sequences": [beam, beam],
         "resolution": 2.0,
         "energy": 6.0,
     }

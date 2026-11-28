@@ -32,6 +32,9 @@ export interface ViewerSlice {
   showBeams: boolean;
   appliedRevisions: AppliedRevisions;
   analysisOpen: boolean;
+  sequenceOpen: boolean;
+  /** Beam "Show Sequence" asked for (that of the shown per-beam quantity) under a result revision. */
+  sequenceBeam: { beam: number | null; revision: number | undefined } | null;
   editVoi: number | null;
   /** The slices follow the isocenter until the user picks a slice (Qt `_follow_isocenter`). */
   followIsocenter: boolean;
@@ -55,6 +58,8 @@ export const viewerSliceInitial: ViewerSlice = {
   showBeams: false,
   appliedRevisions: EMPTY_REVISIONS,
   analysisOpen: false,
+  sequenceOpen: false,
+  sequenceBeam: null,
   editVoi: null,
   followIsocenter: true,
 };

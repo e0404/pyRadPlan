@@ -70,7 +70,8 @@ def test_plan_options_list_the_registries(web_client):
     assert options["beam_presets"] and options["beam_presets"][0]["typical"]
     fields = {f["name"]: f for f in options["fields"]}
     assert fields["num_of_fractions"]["min"] == 1 and fields["num_of_fractions"]["advanced"]
-    assert fields["run_sequencing"]["editable"] is False
+    assert fields["run_dao"]["editable"] is False
+    assert "run_sequencing" not in fields
 
     protons = web_client.ok("plan.options", {"radiation_mode": "protons"})["result"]
     assert json.loads(protons["default_bio_model"])["model"] == "constant_rbe"
@@ -354,6 +355,46 @@ def test_plan_set_rejects_a_plain_bio_model_specification():
         session.set_plan(
             {"radiation_mode": "protons", "bio_model": {"model": "constant_rbe", "rbe": 1.2}}
         )
+
+
+def test_sequencing_settings_are_a_plan_change():
+    from pyRadPlan.app._forms import FormValidationError
+    from pyRadPlan.app._planform import changes_from_form, plan_form_values
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    session.workspace.pln = PhotonPlan(prop_seq={"kept": 1})
+    off = {"run": False, "sequencer": None, "values": {}}
+    assert plan_form_values(session.workspace.pln)["sequencing"] == off
+
+    sequencing = {"run": True, "sequencer": "xia", "values": {"num_of_levels": 9}}
+    form = {**plan_form_values(session.workspace.pln), "sequencing": sequencing}
+    changes = changes_from_form(session.workspace.pln, form)
+    assert changes == {"sequencing": sequencing}
+    session.set_plan(changes)
+
+    # Entries of the plan the form does not edit are kept
+    pln = session.workspace.pln
+    assert pln.prop_seq == {
+        "kept": 1,
+        "run_sequencing": True,
+        "sequencer": "xia",
+        "num_of_levels": 9,
+    }
+    assert plan_form_values(pln)["sequencing"] == sequencing
+    assert changes_from_form(pln, form) == {}
+
+    session.set_plan({"sequencing": off})
+    assert session.workspace.pln.prop_seq == {"kept": 1}
+
+    with pytest.raises(FormValidationError, match="not available"):
+        session.set_plan({"sequencing": {"run": True, "sequencer": "nope"}})
+    with pytest.raises(FormValidationError, match="num_of_levels"):
+        session.set_plan({"sequencing": {**sequencing, "values": {"num_of_levels": "many"}}})
+    # Another radiation mode starts without the sequencing of the photon plan
+    session.set_plan({"sequencing": sequencing})
+    session.set_plan({"radiation_mode": "protons"})
+    assert not session.workspace.pln.prop_seq
 
 
 def test_form_choices_list_the_engine_suggestions(client, monkeypatch):

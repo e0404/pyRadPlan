@@ -11,9 +11,10 @@ import SimpleITK as sitk
 from pyRadPlan import PhotonPlan, calc_dose_forward, generate_stf, load_tg119
 from pyRadPlan.geometry import lps
 from pyRadPlan.io.dicom import DicomExporter
-from pyRadPlan.machines import create_bld
+from pyRadPlan.machines import MLC, create_bld
 from pyRadPlan.plan import validate_pln
-from pyRadPlan.stf import validate_stf
+from pyRadPlan.result import BeamSequence
+from pyRadPlan.stf import FieldShapeAsMask, validate_stf
 from pyRadPlan.ct import validate_ct
 
 # Same IEC 61217 helpers and dicom-validator setup as the RT Ion Plan export tests
@@ -60,14 +61,17 @@ def _jaw(orientation, positions):
 
 
 def _field_plan(gantry, couch, blds, resolution=RESOLUTION):
+    """Plan with the same static field of *blds* (an MLC and/or jaws) on every beam."""
     ct, cst = load_tg119()
+    mlcs = [bld for bld in blds if isinstance(bld, MLC)] or None
+    jaws = [bld for bld in blds if not isinstance(bld, MLC)]
+    beam = BeamSequence.from_shapes(mlcs, [1.0], jaws=jaws)
     pln = PhotonPlan(machine="Generic", num_of_fractions=3)
     pln.prop_stf = {
         "gantry_angles": gantry,
         "couch_angles": couch,
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": blds,
+        "beam_sequences": [beam] * len(gantry),
         "resolution": resolution,
         "energy": 6.0,
     }
@@ -486,12 +490,11 @@ def test_mask_field_shape_is_bounding_box_and_not_deliverable(tmp_path):
         "gantry_angles": [0.0],
         "couch_angles": [0.0],
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "field_shape": mask,
-        "resolution": 2.0,
         "energy": 6.0,
     }
     stf = generate_stf(ct, cst, pln)
+    # A field given as a mask, as several segments of one beam give
+    stf.beams[0].rays[0].beamlets[0] = FieldShapeAsMask(energy=6.0, mask=mask, resolution=2.0)
     with pytest.warns(UserWarning, match="not deliverable"):
         out = _export(tmp_path, ct=ct, cst=cst, stf=stf, pln=pln)
     beam = pydicom.dcmread(out / "RTPLAN.dcm").BeamSequence[0]

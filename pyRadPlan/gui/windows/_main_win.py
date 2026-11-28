@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         # Lock the input widgets while a workflow computation is running.
         self.workflow_widget.busy_changed.connect(self._on_busy_changed)
 
+        # Running sequencing is an explicit request to see the delivery sequence.
+        self.workflow_widget.sequencing_finished.connect(self._viewer._on_show_sequence)
+
         # Surface widget refresh failures (otherwise only logged) to the user.
         for widget in (
             self.workflow_widget,

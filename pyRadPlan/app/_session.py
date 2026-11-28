@@ -25,14 +25,17 @@ from pyRadPlan.core import (
 
 from ._plan import DEFAULT_PLAN, build_plan, plan_summary
 from ._profiles import running_in_pyodide
+from ._sequence_view import has_sequence, sequence_view
 from ._session_editors import SessionEditorsMixin
 from ._stages import (
     StageTracker,
     available_actions,
     merge_loaded_data,
     nested_fraction,
+    only_sequencing_changed,
     progress_detail,
     recalculation_angles_match,
+    sequencing_blocker,
     stage_status,
     status_text,
 )
@@ -281,6 +284,8 @@ class Session(SessionEditorsMixin):
         self._tracker = StageTracker().update([], self.workspace.present(), self.workspace.cst)
         #: Active result the staleness refers to; changes of other results keep it.
         self._active_result = self.workspace.result
+        #: Plan the staleness refers to; a change of its sequencing settings keeps it.
+        self._tracked_pln = self.workspace.pln
         self.views = ViewCache(self.workspace.get)
         self._busy: Optional[Operation] = None
         self._idle_callbacks: list[Callable[[], Any]] = []
@@ -364,6 +369,9 @@ class Session(SessionEditorsMixin):
         # replaced active result is a fresh one.
         tracked = [k for k in changed_keys if k != "result" or result is not self._active_result]
         self._active_result = result
+        if "pln" in tracked and only_sequencing_changed(self._tracked_pln, ws.pln):
+            tracked.remove("pln")
+        self._tracked_pln = ws.pln
         self._tracker = self._tracker.update(tracked, ws.present(), ws.cst)
         self.views.invalidate()
         self._editors_workspace_changed(changed_keys)
@@ -493,6 +501,13 @@ class Session(SessionEditorsMixin):
             "structures": _derived(structures, []),
             "status": self._busy.label if self._busy else status_text(present, self._tracker),
             "busy": self._busy.label if self._busy else None,
+        }
+        blocker = self._busy.label + " is still running" if self._busy else None
+        blocker = blocker or _derived(self.sequencing_blocker, "Sequencing is not available.")
+        state["sequencing"] = {
+            "available": blocker is None,
+            "reason": blocker,
+            "sequenced": _derived(lambda: has_sequence(ws.result), False),
         }
         return self._editors_state(state)
 
@@ -1013,6 +1028,39 @@ class Session(SessionEditorsMixin):
 
         return Operation("recalc", "Recalculating dose", compute, commit, warnings=warnings)
 
+    def sequencing_blocker(self) -> Optional[str]:
+        """Why the active result cannot be sequenced now (``None`` if it can)."""
+        ws = self.workspace
+        return sequencing_blocker(ws.present(), self._tracker, ws.pln)
+
+    def _prepare_sequence(self) -> Operation:
+        if self._busy is not None:
+            raise PreconditionError(f"{self._busy.label} is still running", "busy")
+        blocker = self.sequencing_blocker()
+        if blocker is not None:
+            raise PreconditionError(blocker)
+        ws = self.workspace
+        result, pln, stf, dij = ws.result, ws.pln, ws.stf, ws.dij
+
+        def compute() -> Any:
+            from pyRadPlan import run_sequencing  # noqa: PLC0415
+
+            # Sequenced on a copy: the result in the workspace stays as it is until the
+            # commit, also when the run fails or is stopped.
+            return run_sequencing(deepcopy(result), pln, stf, dij=dij)
+
+        def commit(value: Any) -> None:
+            ws.result = value
+
+        return Operation("sequence", "Sequencing", compute, commit)
+
+    def sequence(self) -> None:
+        """Sequence the active result with the plan's sequencer (``prop_seq``).
+
+        The sequenced result replaces the active result; other results are kept.
+        """
+        self.execute(self.prepare("sequence"))
+
     def generate_stf(self) -> None:
         """Generate the steering information (beam geometry) for the plan."""
         self.execute(self.prepare("generate_stf"))
@@ -1077,6 +1125,13 @@ class Session(SessionEditorsMixin):
     ) -> dict[str, Any]:
         """Cumulative DVHs of the structures for a result quantity."""
         return self.views.dvh(quantity, names, num_points)
+
+    def sequence_view(self) -> dict[str, Any]:
+        """Return the delivery sequence of the active result, as a sequence viewer draws it."""
+        ws = self.workspace
+        if not has_sequence(ws.result):
+            raise PreconditionError("The active result has no delivery sequence.", "no_sequence")
+        return sequence_view(ws.result, ws.stf, ws.ct, ws.cst)
 
     # ------------------------------------------------------------------
 

@@ -1,11 +1,12 @@
 import logging
 
 import numpy as np
-from typing import Optional
+from typing import Any, Optional
 
 from ._externalbeam import StfGeneratorExternalBeamRayBixel, StfGeneratorSingleBixel
 from .._beamlet import FieldShape, FieldShapeAsMask, FieldShapeAsBLD, FieldShapeComposite
-from pyRadPlan.machines import PhotonLINAC, BeamLimitingDevice
+from pyRadPlan.machines import PhotonLINAC
+from pyRadPlan.result._beam_sequence import BeamSequence
 
 logger = logging.getLogger(__name__)
 
@@ -155,12 +156,14 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         The short name of the generator ("photonSingleBixel").
     possible_radiation_modes : list[str]
         A list of possible radiation modes (["photons"]).
-    field_based : bool
-        Whether dose calculation is field-based.
-    field_shape : Union[ArrayLike, None]
-        The field shape.
-    blds : list[BeamLimitingDevice]
-        The list of beam limiting devices
+    beam_sequences : list[BeamSequence]
+        The delivery sequence of each beam (e.g. a static field: one segment of weight
+        1.0). A segment whose leaves or jaws move is sampled at ``DYNAMIC_SAMPLES``
+        intermediate states; gantry or couch motion within a segment is not supported.
+        If not given, each beam gets a single ray with no field shape.
+    resolution : float, optional
+        Resolution in mm of the transmission masks of the beam limiting devices, required
+        with ``beam_sequences``.
     """
 
     name = "Photon Single Bixel Geometry"
@@ -169,16 +172,30 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
 
     energy: float = 6.0
 
-    field_based: Optional[bool]
-    field_shape: Optional[FieldShape]
-    blds: Optional[list[BeamLimitingDevice]]
+    #: Number of intermediate states a moving segment is sampled at.
+    DYNAMIC_SAMPLES: int = 5
+
+    beam_sequences: Optional[list[BeamSequence]]
+    resolution: Optional[float]
+
+    #: Options of earlier versions, replaced by ``beam_sequences``.
+    _REMOVED_OPTIONS = frozenset({"blds", "field_shape", "field_based"})
 
     def __init__(self, pln=None):
         self.radiation_mode = "photons"  # Radiation mode must be photons
-        self.field_based = False
-        self.field_shape = None
-        self.blds = None
+        self.beam_sequences = None
+        self.resolution = None
         super().__init__(pln)
+
+    def _assign_parameters_from_pln(self, pln):
+        removed = sorted(self._REMOVED_OPTIONS & set(pln.prop_stf or {}))
+        if removed:
+            raise ValueError(
+                f"The {self.short_name} generator no longer has the option(s) "
+                f"{', '.join(removed)}; give the fields as beam_sequences (one BeamSequence "
+                "per beam, e.g. BeamSequence.from_shapes([mlc], [1.0], jaws=[...]))."
+            )
+        super()._assign_parameters_from_pln(pln)
 
     def _initialize(self):
         super()._initialize()
@@ -197,35 +214,116 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
             )
             self.energy = machine_energy
 
-        if self.blds is not None:
-            if self.field_shape is not None:
-                logger.warning(
-                    "Both beam limiting devices and field shape given. Field shape overwritten by BLDs"
-                )
-            if not hasattr(self, "resolution"):
+        if self.beam_sequences is not None:
+            self.beam_sequences = [BeamSequence.model_validate(b) for b in self.beam_sequences]
+            if self.resolution is None:
                 raise ValueError(
-                    "Resolution must be given to calculate transmission masks from beam limiting devices"
+                    "Resolution must be given to calculate transmission masks from beam "
+                    "limiting devices"
                 )
-
-            shapes = [
-                FieldShapeAsBLD(energy=self.energy, bld=bld, resolution=self.resolution)
-                for bld in self.blds
-            ]
-            self.field_shape = (
-                shapes[0]
-                if len(shapes) == 1
-                else FieldShapeComposite(energy=self.energy, shapes=shapes)
-            )
-        elif self.field_shape is not None:
-            if not isinstance(self.field_shape, FieldShape):
-                self.field_shape = FieldShapeAsMask(
-                    energy=self.energy, mask=self.field_shape, resolution=self.resolution
+            if len(self.beam_sequences) != self.num_of_beams:
+                raise ValueError(
+                    f"beam_sequences has {len(self.beam_sequences)} entries, expected one per "
+                    f"beam ({self.num_of_beams})."
                 )
 
     def _generate_source_geometry(self):
         """Generate the source geometry for the photon IMRT geometry."""
         stf = super()._generate_source_geometry()
         return stf
+
+    def _segment_states(self, beam_sequence: BeamSequence) -> list[tuple[float, Any, list]]:
+        """List the fields a beam sequence delivers as ``(weight, mlc, jaws)``.
+
+        A static segment is one field; a segment with moving leaves or jaws is split into
+        ``DYNAMIC_SAMPLES`` fields of equal weight at evenly spaced intermediate states.
+        """
+        states = []
+        for segment in beam_sequence.segments:
+            if not segment.is_dynamic:
+                states.append((segment.weight, segment.start.mlc, segment.start.jaws))
+                continue
+            start, end = segment.start, segment.end
+            if start.gantry_angle != end.gantry_angle or start.couch_angle != end.couch_angle:
+                raise NotImplementedError(
+                    "A segment with gantry or couch motion cannot be delivered from one beam."
+                )
+            num = self.DYNAMIC_SAMPLES
+            for k in range(num):
+                state = segment.state_at((k + 0.5) / num)
+                states.append((segment.weight / num, state.mlc, state.jaws))
+        return states
+
+    @staticmethod
+    def _group_by_jaws(states: list[tuple[float, Any, list]]) -> list[list[int]]:
+        """Group the indices of fields that share value-identical jaws."""
+        groups: list[list[int]] = []
+        for m, (_, _, jaws) in enumerate(states):
+            for group in groups:
+                if jaws == states[group[0]][2]:
+                    group.append(m)
+                    break
+            else:
+                groups.append([m])
+        return groups
+
+    def _composite_shape_group(
+        self, mlcs: list, weights: list[float], extra_blds: Optional[list]
+    ) -> FieldShape:
+        """Build one field shape for a group of fields that share identical jaws."""
+        extra_shapes = [
+            FieldShapeAsBLD(energy=self.energy, bld=bld, resolution=self.resolution)
+            for bld in (extra_blds or [])
+        ]
+        if all(mlc is None for mlc in mlcs):
+            if not extra_shapes:
+                raise ValueError("A segment needs an MLC or jaws to shape its field.")
+            beamlet = (
+                extra_shapes[0]
+                if len(extra_shapes) == 1
+                else FieldShapeComposite(energy=self.energy, shapes=extra_shapes)
+            )
+            beamlet.weight = float(sum(weights))
+            return beamlet
+        if any(mlc is None for mlc in mlcs):
+            raise ValueError("Segments with and without an MLC cannot share one beam.")
+        mlc_shapes = [
+            FieldShapeAsBLD(energy=self.energy, bld=mlc, resolution=self.resolution)
+            for mlc in mlcs
+        ]
+
+        if len(mlc_shapes) == 1:
+            shapes = [mlc_shapes[0], *extra_shapes]
+            beamlet = (
+                shapes[0]
+                if len(shapes) == 1
+                else FieldShapeComposite(energy=self.energy, shapes=shapes)
+            )
+            beamlet.weight = float(weights[0])
+            return beamlet
+
+        field_width = max(s.field_width for s in (*mlc_shapes, *extra_shapes))
+        grid = FieldShape._build_grid(self.resolution, field_width)
+
+        combined_mask = sum(
+            w * s.resample(new_grid=grid).mask for w, s in zip(weights, mlc_shapes)
+        )
+        for extra_shape in extra_shapes:
+            combined_mask = combined_mask * extra_shape.resample(new_grid=grid).mask
+
+        return FieldShapeAsMask(energy=self.energy, mask=combined_mask, grid=grid, weight=1.0)
+
+    def _merge_group_shapes(self, group_shapes: list[FieldShape]) -> FieldShape:
+        """Combine the composite field shape of every jaw group into one beam-wide mask."""
+        if len(group_shapes) == 1:
+            return group_shapes[0]
+
+        field_width = max(s.field_width for s in group_shapes)
+        grid = FieldShape._build_grid(self.resolution, field_width)
+
+        combined_mask = sum(s.weight * s.resample(new_grid=grid).mask for s in group_shapes)
+
+        return FieldShapeAsMask(energy=self.energy, mask=combined_mask, grid=grid, weight=1.0)
 
     def _create_rays(self, beam: dict) -> list[dict]:
         """Create the rays for the photon IMRT geometry.
@@ -238,21 +336,40 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         Returns
         -------
         list[dict]
-            A list of ray dictionaries
+            A single ray combining every shape of the beam when
+            ``beam_sequences`` is set (see ``_merge_group_shapes``), else the
+            single ray from the base class.
         """
         rays = super()._create_rays(beam)
+        ray = rays[0]  # single ray for single-bixel generator
 
-        beamlet_template = {"energy": self.energy}
-        rays = [
+        if self.beam_sequences is not None:
+            states = self._segment_states(self.beam_sequences[beam["beam_ix"]])
+            group_shapes = [
+                self._composite_shape_group(
+                    [states[m][1] for m in group],
+                    [float(states[m][0]) for m in group],
+                    states[group[0]][2],
+                )
+                for group in self._group_by_jaws(states)
+            ]
+
+            beamlet = self._merge_group_shapes(group_shapes)
+            return [
+                {
+                    **ray,
+                    "beamlets": [beamlet],
+                    "target_point": 2 * ray["ray_pos"] - beam["source_point"],
+                    "target_point_bev": 2 * ray["ray_pos_bev"] - beam["source_point_bev"],
+                }
+            ]
+
+        beamlet = {"energy": self.energy}
+        return [
             {
                 **ray,
-                "beamlets": [self.field_shape]
-                if self.field_shape is not None
-                else [beamlet_template.copy()],
+                "beamlets": [beamlet],
                 "target_point": 2 * ray["ray_pos"] - beam["source_point"],
                 "target_point_bev": 2 * ray["ray_pos_bev"] - beam["source_point_bev"],
             }
-            for ray in rays
         ]
-
-        return rays

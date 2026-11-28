@@ -277,6 +277,7 @@ class StfGeneratorSingleBixel(StfGeneratorExternalBeam):
             beam = {}
 
             # Save meta information for treatment plan
+            beam["beam_ix"] = i
             beam["gantry_angle"] = self.gantry_angles[i]
             beam["couch_angle"] = self.couch_angles[i]
             beam["radiation_mode"] = self.radiation_mode

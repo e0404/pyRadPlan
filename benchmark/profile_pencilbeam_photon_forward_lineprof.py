@@ -29,6 +29,7 @@ from pyRadPlan.dose.engines._base import DoseEngineBase
 from pyRadPlan.dose.engines._svdpb import PhotonPencilBeamSVDEngine
 from pyRadPlan.machines import create_bld
 from pyRadPlan.machines.photons._calculate_machine_scale import central_axis_peak
+from pyRadPlan.result import BeamSequence
 from pyRadPlan.stf import FieldShapeAsBLD, FieldShapeComposite
 
 logger = logging.getLogger(__name__)
@@ -164,8 +165,10 @@ def build_plan(mlc_x, jaw_x_matching_field_width) -> PhotonPlan:
         "gantry_angles": np.linspace(0, 360, num_of_beams, endpoint=False),
         "couch_angles": np.zeros((num_of_beams,)),
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": [mlc_x, jaw_x_matching_field_width],
+        "beam_sequences": [
+            BeamSequence.from_shapes([mlc_x], [1.0], jaws=[jaw_x_matching_field_width])
+        ]
+        * num_of_beams,
         "resolution": 0.5,
         "energy": 6,
     }

@@ -38,14 +38,20 @@ def quantity_meta(
     The result name of a ``"<result>/<key>"`` key is ignored. Each of *suffixes* is
     stripped in turn while the key is no known quantity, so ``"physical_dose_beam"`` is
     labelled as ``"physical_dose"``. Pass ``suffixes=("_beam",)`` to resolve per-beam keys
-    only.
+    only. A quantity of a sequenced fluence (``"physical_dose_sequenced"``) has the label
+    and unit of its quantity.
     """
-    from pyRadPlan.quantities._display_names import split_result_key  # noqa: PLC0415
+    from pyRadPlan.quantities._display_names import (  # noqa: PLC0415
+        split_result_key,
+        split_sequenced,
+    )
 
     base = split_result_key(key)[1]
     for suffix in suffixes:
         if base not in QUANTITY_META and base.endswith(suffix):
             base = base.removesuffix(suffix)
+    if base not in QUANTITY_META:
+        base = split_sequenced(base)[0]
     return QUANTITY_META.get(base, default)
 
 

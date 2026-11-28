@@ -438,7 +438,7 @@ Save Plan and Save Workspace).
 |---|---|---|---|
 | `plan.get` (extended) | read | `{detail?: boolean}` | without `detail`: v0 `PlanSummary`; with: `PlanDetail` |
 | `plan.options` | read, may load base data | `{radiation_mode?, machine?, engine?, current_bio?}` (default: the plan's, else the default plan's; `current_bio`: amendment 22) | `PlanOptions` (+ `bio_selection`, amendment 22) |
-| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver", name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
+| `plan.form` | read | `{kind: "engine" \| "bio_model" \| "scenario" \| "problem" \| "solver" \| "sequencer" (amendment 29), name, radiation_mode?, values?}` | `FormSchema`; `values` default to the plan's (engine: `prop_dose_calc` minus `engine` / `dose_grid`; problem: `prop_opt` minus `problem` / `solver`; `max_iter` / `display` are forwarded into the solver form as the Qt dialog does) |
 | `plan.form_choices` | read | `{kind, name, radiation_mode?}` (as `plan.form`) | `{id, choices: Record<string, Choice[]>}`: suggested values per field (amendment 28); `choices: {}` when the algorithm suggests none or its lookup fails |
 | `plan.set` (extended) | write | partial `PlanSummary` plus the v1 fields below | `SessionState` |
 | `plan.tissue_check` | read, may load base data | `{draft?: {radiation_mode, machine, engine, bio_model}}` (the unapplied form; default: the plan) | `{marker: "error" \| "warning" \| "", issues: Issue[]}` (the ⚠ / ℹ marker) |
@@ -476,7 +476,8 @@ type PlanOptions = {
 `engine_config: {values}` (replaces the engine-specific entries of `prop_dose_calc`);
 `bio_model: string | {model, option?, values?}` (the v0 string is still accepted; `option`
 selects the base-data option, `values` the model parameters); `scenarios: {model, values}`;
-`problem: {name, values}`; `solver: string | {name, values}`. Semantics follow
+`problem: {name, values}`; `solver: string | {name, values}`;
+`sequencing: {run, sequencer, values}` (amendment 29). Semantics follow
 `PlanWidget._build_plan` (see `parity.md`): `prop_opt` is rebuilt from problem + solver,
 `prop_seq` and the other `prop_stf` keys survive only within the same radiation mode, an unchanged
 scenario model keeps the plan's instance.
@@ -485,8 +486,9 @@ scenario model keeps the plan's instance.
 advanced), `dose_convention` (choice, advanced), `bixel_width` (0.1..100 mm),
 `dose_grid_resolution` (`number_list` length 3, 0.1..50 mm, `editable` per profile),
 `gantry_angles` and `couch_angles` (`number_list`), `iso_center` (`number_list` length 3,
-`nullable` = Auto), and the disabled Qt fields `optimized_quantity` and the four sequencing fields
-(`editable: false`, `reason: "not yet implemented"`).
+`nullable` = Auto), and the disabled Qt fields `optimized_quantity`, `run_dao` and `conformal`
+(`editable: false`, `reason: "not yet implemented"`). Sequencing is set with `sequencing`
+(amendment 29), not with a field.
 
 ### Structures, tissues and objectives
 
@@ -531,6 +533,7 @@ type StructureDetail = {
 
 Optimize and Recalculate replace only the active result; every other result (snapshots, imported
 doses) is kept. A recalculation keeps nothing of the previous doses of the active result.
+`workflow.sequence` (amendment 29) adds the sequence and the delivered doses to the active result.
 
 ### Views
 
@@ -539,6 +542,7 @@ doses) is kept. A recalculation keeps nothing of the previous doses of the activ
 | `view.volume` (extended) | read | `{name, phase?, encoding?: "float32" \| "auto"}` | v0 `Volume`; `name` may be any component key; `"auto"` sends the CT as int16 when all values are integral and within int16 (else float32); default `"float32"` (v0) |
 | `view.structure_masks` (extended) | read | `{names?: (string \| number)[], encoding?: "uint8" \| "bits" \| "crops"}` | every mask entry carries `index` (the structure's position). `"uint8"`: v0 plus `index`. `"bits"`: `{grid, encoding: "bits", planes: ArrayRef[], masks: [{name, index, color, plane, bit, num_voxels, bbox}]}`, each plane a `(z, y, x)` uint8 / uint16 / uint32 volume holding up to 32 structures, bit `bit` of plane `plane` set inside the structure. `"crops"`: `{grid, encoding: "crops", masks: [{name, index, color, num_voxels, bbox: [z0, y0, x0, z1, y1, x1] \| null, data: ArrayRef \| null}]}`, the uint8 crop of shape `(z1-z0, y1-y0, x1-x0)` (ends exclusive) |
 | `view.beams` | read | `{draft?: {gantry_angles, couch_angles, iso_center?}}` | `{source: "stf" \| "plan" \| null, iso_centers: Vec3[], beams: [{index, name, label, gantry, couch, iso_center, source_direction, orbit_u?, orbit_w?, orbit_axis?, pending}]}` |
+| `view.sequence` (amendment 30) | read | `{}` | `SequenceView` (below); `PreconditionError(code="no_sequence")` while `sequencing.sequenced` is false |
 
 `view.beams` mirrors `gui/widgets/_result_widget.py:_beam_geometry` in LPS millimetres instead of
 viewer voxels: `source_direction` is the unit vector isocenter → source; `orbit_u` / `orbit_w` are
@@ -800,3 +804,66 @@ All additive unless marked **changed**; `(B)` = app, files, base data, views, an
     meanwhile. They only suggest: the field keeps its descriptor (the AI engine's `model` stays
     `type: "str"`) and accepts any text. In the browser there is no hub client, so only models on
     the (virtual) disk could be listed; the lookup is local and returns at once.
+29. 2026-11-20 (sequencing): **added** photon leaf sequencing on the session layer, as the Qt GUI
+    runs it.
+    - `plan.set {sequencing: {run: boolean, sequencer: string | null, values?: object}}` writes
+      the plan's `prop_seq` (`run_sequencing`, `sequencer` and the sequencer's settings);
+      `run: false` removes them. Other `prop_seq` entries are kept. An unknown sequencer or
+      invalid settings fail with `FormValidationError` (`field: "sequencing"` /
+      `"sequencer.<name>"`). `plan.get {detail}` returns `sequencing` in the same shape.
+    - `plan.options` adds `sequencers: Choice[]` (empty for radiation modes without sequencing);
+      `plan.form` accepts `kind: "sequencer"`.
+    - New method `workflow.sequence` `{}` -> `SessionState` (cost: compute). It sequences the
+      fluence of the active result with the plan's sequencer and replaces only the active result:
+      the result gains its `sequence` and, recomputed from the sequenced fluence in the plan's
+      dose convention, the quantities `"<identifier>_sequenced"` (full and per beam) next to the
+      optimized ones. Quantities of an earlier sequencing are replaced. It fails with
+      `PreconditionError` while `sequencing.available` is false.
+    - `SessionState` adds `sequencing: {available: boolean, reason: string | null}`: sequencing
+      needs a photon plan with `sequencing.run`, steering information, a dose influence matrix
+      and a result that is not outdated; `reason` says what is missing. It is not part of
+      `actions`.
+    - A `plan.set` that changes only `sequencing` outdates no stage.
+    - `"<identifier>_sequenced"` groups in `results.groups` carry the `meta_label` and `unit` of
+      their quantity, and the label `"<name> (sequenced)"`.
+30. 2026-11-21 (sequence view): **added** the data of the sequence viewer (Qt: Show Sequence).
+    - `SessionState.sequencing` adds `sequenced: boolean`: the active result carries a delivery
+      sequence.
+    - New method `view.sequence` `{}` -> `SequenceView` (cost: read):
+
+      ```ts
+      SequenceView = {
+        sequencer: string | null;        // short name of the sequencer, e.g. "xia"
+        num_of_levels: number | null;
+        beams: [{
+          index: number;
+          label: string;                 // "Beam 0 (45°)"
+          orientation: "X" | "Y" | null; // travel direction of the leaves in the beam's eye view
+          window: [number, number, number, number] | null; // travel min/max, stack min/max
+          weights: number[];             // one per shape
+          shapes: [{
+            leaf_width: number;
+            boundaries: number[];        // lower edge of every leaf row, ascending
+            leaf_positions: [number, number][]; // left and right leaf of every row
+          }];
+          fluence: {
+            window: [number, number, number, number];
+            bixel_width: number | null;
+            optimized: Float32Array | null; // (stack, travel), NaN where the beam has no ray
+            delivered: Float32Array | null;
+          } | null;
+          target: {
+            origin: [number, number];    // (travel, stack) of the center of the first bin
+            spacing: [number, number];
+            mask: Uint8Array;            // (stack, travel), 1 where the projected target lies
+          } | null;
+        }];
+      }
+      ```
+
+      All positions are in mm in the beam's eye view: the horizontal axis is the travel
+      direction of the leaves, the vertical axis the direction the leaf rows are stacked in
+      (for `orientation: "X"` the BEV x and z of the ray matrix). Arrays are row-major with
+      the stack axis first. `fluence` needs the steering information, `target` also the CT and
+      a target structure; they are `null` otherwise. The difference map of the Qt viewer is
+      `delivered - optimized`.

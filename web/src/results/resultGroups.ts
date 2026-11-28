@@ -70,8 +70,26 @@ export function splitResultKey(key: string): [string, string] {
   return at > 0 && at < key.length - 1 ? [key.slice(0, at), key.slice(at + 1)] : ["", key];
 }
 
+/** Suffix of the quantities recomputed from a sequenced fluence (`SEQUENCED_SUFFIX`). */
+export const SEQUENCED_SUFFIX = "_sequenced";
+
+/** `"<quantity>_sequenced"` -> the quantity and whether it is a sequenced one (`split_sequenced`). */
+export function splitSequenced(identifier: string): [string, boolean] {
+  return identifier.endsWith(SEQUENCED_SUFFIX) && identifier.length > SEQUENCED_SUFFIX.length
+    ? [identifier.slice(0, -SEQUENCED_SUFFIX.length), true]
+    : [identifier, false];
+}
+
 export function quantityName(base: string): string {
-  return QUANTITY_NAMES[base] ?? base;
+  const [quantity, sequenced] = splitSequenced(base);
+  const name = QUANTITY_NAMES[quantity];
+  if (name === undefined) return base;
+  return sequenced ? `${name} (sequenced)` : name;
+}
+
+/** `QUANTITY_META` of an identifier; a sequenced quantity has the label and unit of its quantity. */
+export function quantityMeta(base: string): [string, string] | undefined {
+  return QUANTITY_META[base] ?? QUANTITY_META[splitSequenced(base)[0]];
 }
 
 /**
@@ -105,7 +123,7 @@ export function groupResultKeys(keys: readonly string[], scenarioLabels: Readonl
   const groups: ResultGroup[] = [];
   for (const { base, tag, items } of entries.values()) {
     items.sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1]);
-    const [meta, unit] = QUANTITY_META[base] ?? ["Quantity", ""];
+    const [meta, unit] = quantityMeta(base) ?? ["Quantity", ""];
     groups.push({
       base,
       tag,

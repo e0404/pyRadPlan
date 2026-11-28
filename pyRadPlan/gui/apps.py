@@ -24,7 +24,8 @@ if TYPE_CHECKING:
     from pyRadPlan.ct._ct import CT
     from pyRadPlan.gui.windows._splash_win import StartupSplash
     from pyRadPlan.gui.workspace import WorkspaceManager
-    from pyRadPlan.result import PlanResult
+    from pyRadPlan.result import PlanResult, Sequence
+    from pyRadPlan.stf import SteeringInformation
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,30 @@ def launch_viewer(
     from .windows._result_win import _launch_result_window  # noqa: PLC0415
 
     _launch_result_window(ct=ct, cst=cst, result=result)
+
+
+def launch_sequence_viewer(
+    sequence: Union[PlanResult, Sequence],
+    stf: Optional[SteeringInformation] = None,
+) -> None:
+    """Launch the delivery sequence viewer for a sequenced (static) plan.
+
+    Parameters
+    ----------
+    sequence:
+        A sequenced :class:`~pyRadPlan.result.PlanResult` (``run_sequencing()``'s
+        return value) or its ``.sequence`` directly.
+    stf:
+        Steering information used to label each beam's tab with its gantry
+        angle, if available. Beams are labeled "Beam N" otherwise.
+    """
+    from pyRadPlan.result import PlanResult  # noqa: PLC0415
+
+    from .windows._sequence_win import _launch_sequence_window  # noqa: PLC0415
+
+    sequence = sequence.sequence if isinstance(sequence, PlanResult) else sequence
+
+    _launch_sequence_window(sequence, stf=stf)
 
 
 def analysis_viewer(

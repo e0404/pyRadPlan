@@ -131,11 +131,10 @@ class FieldShape(Beamlet):
 
     Notes
     -----
-    Coordinates in FieldShapes are defined in BEV in LPS.
-    Beam limiting device positions of ``FieldShapeAsBLD`` are in the IEC BEAM LIMITING DEVICE
-    coordinate system, which at collimator angle 0 coincides with the IEC GANTRY system: device
-    x is BEV x (the patient's left at gantry and couch angle 0 for a head-first supine
-    patient) and device y is BEV z (towards the gantry, superior).
+    Coordinates in FieldShapes are those of the beam's eye view frame of the ray matrix
+    (``ray_pos_bev`` x and z, LPS +x and +z at gantry and couch angle 0). For a head-first
+    supine patient this coincides with the IEC 61217 frame of DICOM RT, see
+    :class:`~pyRadPlan.machines.BeamLimitingDevice`.
     """
 
     # TODO:
@@ -277,7 +276,8 @@ class FieldShapeAsMask(FieldShape):
 
     Notes
     -----
-    The mask coordinates are defined in the beam's eye view (BEV) in LPS.
+    The mask coordinates are those of the beam's eye view frame of the ray matrix
+    (``ray_pos_bev`` x and z, LPS +x and +z at gantry and couch angle 0).
     """
 
     mask: np.ndarray
@@ -324,7 +324,8 @@ class FieldShapeAsBLD(FieldShape):
     Attributes
     ----------
     bld : BeamLimitingDevice
-        The beam limiting device from which to compute the field shape mask.
+        The beam limiting device from which to compute the field shape mask. A collimator
+        angle (``device_angle``) is not supported yet and refused.
 
     """
 
@@ -354,6 +355,11 @@ class FieldShapeAsBLD(FieldShape):
 
     @model_validator(mode="after")
     def setup_spatial_parameters(self) -> "FieldShapeAsBLD":
+        if (self.bld.device_angle or 0.0) % 360.0 != 0.0:
+            raise NotImplementedError(
+                "Beam limiting devices with a collimator angle (device_angle) are not "
+                "supported yet."
+            )
         self.__dict__["resolution"] = self._resolve_resolution(self.resolution, self.grid)
 
         # TODO: add field_width here directly & build grid with _build_grid

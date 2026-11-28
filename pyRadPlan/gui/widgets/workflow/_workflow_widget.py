@@ -94,6 +94,10 @@ class WorkflowWidget(WorkspaceWidget):
     #: Hosts (e.g. the main window) can use it to lock other input widgets.
     busy_changed = Signal(bool)
 
+    #: Emitted once sequencing has finished and the sequenced result is in the
+    #: workspace, so a host can bring up the sequence viewer for it.
+    sequencing_finished = Signal()
+
     #: Internal: a compute report marshalled from the worker thread to the GUI
     #: thread.  Carries a :class:`~pyRadPlan.core.ComputeReport`.
     _report_received = Signal(object)
@@ -173,6 +177,7 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij = self._add_button("Load Dij", self._on_load_dij)
         self._btn_optimize = self._add_button("Optimize", self._on_optimize)
         self._btn_recalc = self._add_button("Recalculate Dose", self._on_recalc_dose)
+        self._btn_sequence = self._add_button("Run Sequencing", self._on_sequence)
         self._btn_save_result = self._add_button(
             "Snapshot Result",
             self._on_save_result,
@@ -203,9 +208,10 @@ class WorkflowWidget(WorkspaceWidget):
         # Col 1: dose influence
         grid.addWidget(self._btn_calc_dose, 1, 1)
         grid.addWidget(self._btn_load_dij, 2, 1)
-        # Col 2: result computation (optimization, recalculation)
+        # Col 2: result computation (optimization, recalculation, sequencing)
         grid.addWidget(self._btn_optimize, 1, 2)
         grid.addWidget(self._btn_recalc, 2, 2)
+        grid.addWidget(self._btn_sequence, 3, 2)
         # Col 3: keep result in-memory (file saves live in the File menu)
         grid.addWidget(self._btn_save_result, 1, 3)
         root.addLayout(grid)
@@ -320,6 +326,9 @@ class WorkflowWidget(WorkspaceWidget):
         self._btn_load_dij.setEnabled(True)
         self._btn_optimize.setEnabled(actions["optimize"])
         self._btn_recalc.setEnabled(actions["recalc"])
+        blocker = self.session.sequencing_blocker()
+        self._btn_sequence.setEnabled(blocker is None)
+        self._btn_sequence.setToolTip(blocker or "")
         self._btn_save_result.setEnabled("result" in present)
 
     # ------------------------------------------------------------------
@@ -964,6 +973,19 @@ class WorkflowWidget(WorkspaceWidget):
         if not self._resolve_pending_changes("Recalculate Dose", outdates_input=True):
             return
         self._run_calculation("Recalculate Dose", "recalc")
+
+    # ------------------------------------------------------------------
+    # Sequencing callbacks
+    # ------------------------------------------------------------------
+
+    def _on_sequence(self) -> None:
+        # Only the active result is replaced, snapshots and imported doses are kept.
+        if not self._resolve_pending_changes("Run Sequencing"):
+            return
+        operation = self._prepare("Run Sequencing", "sequence")
+        if operation is None:
+            return
+        self._run_operation(operation, on_done=lambda _: self.sequencing_finished.emit())
 
     # ------------------------------------------------------------------
     # Result callbacks

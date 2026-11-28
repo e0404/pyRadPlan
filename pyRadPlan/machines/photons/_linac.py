@@ -11,7 +11,7 @@ from pydantic import (
     ValidationError,
 )
 
-from pyRadPlan.machines.base import ExternalBeamMachine
+from pyRadPlan.machines.base import ExternalBeamMachine, MLC
 from ._svd_kernel import PhotonSVDKernel
 
 
@@ -33,6 +33,9 @@ class PhotonLINAC(ExternalBeamMachine):
         Output factor data
     tpr : np.ndarray
         Tissue-to-phantom ratio data
+    mlc : Optional[MLC]
+        Multi-leaf collimator of the machine (leaf width, number of leaf
+        pairs)
 
     Notes
     -----
@@ -56,6 +59,9 @@ class PhotonLINAC(ExternalBeamMachine):
     # Commissioning data
     of: Optional[NDArray] = Field(default=None, description="Output Factor")
     tpr: Optional[NDArray] = Field(default=None, description="Tissue-to-phantom-Ratio")
+
+    # Beam limiting device
+    mlc: Optional[MLC] = Field(default=None, description="Multi-leaf collimator of the machine.")
 
     # TODO: Beam model descriptions for Monte Carlo
 

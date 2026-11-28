@@ -27,7 +27,7 @@ try:
     # msvcp140.dll, and as a DLL already loaded by name is reused, Qt would otherwise run on
     # that one instead of the newer runtime PySide6 ships, and fails if the system's is too old.
     from PySide6 import QtCore  # noqa: F401
-    from .apps import gui, launch_viewer, analysis_viewer, main
+    from .apps import gui, launch_viewer, launch_sequence_viewer, analysis_viewer, main
 
     GUI_AVAILABLE = True
 except ImportError as _exc:
@@ -57,12 +57,13 @@ except ImportError as _exc:
             )
         raise ImportError(_gui_error_message) from _import_error
 
-    gui = launch_viewer = analysis_viewer = main = _missing_gui
+    gui = launch_viewer = launch_sequence_viewer = analysis_viewer = main = _missing_gui
 
 
 __all__ = [
     "gui",
     "launch_viewer",
+    "launch_sequence_viewer",
     "analysis_viewer",
     "main",
     "GUI_AVAILABLE",

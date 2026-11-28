@@ -212,4 +212,85 @@ describe("mock backend, package A methods", () => {
     const pause = await failure(req("session.pause", {}));
     expect(pause.code).toBe("not_available");
   });
+
+  it("lists sequencers for photons only, serves their form and stores the sequencing settings", async () => {
+    const { req } = await loaded();
+    const photons = await req("plan.options", {});
+    expect(photons.sequencers?.map((c) => c.value)).toEqual(["engel", "siochi", "xia"]);
+    expect((await req("plan.options", { radiation_mode: "protons" })).sequencers).toEqual([]);
+    expect(((await req("plan.get", { detail: true })) as PlanDetail).sequencing).toEqual({ run: false, sequencer: null, values: {} });
+
+    const form = await req("plan.form", { kind: "sequencer", name: "xia", radiation_mode: "photons" });
+    expect(form.fields.map((f) => f.name)).toEqual(["num_of_levels", "mode"]);
+    expect(form.explicit).toEqual([]);
+
+    await req("plan.set", { sequencing: { run: true, sequencer: "xia", values: { num_of_levels: 7 } } });
+    expect(((await req("plan.get", { detail: true })) as PlanDetail).sequencing).toEqual({ run: true, sequencer: "xia", values: { num_of_levels: 7 } });
+    const stored = await req("plan.form", { kind: "sequencer", name: "xia" });
+    expect(stored.values.num_of_levels).toBe(7);
+    expect(stored.explicit).toEqual(["num_of_levels"]);
+    expect((await req("plan.form", { kind: "sequencer", name: "siochi" })).explicit).toEqual([]);
+
+    const unknown = await failure(req("plan.set", { sequencing: { run: true, sequencer: "nope", values: {} } }));
+    expect(unknown.details).toEqual([{ field: "sequencing", message: 'sequencer "nope" is not available for photons' }]);
+    const invalid = await failure(req("plan.set", { sequencing: { run: true, sequencer: "xia", values: { num_of_levels: 0 } } }));
+    expect(invalid.details).toEqual([{ field: "sequencer.num_of_levels", message: "Input should be greater than or equal to 1" }]);
+
+    // The settings belong to the radiation mode: another mode drops them.
+    await req("plan.set", { radiation_mode: "protons" });
+    expect(((await req("plan.get", { detail: true })) as PlanDetail).sequencing?.run).toBe(false);
+    expect((await failure(req("plan.set", { sequencing: { run: true, sequencer: "xia", values: {} } }))).details).toEqual([expect.objectContaining({ field: "sequencing" })]);
+  });
+
+  it("says why sequencing cannot run and adds the sequenced quantities to the active result", async () => {
+    const { req, events } = await loaded();
+    let state = await req("session.state", {});
+    expect(state.sequencing).toEqual({ available: false, reason: expect.stringMatching(/^Sequencing needs steering information and a dose influence matrix/), sequenced: false });
+    await req("plan.set", { gantry_angles: [0, 90] });
+    state = await req("workflow.calc_dose_influence", {});
+    expect(state.sequencing?.reason).toBe("No result available to sequence.");
+    state = await req("workflow.optimize", { max_iter: 5 });
+    expect(state.sequencing).toEqual({ available: false, reason: "Enable 'Run sequencing' in the Plan panel first.", sequenced: false });
+    const refused = await failure(req("workflow.sequence", {}));
+    expect([refused.type, refused.message]).toEqual(["PreconditionError", "Enable 'Run sequencing' in the Plan panel first."]);
+
+    // Changing only the sequencing settings outdates neither the dose influence nor the result.
+    state = await req("plan.set", { sequencing: { run: true, sequencer: "siochi", values: { num_of_levels: 4 } } });
+    expect(state.stages).toMatchObject({ dij: "done", optimization: "done" });
+    expect(state.sequencing).toEqual({ available: true, reason: null, sequenced: false });
+
+    await req("workflow.snapshot", { tag: "before" });
+    const before = state.revisions!.workspace.result;
+    events.length = 0;
+    state = await req("workflow.sequence", {});
+    expect(events.some((e) => e.event === "progress" && e.label === "Sequencing" && typeof e.fraction === "number")).toBe(true);
+    expect(state.busy).toBeNull();
+    expect(state.stages.optimization).toBe("done");
+    expect(state.revisions!.workspace.result).toBeGreaterThan(before);
+    expect(state.quantities).toEqual(["physical_dose", "physical_dose_sequenced", "before/physical_dose"]);
+    const group = state.results!.groups.find((g) => g.base === "physical_dose_sequenced")!;
+    expect(group).toMatchObject({ tag: "", label: "dose (sequenced)", meta_label: "Dose", unit: "Gy" });
+    expect(group.components.map((c) => c.key)).toEqual(["physical_dose_sequenced", "physical_dose_sequenced_beam 0", "physical_dose_sequenced_beam 1"]);
+    expect(state.results!.default).toBe("physical_dose");
+    const optimized = await req("view.volume", { name: "physical_dose" });
+    const delivered = await req("view.volume", { name: "physical_dose_sequenced" });
+    expect(delivered.unit).toBe("Gy");
+    expect(delivered.range[1]).toBeCloseTo(optimized.range[1]! * (1 - 0.1 / 4), 3);
+    expect((await req("view.volume", { name: "physical_dose_sequenced_beam 1" })).range[1]).toBeGreaterThan(0);
+    expect((await req("objectives.catalog", {})).reference_images.map((r) => r.label)).toContain("dose (sequenced)");
+
+    // A second run replaces the quantities of the first; a new optimization is a result without them.
+    state = await req("workflow.sequence", {});
+    expect(state.results!.groups.filter((g) => g.tag === "").map((g) => g.base)).toEqual(["physical_dose", "physical_dose_sequenced"]);
+    state = await req("workflow.optimize", { max_iter: 5 });
+    expect(state.quantities).toEqual(["physical_dose", "before/physical_dose"]);
+    expect(state.sequencing?.available).toBe(true);
+
+    // An outdated result and another radiation mode block it.
+    state = await req("plan.set", { bixel_width: 6 });
+    expect(state.sequencing?.reason).toMatch(/^Result is outdated relative to the current plan/);
+    state = await req("plan.set", { radiation_mode: "protons" });
+    expect(state.sequencing).toEqual({ available: false, reason: "Sequencing is only available for photon plans.", sequenced: false });
+    expect((await req("app.info", {})).methods).toContain("workflow.sequence");
+  });
 });

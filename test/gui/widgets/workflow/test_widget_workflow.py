@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import SimpleITK as sitk
+from pyRadPlan.plan import IonPlan, PhotonPlan
 from pyRadPlan.result import PlanResult, create_result
 
 from pyRadPlan.core import ProgressLevel, ProgressReport, StatusReport
@@ -119,6 +120,7 @@ def test_indeterminate_progress_sets_busy_range(qapp):
 def test_plan_change_marks_downstream_stale(qapp):
     ws = WorkspaceManager()
     w = WorkflowWidget(ws)
+    pln = PhotonPlan()
 
     def _result():
         return create_result({"physical_dose": sitk.Image([2, 2, 2], sitk.sitkFloat32)})
@@ -146,6 +148,123 @@ def test_plan_change_marks_downstream_stale(qapp):
     ws.set_many(stf=object(), dij=object())
     ws.stf = object()
     assert w.session.tracker.dij_stale and w.session.tracker.result_stale
+
+
+_SEQUENCING = {"run_sequencing": True, "sequencer": "xia"}
+
+
+def _sequencing_setup(pln=None, **stored):
+    """A workflow widget holding a photon plan asking for sequencing and its products."""
+    ws = WorkspaceManager()
+    w = WorkflowWidget(ws)
+    data = {
+        "pln": PhotonPlan(prop_seq=dict(_SEQUENCING)) if pln is None else pln,
+        "stf": object(),
+        "dij": object(),
+        "result": create_result({"physical_dose": _dose_image()}),
+    }
+    data.update(stored)
+    ws.set_many(**{key: value for key, value in data.items() if value is not None})
+    return ws, w
+
+
+def _refused_sequencing(monkeypatch, w):
+    """Run the sequencing step and return the warnings it showed instead of starting."""
+    warned = []
+    monkeypatch.setattr(
+        "pyRadPlan.gui.widgets.workflow._workflow_widget.QMessageBox.warning",
+        lambda *args, **kwargs: warned.append(args[2]),
+    )
+    w._on_sequence()
+    assert w._thread is None and not w.session.busy
+    return warned
+
+
+def test_sequence_button_needs_result_dose_influence_and_a_photon_plan(qapp):
+    w = WorkflowWidget(WorkspaceManager())
+    assert not w._btn_sequence.isEnabled()
+
+    ws, w = _sequencing_setup()
+    assert w._btn_sequence.isEnabled() and w._btn_sequence.toolTip() == ""
+
+    ws, w = _sequencing_setup(pln=IonPlan())
+    assert not w._btn_sequence.isEnabled()
+    assert "photon" in w._btn_sequence.toolTip()
+
+
+def test_sequence_button_disabled_without_sequencing_configured(qapp, monkeypatch):
+    ws, w = _sequencing_setup(pln=PhotonPlan())
+
+    assert not w._btn_sequence.isEnabled()
+    assert "Plan panel" in w._btn_sequence.toolTip()
+    assert len(_refused_sequencing(monkeypatch, w)) == 1
+
+
+def test_sequence_button_disabled_without_dij(qapp, monkeypatch):
+    ws, w = _sequencing_setup(dij=None)
+
+    assert not w._btn_sequence.isEnabled()
+    assert "dose influence" in w._btn_sequence.toolTip()
+    assert "dose influence" in _refused_sequencing(monkeypatch, w)[0]
+
+
+def test_sequencing_refused_without_result(qapp, monkeypatch):
+    ws, w = _sequencing_setup(result=None)
+
+    assert not w._btn_sequence.isEnabled()
+    assert _refused_sequencing(monkeypatch, w) == ["No result available to sequence."]
+
+
+def test_sequencing_refused_for_an_outdated_result(qapp, monkeypatch):
+    ws, w = _sequencing_setup(pln=IonPlan())
+    ws.pln = PhotonPlan(prop_seq=dict(_SEQUENCING))
+
+    assert not w._btn_sequence.isEnabled()
+    assert "outdated" in w._btn_sequence.toolTip()
+    assert "outdated" in _refused_sequencing(monkeypatch, w)[0]
+
+
+def test_sequencing_settings_of_the_plan_do_not_outdate_the_result(qapp):
+    ws, w = _sequencing_setup(pln=PhotonPlan())
+    assert not w._btn_sequence.isEnabled()
+
+    ws.pln = ws.pln.model_copy(update={"prop_seq": {**_SEQUENCING, "num_of_levels": 9}})
+
+    tracker = w.session.tracker
+    assert not tracker.dij_stale and not tracker.result_stale
+    assert w._btn_sequence.isEnabled()
+
+    # Any other plan setting changed along with them does
+    ws.pln = ws.pln.model_copy(update={"num_of_fractions": 5, "prop_seq": dict(_SEQUENCING)})
+    assert w.session.tracker.dij_stale and w.session.tracker.result_stale
+    assert not w._btn_sequence.isEnabled()
+
+
+def test_sequencing_replaces_the_active_result_and_announces_it(qapp, monkeypatch):
+    ws, w = _sequencing_setup()
+    result = ws.result
+    ws.add_result("saved", {"physical_dose": _dose_image()})
+    snapshot = ws.results["saved"]
+    sequenced = create_result({"physical_dose": _dose_image(2.0)})
+    calls = []
+
+    def run_sequencing(passed_result, pln, stf, dij=None):
+        calls.append((passed_result, pln, stf, dij))
+        return sequenced
+
+    monkeypatch.setattr("pyRadPlan.run_sequencing", run_sequencing)
+    _synchronous(monkeypatch)
+    seen = []
+    w.sequencing_finished.connect(lambda: seen.append(ws.result))
+
+    w._on_sequence()
+
+    # Sequenced on a copy, with the dose influence the delivered dose is computed from
+    assert len(calls) == 1
+    assert calls[0][0] is not result and calls[0][1:] == (ws.pln, ws.stf, ws.dij)
+    assert ws.result is sequenced and seen == [sequenced]
+    assert ws.results["saved"] is snapshot
+    assert not w.session.tracker.result_stale and not w.session.busy
 
 
 def test_indicators_status_and_buttons_follow_the_session(qapp):

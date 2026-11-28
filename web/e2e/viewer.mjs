@@ -209,11 +209,20 @@ try {
   await tid("edit-voi-unapplied-pick").waitFor();
   await tid("msg-keep").click();
   expect((await tid("edit-voi-dialog").count()) === 1, "Edit VOI: OK with an unapplied pick asks and can keep editing");
-  // A parameter edited just before must not survive the applied pick.
-  await tid("tissue-OuterTarget-alpha_x").fill("0.77");
-  await tid("tissue-OuterTarget-alpha_x").press("Tab");
-  await tid("tissue-pick-apply").click();
-  await page.waitForFunction((id) => document.querySelector('[data-testid="tissue-picker"]')?.getAttribute("data-value") === id, picked);
+  // A parameter edited just before must not survive the applied pick. Edit and Apply in one task,
+  // so that Apply always falls within the debounce of the edit's evaluation.
+  await page.evaluate(() => {
+    const input = document.querySelector('[data-testid="tissue-OuterTarget-alpha_x"]');
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "0.77");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.blur();
+    document.querySelector('[data-testid="tissue-pick-apply"]').click();
+  });
+  await page.waitForFunction(() => document.querySelector('[data-testid="tissue-OuterTarget-alpha_x"]')?.value !== "0.77");
+  // Past the debounce of the edit's evaluation, which must not bring the edit back.
+  await page.waitForTimeout(400);
+  expect((await tid("tissue-OuterTarget-alpha_x").inputValue()) !== "0.77", "Edit VOI: the applied pick stays after the edit's debounced evaluation");
   await tid("edit-voi-ok").click();
   await tid("edit-voi-dialog").waitFor({ state: "detached" });
   expect((await tid("edit-voi-unapplied-pick").count()) === 0, "Edit VOI: an applied pick is not asked about");

@@ -9,6 +9,7 @@ import SimpleITK as sitk
 
 import pyRadPlan.app
 from pyRadPlan.app import Session, decode
+from pyRadPlan.sequencing._bev import beam_bixels, field_window
 
 
 def _arrays(response):
@@ -186,6 +187,71 @@ def test_staleness_run_all_and_recalc(client, coarse_plan):
     assert session.workspace.dij is not dij
     assert session.workspace.result is not recalculated
     assert session.workspace.results["before"] is snapshot
+
+
+def test_sequencing_adds_the_delivered_dose_to_the_active_result(client, coarse_plan):
+    client.ok("data.load_phantom", {"name": "TG119"})
+    client.ok("plan.set", coarse_plan)
+    client.ok("workflow.run_all", {"solver": "scipy", "max_iter": 10})
+    session = client.manager.get(client.session)
+    assert session.workspace.pln.result_dose_factor > 1
+    client.ok("workflow.snapshot", {"tag": "before"})
+
+    # The sequencing settings leave the optimized result current
+    sequencing = {"run": True, "sequencer": "siochi", "values": {"num_of_levels": 9}}
+    state = client.ok("plan.set", {"sequencing": sequencing})["result"]
+    assert set(state["stages"].values()) == {"done"}
+    assert state["sequencing"] == {"available": True, "reason": None, "sequenced": False}
+    error = client.call("view.sequence")["error"]
+    assert (error["type"], error["code"]) == ("PreconditionError", "no_sequence")
+
+    state = client.ok("workflow.sequence")["result"]
+
+    assert set(state["stages"].values()) == {"done"}
+    assert state["sequencing"]["sequenced"]
+    result = session.workspace.result
+    assert result.sequence.sequencer == "siochi" and result.sequence.num_of_levels == 9
+    assert list(session.workspace.results) == ["current", "before"]
+    groups = {group["base"]: group for group in state["results"]["groups"] if not group["tag"]}
+    delivered, optimized = groups["physical_dose_sequenced"], groups["physical_dose"]
+    assert (delivered["meta_label"], delivered["unit"]) == (optimized["meta_label"], "Gy")
+    assert delivered["label"] == optimized["label"] + " (sequenced)"
+    # The delivered dose is reported in the plan's dose convention, like the optimized one
+    doses = [
+        sitk.GetArrayFromImage(result[key].values)
+        for key in ("physical_dose", "physical_dose_sequenced")
+    ]
+    assert doses[1].max() == pytest.approx(doses[0].max(), rel=0.3)
+
+    response = client.ok("view.sequence")
+    view = decode(response["result"], response["buffers"])
+    assert (view["sequencer"], view["num_of_levels"]) == ("siochi", 9)
+    stf = session.workspace.stf
+    assert len(view["beams"]) == len(stf.beams)
+    for beam, sequenced, geometry in zip(view["beams"], result.sequence.beams, stf.beams):
+        assert beam["label"] == f"Beam {beam['index']} ({geometry.gantry_angle:.0f}°)"
+        assert beam["orientation"] == "X" and beam["window"] == field_window(sequenced)
+        assert len(beam["shapes"]) == len(beam["weights"]) == sequenced.num_of_segments
+        shape = beam["shapes"][0]
+        assert len(shape["leaf_positions"]) == len(shape["boundaries"])
+        # The fluence maps lie on the ray grid of the beam, one bixel per ray
+        fluence = beam["fluence"]
+        delivered, optimized = fluence["delivered"], fluence["optimized"]
+        window, bixel_width = fluence["window"], fluence["bixel_width"]
+        assert bixel_width == geometry.bixel_width
+        assert delivered.shape == optimized.shape
+        assert delivered.shape[1] == round((window[1] - window[0]) / bixel_width)
+        assert np.isfinite(delivered).sum() == len(geometry.rays)
+        np.testing.assert_allclose(
+            np.nansum(optimized), result.fluence[beam_bixels(stf, beam["index"])].sum(), rtol=1e-5
+        )
+        # The projected target lies inside the field the leaves can open
+        target = beam["target"]
+        rows, columns = np.nonzero(target["mask"])
+        travel = target["origin"][0] + columns * target["spacing"][0]
+        stack = target["origin"][1] + rows * target["spacing"][1]
+        assert beam["window"][0] < travel.min() and travel.max() < beam["window"][1]
+        assert beam["window"][2] < stack.min() and stack.max() < beam["window"][3]
 
 
 def test_prepared_operations_touch_the_workspace_only_on_commit(coarse_plan):

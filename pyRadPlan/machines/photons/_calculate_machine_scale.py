@@ -10,6 +10,8 @@ from pyRadPlan import (
 
 from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_voi
+from pyRadPlan.machines import MLC
+from pyRadPlan.result._beam_sequence import BeamSequence
 
 
 def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
@@ -22,8 +24,23 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
     else:
         raise ValueError(f"Machine '{machine}' not recognized.")
 
-    # TODO: correct?
-    mask = np.ones((int(ct.y[-1] - ct.y[0]), int(ct.x[-1] - ct.x[0])))
+    # Fully open field covering the phantom cross-section, as one MLC leaf-stack.
+    field_width_y = ct.y[-1] - ct.y[0]
+    field_width_x = ct.x[-1] - ct.x[0]
+    leaf_width = 5.0
+    n_leaves = int(np.ceil(field_width_y / leaf_width))
+    if n_leaves % 2 == 0:
+        n_leaves += 1
+    half_extent = n_leaves * leaf_width / 2
+    boundaries = -half_extent + leaf_width * np.arange(n_leaves)
+    positions = np.tile([-field_width_x / 2, field_width_x / 2], (n_leaves, 1))
+    mlc = MLC(
+        device_type="MLCX",
+        leaf_position_boundaries=boundaries,
+        leaf_positions=positions,
+        leaf_width=leaf_width,
+    )
+    beam_sequence = BeamSequence.from_shapes([mlc], [1.0])
 
     # Create a plan object
     pln = PhotonPlan(machine="Generic")
@@ -32,22 +49,18 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
         "gantry_angles": np.zeros(num_of_beams),
         "couch_angles": np.zeros(num_of_beams),
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "field_shape": mask.T,
+        "beam_sequences": [beam_sequence],
         "resolution": 0.5,
     }
 
     # Generate Steering Geometry ("stf")
     stf = generate_stf(ct, cst, pln)
 
-    # Ensure single bixel with weight 1.0
-    stf.beams[0].rays[0].beamlets[0].weight = 1.0
-
     # Set isocenter & SAD
     stf.beams[0].iso_center = np.array([0.0, 0.0, 0.0])
     stf.beams[0].sad = 1000.0
 
-    # Forward dose calculation
+    # Calculate dose for this single, fully-open, weight-1.0 field
     result = calc_dose_forward(ct, cst, stf, pln)
 
     # Get peak dose
@@ -59,7 +72,7 @@ def calculate_machine_scale(machine, ct_dim, ct_resolution, num_of_ct_scen):
 
 def central_axis_peak(result, ct, stf):
     # TODO: adjust to central axis
-    return np.max(sitk.GetArrayViewFromImage(result.physical_dose.values))
+    return float(np.max(sitk.GetArrayViewFromImage(result.physical_dose.values)))
 
 
 def build_water_phantom(ct_dim, ct_resolution):  # , num_of_ct_scen):

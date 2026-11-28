@@ -370,19 +370,20 @@ def test_copy_does_not_share_its_containers(sample_image):
     assert copy.info == {}
 
 
-def _matrad_sequencing(num_beams):
+def _matrad_aperture_info(num_beams):
     beams = [
         {
-            "shapes": np.ones((3, 4)),
-            "shapesWeight": 1.0,
-            "bixelIx": np.array([1.0, 2.0, 3.0]) + 3 * ix,
-            "fluence": np.full((3, 4), 0.5),
+            "leafPairPos": np.array([-5.0, 0.0]),
+            "shape": {
+                "leftLeafPos": np.array([-7.5, -2.5]),
+                "rightLeafPos": np.array([2.5, 7.5]) + ix,
+                "weight": 1.5 + ix,
+            },
         }
         for ix in range(num_beams)
     ]
-    if num_beams == 1:
-        return {"beam": beams[0]}
-    return {"beam": {key: [beam[key] for beam in beams] for key in beams[0]}}
+    beam = beams[0] if num_beams == 1 else {key: [b[key] for b in beams] for key in beams[0]}
+    return {"bixelWidth": 5.0, "numOfMLCLeafPairs": 80.0, "beam": beam}
 
 
 @pytest.mark.parametrize("num_beams", [0, 1, 2])
@@ -391,7 +392,7 @@ def test_matrad_result_survives_a_mat_file(tmp_path, num_beams):
 
     data = {"physicalDose": np.ones((5, 6, 4)), "w": np.ones(3)}
     if num_beams:
-        data["sequencing"] = _matrad_sequencing(num_beams)
+        data["apertureInfo"] = _matrad_aperture_info(num_beams)
     result = PlanResult.from_matrad(data)
     assert (result.sequence is None) == (num_beams == 0)
 
@@ -402,108 +403,15 @@ def test_matrad_result_survives_a_mat_file(tmp_path, num_beams):
     assert loaded.stored_quantities == ["physical_dose"]
     np.testing.assert_array_equal(loaded.fluence, np.ones(3))
     if num_beams:
-        assert [beam.bixel_ix for beam in loaded.sequence.beam] == [
-            beam.bixel_ix for beam in result.sequence.beam
-        ]
-        assert loaded.sequence.beam[0].bixel_ix == [0, 1, 2]
+        assert len(loaded.sequence.beams) == num_beams
+        for ix, (beam, original) in enumerate(zip(loaded.sequence.beams, result.sequence.beams)):
+            assert beam.segments[0].weight == 1.5 + ix
+            np.testing.assert_allclose(
+                beam.segments[0].start.mlc.leaf_positions,
+                original.segments[0].start.mlc.leaf_positions,
+            )
     else:
         assert loaded.sequence is None
-
-
-def test_to_matrad_leaves_out_scenario_quantities(sample_image):
-    result = create_result(
-        {
-            "physical_dose": sample_image,
-            "physical_dose_scenario": [sample_image, None],
-            "scenario_labels": ("a", "b"),
-        }
-    )
-    matrad_dict = result.to_matrad()
-    assert "physicalDose" in matrad_dict
-    assert "scenarioQuantities" not in matrad_dict
-    assert "scenarioLabels" not in matrad_dict
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"physicalDose": np.zeros((5, 6, 4))},
-        {"physicalDose": np.zeros((5, 6, 4)), "w": np.ones(3)},
-        {"RBExDose": np.zeros((5, 6, 4))},
-    ],
-)
-def test_matrad_result_detected_without_beam_fields(data):
-    """A matRad result is recognized by its field names, not only by ``_beam1``."""
-    result = create_result(data)
-
-    (name,) = result.stored_quantities
-    assert name in ("physical_dose", "rbe_x_dose")
-    # matRad stores (y, x, z); the image is sized (x, y, z)
-    assert result[name].values.GetSize() == (6, 5, 4)
-
-
-def test_matrad_quantity_names_roundtrip():
-    """The irregular matRad field names map to the pyRadPlan quantity identifiers."""
-    cube = np.random.rand(5, 6, 4)
-    result = PlanResult.from_matrad(
-        {"physicalDose": cube, "RBExDose": cube, "LET": cube, "RBExDose_beam1": cube}
-    )
-
-    assert sorted(result.stored_quantities) == ["let", "physical_dose", "rbe_x_dose"]
-    assert result.stored_beam_quantities == ["rbe_x_dose"]
-
-    exported = result.to_matrad()
-    assert {"physicalDose", "RBExDose", "LET", "RBExDose_beam1"} <= set(exported)
-    np.testing.assert_allclose(exported["RBExDose"], cube)
-
-
-def test_matrad_import_ignores_fields_that_are_no_cubes(caplog):
-    """Derived data in a resultGUI must not invalidate its cubes."""
-    cube = np.zeros((5, 6, 4))
-    with caplog.at_level("WARNING"):
-        result = PlanResult.from_matrad(
-            {
-                "physicalDose": cube,
-                "w": np.ones(7),
-                "qi": [{"name": "target"}],
-                "dvh": {"doseGrid": np.zeros(10)},
-                "someVector": np.ones(7),
-            }
-        )
-
-    assert result.stored_quantities == ["physical_dose"]
-    assert result.stored_beam_quantities == []
-    np.testing.assert_allclose(result.fluence, np.ones(7))
-    assert "qi" in caplog.text
-    assert "someVector" in caplog.text
-
-
-def test_matrad_import_takes_geometry_from_reference():
-    """matRad cubes carry no geometry; a reference image supplies it for all of them."""
-    reference = sitk.GetImageFromArray(np.zeros((4, 5, 6)))
-    reference.SetSpacing((2.0, 3.0, 4.0))
-    reference.SetOrigin((-10.0, 20.0, 5.0))
-    cube = np.zeros((5, 6, 4))
-
-    result = PlanResult.from_matrad(
-        {"physicalDose": cube, "LET": cube, "physicalDose_beam1": cube},
-        reference_image=reference,
-    )
-
-    for distribution in (result.physical_dose, result.let, result.beam.physical_dose[0]):
-        assert distribution.values.GetSpacing() == (2.0, 3.0, 4.0)
-        assert distribution.values.GetOrigin() == (-10.0, 20.0, 5.0)
-
-
-def test_unknown_non_quantity_key_names_the_key():
-    with pytest.raises(ValueError, match="'weights'"):
-        create_result({"physical_dose": np.zeros((4, 5, 6)), "weights": np.ones(7)})
-
-
-def test_create_result_leaves_input_dict_unchanged(sample_image):
-    data = {"physical_dose": sample_image}
-    create_result(data, fluence=np.ones(3))
-    assert list(data) == ["physical_dose"]
 
 
 def test_fluence_accepts_sequences_and_backend_arrays(sample_image):

@@ -397,3 +397,63 @@ def test_tracker_agrees_with_input_versions_over_random_changes():
             apply([str(k) for k in rng.choice(WORKSPACE_KEYS, size=2, replace=False)])
         else:
             apply([str(rng.choice(WORKSPACE_KEYS))])
+
+
+def test_sequencing_settings_do_not_outdate_the_products():
+    from pyRadPlan.app import Session
+    from pyRadPlan.plan import IonPlan, PhotonPlan
+
+    session = Session(auto_plan=False)
+    ws = session.workspace
+    pln = PhotonPlan()
+    ws.set_many(pln=pln, stf=object(), dij=object(), result=_result())
+    assert "Plan panel" in session.sequencing_blocker()
+
+    sequencing = {"run_sequencing": True, "sequencer": "xia"}
+    ws.pln = pln.model_copy(update={"prop_seq": sequencing})
+    assert not session.tracker.dij_stale and not session.tracker.result_stale
+    assert session.sequencing_blocker() is None
+
+    # A plan edited in place has no previous state to compare with
+    ws.pln.prop_seq = {**sequencing, "num_of_levels": 5}
+    ws.pln = ws.pln
+    assert session.tracker.result_stale
+    assert "outdated" in session.sequencing_blocker()
+
+    ws.set_many(stf=object(), dij=object(), result=_result())
+    assert session.sequencing_blocker() is None
+    ws.pln = ws.pln.model_copy(update={"num_of_fractions": 3})
+    assert session.tracker.dij_stale and session.tracker.result_stale
+
+    ws.set_many(pln=IonPlan(prop_seq=sequencing), stf=object(), dij=object(), result=_result())
+    assert "photon" in session.sequencing_blocker()
+    ws.set_many(pln=PhotonPlan(prop_seq=sequencing), stf=object(), dij=None, result=_result())
+    assert "dose influence" in session.sequencing_blocker()
+
+
+def test_sequencing_replaces_the_active_result(monkeypatch):
+    from pyRadPlan.app import PreconditionError, Session
+    from pyRadPlan.plan import PhotonPlan
+
+    session = Session(auto_plan=False)
+    ws = session.workspace
+    with pytest.raises(PreconditionError, match="photon"):
+        session.sequence()
+
+    pln = PhotonPlan(prop_seq={"run_sequencing": True, "sequencer": "xia"})
+    ws.set_many(pln=pln, stf=object(), dij=object(), result=_result())
+    ws.add_result("saved", _result())
+    result, snapshot = ws.result, ws.results["saved"]
+    sequenced = _result()
+    calls = []
+
+    def run_sequencing(passed, pln, stf, dij=None):
+        calls.append((passed, pln, stf, dij))
+        return sequenced
+
+    monkeypatch.setattr("pyRadPlan.run_sequencing", run_sequencing)
+    session.sequence()
+
+    assert calls[0][0] is not result and calls[0][1:] == (pln, ws.stf, ws.dij)
+    assert ws.result is sequenced and ws.results["saved"] is snapshot
+    assert not session.tracker.result_stale

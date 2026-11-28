@@ -155,7 +155,54 @@ export interface QiResult {
   rows: { index: number; name: string; color: Vec3; values: Record<string, number | null> }[];
 }
 
+/** One MLC shape of a beam's delivery sequence; positions in mm in the beam's eye view. */
+export interface SequenceShape {
+  leaf_width: number;
+  /** Lower edge of every leaf row, ascending. */
+  boundaries: number[];
+  /** Left and right leaf of every row. */
+  leaf_positions: [number, number][];
+}
+
+/** `[travel_min, travel_max, stack_min, stack_max]` in mm. */
+export type BevWindow = [number, number, number, number];
+
+export interface SequenceFluence {
+  window: BevWindow;
+  bixel_width: number | null;
+  /** `(stack, travel)`, NaN where the beam has no ray. */
+  optimized: NDArray<Float32Array> | null;
+  delivered: NDArray<Float32Array> | null;
+}
+
+export interface SequenceTarget {
+  /** `(travel, stack)` of the centre of the first bin. */
+  origin: [number, number];
+  spacing: [number, number];
+  /** `(stack, travel)`, 1 where the projected target lies. */
+  mask: NDArray<Uint8Array>;
+}
+
+export interface SequenceBeam {
+  index: number;
+  label: string;
+  orientation: "X" | "Y" | null;
+  window: BevWindow | null;
+  weights: number[];
+  shapes: SequenceShape[];
+  fluence: SequenceFluence | null;
+  target: SequenceTarget | null;
+}
+
+/** `view.sequence` (amendment 30): the delivery sequence of the active result. */
+export interface SequenceView {
+  sequencer: string | null;
+  num_of_levels: number | null;
+  beams: SequenceBeam[];
+}
+
 export interface ViewerMethods {
+  "view.sequence": { params: Record<string, never>; result: SequenceView };
   "view.volume": { params: { name: string; phase?: number; encoding?: VolumeEncoding }; result: Volume };
   "view.structure_masks": {
     params: { names?: number[]; encoding?: MaskEncoding };

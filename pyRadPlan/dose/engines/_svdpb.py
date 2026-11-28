@@ -120,6 +120,17 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
 
         return dij
 
+    @staticmethod
+    def _open_field_extent(beamlet: FieldShape) -> float:
+        """Full width of a field shape."""
+
+        mask = beamlet.mask
+        grid = beamlet.grid
+        rows, cols = np.where(mask > 0)
+        if rows.size == 0:
+            return 0.0
+        return float(2 * max(np.abs(grid[rows]).max(), np.abs(grid[cols]).max()))
+
     def _init_beam(self, beam_info, ct, cst, stf, i):  # noqa: PLR0915
         """
         Initialize a beam for pencil beam dose calculation.
@@ -154,11 +165,7 @@ class PhotonPencilBeamSVDEngine(PencilBeamEngineAbstract):
                     if not field_based_dose_calc:
                         field_based_dose_calc = True
 
-                    # find largest field_width
-                    field_width = max(beamlet.field_width, field_width)
-
-        # TODO: it would probably be much faster to not use the full field extent, but maximum jaw positions
-        # as field width here
+                    field_width = max(self._open_field_extent(beamlet), field_width)
 
         if field_based_dose_calc:
             logger.debug("Enabling field-based dose calculation for beam %d!", i)

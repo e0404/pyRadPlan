@@ -112,7 +112,6 @@ def test_shape():
     energy = 6
     resolution = 0.5
     mlc_X = sample_MLC("X")
-    # IEC beam limiting device x is BEV x at collimator angle 0
     mask_mlc_X = mlc_X.calculate_transmission_mask(resolution)
     half_size = mask_mlc_X.shape[0] // 2
     field_grid = resolution * np.arange(-half_size, half_size + 1)
@@ -291,3 +290,9 @@ def test_shape_even_mask_is_padded(caplog):
 def test_shape_missing_field_width_message():
     with pytest.raises(ValueError, match="field_width or grid"):
         FieldShape._resolve_field_width(None, None)
+
+
+def test_shape_refuses_a_collimator_angle():
+    mlc = sample_MLC("X").model_copy(update={"device_angle": 10.0})
+    with pytest.raises(NotImplementedError, match="collimator angle"):
+        FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5)

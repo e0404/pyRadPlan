@@ -24,7 +24,7 @@ from pyRadPlan.ct import CT, DicomInfo, validate_ct
 from pyRadPlan.dij import validate_dij
 from pyRadPlan.machines import create_bld
 from pyRadPlan.plan import IonPlan, validate_pln
-from pyRadPlan.result import validate_result
+from pyRadPlan.result import BeamSequence, validate_result
 from pyRadPlan.stf import validate_stf
 
 
@@ -387,36 +387,36 @@ def _beamlets(stf):
     return [bl for beam in stf.beams for ray in beam.rays for bl in ray.beamlets]
 
 
-@pytest.mark.parametrize("n_blds,expected", [(1, "FieldShapeAsBLD"), (2, "FieldShapeComposite")])
-def test_field_based_photon_stf(tg119, n_blds, expected):
+@pytest.mark.parametrize(
+    "with_mlc,expected", [(False, "FieldShapeAsBLD"), (True, "FieldShapeComposite")]
+)
+def test_field_based_photon_stf(tg119, with_mlc, expected):
     ct, cst = tg119
-    blds = [
-        create_bld(
-            {
-                "device_type": "MLC",
-                "device_orientation": "X",
-                "leaf_position_boundaries": np.arange(-20.0, 20.0, 5.0),
-                "leaf_positions": [[-10, 10], [-15, 20], [-5, 25], [0, 30]] * 2,
-                "leaf_width": 5.0,
-                "leaf_leakage": 0.0,
-            }
-        ),
-        create_bld(
-            {
-                "device_type": "JAW",
-                "device_orientation": "Y",
-                "positions": [-20, 12],
-                "field_width": 120,
-            }
-        ),
-    ][::-1][:n_blds]
+    mlc = create_bld(
+        {
+            "device_type": "MLC",
+            "device_orientation": "X",
+            "leaf_position_boundaries": np.arange(-20.0, 20.0, 5.0),
+            "leaf_positions": [[-10, 10], [-15, 20], [-5, 25], [0, 30]] * 2,
+            "leaf_width": 5.0,
+            "leaf_leakage": 0.0,
+        }
+    )
+    jaw = create_bld(
+        {
+            "device_type": "JAW",
+            "device_orientation": "Y",
+            "positions": [-20, 12],
+            "field_width": 120,
+        }
+    )
+    beam = BeamSequence.from_shapes([mlc] if with_mlc else None, [1.0], jaws=[jaw])
     pln = PhotonPlan(machine="Generic", num_of_fractions=3)
     pln.prop_stf = {
         "gantry_angles": [0, 90],
         "couch_angles": [0, 0],
         "generator": "photonSingleBixel",
-        "field_based": True,
-        "blds": blds,
+        "beam_sequences": [beam, beam],
         "resolution": 2.0,
         "energy": 6.0,
     }
@@ -424,10 +424,10 @@ def test_field_based_photon_stf(tg119, n_blds, expected):
     assert {type(b).__name__ for b in _beamlets(stf)} == {expected}
     _both(stf, validate_stf)
     restored = validate_pln(json_roundtrip(pln.model_dump(mode="json")))
-    restored_blds = restored.prop_stf.pop("blds")
-    assert_same([create_bld(b) for b in restored_blds], pln.prop_stf["blds"])
+    restored_beams = restored.prop_stf.pop("beam_sequences")
+    assert_same([BeamSequence.model_validate(b) for b in restored_beams], [beam, beam])
     pln = pln.model_copy(deep=True)
-    pln.prop_stf.pop("blds")
+    pln.prop_stf.pop("beam_sequences")
     assert_same(restored, pln)
 
 

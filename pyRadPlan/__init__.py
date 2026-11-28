@@ -66,6 +66,8 @@ if TYPE_CHECKING:
     from .visualization import (
         plot_slice as plot_slice,
         plot_multiple_slices as plot_multiple_slices,
+        plot_aperture_info as plot_aperture_info,
+        plot_dose_comparison as plot_dose_comparison,
     )
     from .io import (
         load_patient as load_patient,
@@ -74,6 +76,7 @@ if TYPE_CHECKING:
         load_binary_patient as load_binary_patient,
         load_tg119 as load_tg119,
     )
+    from .sequencing import run_sequencing as run_sequencing
     from .core import xp_utils as xp_utils
 
 __getattr__, __dir__, __all__ = attach_lazy(
@@ -89,8 +92,14 @@ __getattr__, __dir__, __all__ = attach_lazy(
         ".dose._calc_dose": ("calc_dose_influence", "calc_dose_forward"),
         ".optimization._fluence_optimization": ("fluence_optimization", "OptInfo"),
         ".analysis._dvh": ("DVH", "DVHCollection"),
-        ".visualization": ("plot_slice", "plot_multiple_slices"),
+        ".visualization": (
+            "plot_slice",
+            "plot_multiple_slices",
+            "plot_aperture_info",
+            "plot_dose_comparison",
+        ),
         ".io": ("load_patient", "load_data", "save_data", "load_binary_patient", "load_tg119"),
+        ".sequencing": ("run_sequencing",),
         ".core": ("xp_utils",),
     },
     eager=("__version__",),
