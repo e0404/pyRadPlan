@@ -53,6 +53,7 @@ from .jittable import jittable, JittableKernel
 from .compat import (
     quantile,
     interp1d,
+    erf,
 )
 from ._reductions import grouped_max
 from ._interpolation import ArrayBackendGridInterpolator, interpnd
@@ -322,6 +323,7 @@ __all__ = [
     "ArrayNamespace",
     "quantile",
     "interp1d",
+    "erf",
     "interpnd",
     "ArrayBackendGridInterpolator",
     "ArrayBackend1DInterpolator",

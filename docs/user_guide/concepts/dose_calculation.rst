@@ -170,6 +170,13 @@ one line:
      - Description
    * - ``"SVDPB"``
      - SVD-accelerated pencil beam (photons). Improved lateral scatter modelling.
+   * - ``"CCC"``
+     - Collapsed cone convolution/superposition (photons, Ahnesjo 1989), ported from matRad.
+       Transports the TERMA of each bixel with a 6 MV water kernel scaled by the electron
+       density, so it models heterogeneities better than the pencil beam. The absolute dose is
+       normalized to the SVD pencil beam depth dose of the machine. TERMA and transport use
+       Array API operations only and run on the configured array backend (NumPy, CuPy,
+       PyTorch); forward calculations transport each beam once (``beam_forward``).
    * - ``"HongPB"``
      - Hong's particle pencil-beam model. Reference implementation for protons/ions.
    * - ``"FRED"``

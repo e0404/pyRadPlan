@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VOI.overlap_handling`: `"cut"` (default) removes the voxels of overlapping VOIs with a higher priority as before, `"keep"` keeps the VOI's voxels while it still cuts VOIs of lower priority, and `"ignore"` leaves the VOI out of the overlap handling, e.g. for a helper VOI that hands the whole dose to an outcome objective
 - `Objective.setup(ct, cst)` is called by the planning problem with the CT and the structures before the optimization, and `Objective.report_info()` returns data an objective collected during it, found in `opt_info["objective_info"]` (e.g. the probability history of an outcome objective)
 - Documentation: a user guide section on outcome model objectives and the tutorials `ntcp_optimization_tg119`, `ntcp_optimization_xero_cnn` and `ntcp_optimization_xero_lr`
+- Photon collapsed cone convolution/superposition dose engine (`"CCC"`, `PhotonCollapsedConeEngine`), ported from matRad's `matRad_PhotonCollapsedConeEngine`, with the 6 MV water kernel (`data/kernels/photons_collapsedCone_6MV.mat`, matRad format) read into the new machine model `machines.PhotonCollapsedConeKernel` (`machines.photons.load_collapsed_cone_kernel`). TERMA and transport (a port of matRad's plane-sweep `matRad_collapsedConeTransportBatched`) use Array API operations only and run in the engine's namespace and device (NumPy, CuPy, PyTorch); forward calculations transport the weighted TERMA of each beam once
+- `core.xp_utils.erf`: Array API error function, native on NumPy (SciPy), CuPy, PyTorch and JAX, otherwise W. J. Cody's rational approximations with Array API operations only (relative error near machine precision)
 
 ### Changed
 

@@ -162,6 +162,7 @@ xp_utils
    ArrayNamespace
    quantile
    interp1d
+   erf
    interpnd
    ArrayBackendGridInterpolator
    ArrayBackend1DInterpolator

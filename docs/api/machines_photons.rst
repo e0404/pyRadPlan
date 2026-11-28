@@ -8,3 +8,5 @@ machines.photons
 
     PhotonLINAC
     PhotonSVDKernel
+    PhotonCollapsedConeKernel
+    load_collapsed_cone_kernel

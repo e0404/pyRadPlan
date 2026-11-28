@@ -7,6 +7,7 @@ dose.engines
     :toctree: generated/dose/engines/
 
     PhotonPencilBeamSVDEngine
+    PhotonCollapsedConeEngine
     ParticleHongPencilBeamEngine
     ParticleFredMCEngine
     ParticleTOPASMCEngine

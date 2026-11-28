@@ -62,7 +62,7 @@ def test_locked_fields_are_rejected():
 def test_plan_options_list_the_registries(web_client):
     options = web_client.ok("plan.options")["result"]
     assert options["radiation_mode"] == "photons"
-    assert [c["value"] for c in options["engines"]] == ["SVDPB"]
+    assert [c["value"] for c in options["engines"]] == ["SVDPB", "CCC"]
     assert "Generic" in [c["value"] for c in options["machines"]]
     assert json.loads(options["default_bio_model"])["model"] == "none"
     assert {"nomScen", "wcScen"} <= {c["value"] for c in options["scenario_models"]}
