@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from pyRadPlan.core.xp_utils import cupy_available, to_numpy
-from pyRadPlan.dose.engines._collapsed_cone import transport
+from pyRadPlan.dose.engines.kernels._collapsed_cone_transport import transport
 
 
 def _skip_unavailable(name):

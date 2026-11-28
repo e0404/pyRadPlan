@@ -13,7 +13,13 @@ from pyRadPlan.ct import create_ct
 from pyRadPlan.cst import create_cst
 from pyRadPlan.dose import calc_dose_forward, calc_dose_influence
 from pyRadPlan.dose.engines import PhotonCollapsedConeEngine, get_engine
-from pyRadPlan.dose.engines import _collapsed_cone as cc
+from pyRadPlan.dose.engines._collapsed_cone import (
+    analytical_depth_dose,
+    broad_field_depth_dose,
+    calc_terma,
+    fit_hardening,
+    terma_depth_factor,
+)
 from pyRadPlan.machines import load_from_name
 from pyRadPlan.machines.photons._collapsed_cone_fit import load_kernel
 from pyRadPlan.machines.photons._collapsed_cone_kernel import DEFAULT_KERNEL_FILE
@@ -57,8 +63,8 @@ def test_calc_terma_matches_numpy(xp, device):
     geo_dists[2] = 0.0
     fluence = np.column_stack([np.linspace(0, 200, 50), np.linspace(1.0, 0.8, 50)])
     args = (1000.0, 0.005, 2.0, 7.0, fluence, np.array([5.0, 0.0, -3.0]))
-    ref = cc.calc_terma(*args, rad_depths, geo_dists, lat, 1e-3)
-    terma = cc.calc_terma(
+    ref = calc_terma(*args, rad_depths, geo_dists, lat, 1e-3)
+    terma = calc_terma(
         *args,
         xp.asarray(rad_depths, device=device),
         xp.asarray(geo_dists, device=device),
@@ -76,23 +82,23 @@ def test_hardening_fit():
     ix = int(np.argmin(np.abs(svd.kernel_ssds - machine.sad)))
 
     def reference(d):
-        return cc.analytical_depth_dose(
+        return analytical_depth_dose(
             svd.kernel_data[ix], svd.kernel_pos, svd.kernel_betas, svd.m, d
         )
 
     kernel = load_kernel(None, 12)
-    mu0, beta = cc.fit_hardening(kernel, reference, svd.m, 5, 100)
+    mu0, beta = fit_hardening(kernel, reference, svd.m, 5, 100)
     assert mu0 > 0 and beta > 0
     depths = np.array([30.0, 100.0, 200.0, 300.0])
     ref = reference(depths) / reference(depths)[1]
-    corrected = cc.broad_field_depth_dose(kernel, mu0, depths, 5, beta)
+    corrected = broad_field_depth_dose(kernel, mu0, depths, 5, beta)
     corrected = corrected / corrected[1]
-    mono = cc.broad_field_depth_dose(kernel, svd.m, depths, 5, 0)
+    mono = broad_field_depth_dose(kernel, svd.m, depths, 5, 0)
     mono = mono / mono[1]
     assert np.max(np.abs(corrected / ref - 1)) < 0.02
     assert np.max(np.abs(corrected / ref - 1)) < np.max(np.abs(mono / ref - 1))
     np.testing.assert_allclose(
-        cc.terma_depth_factor(0.005, 0, depths), 0.005 * np.exp(-0.005 * depths), rtol=1e-14
+        terma_depth_factor(0.005, 0, depths), 0.005 * np.exp(-0.005 * depths), rtol=1e-14
     )
 
 
@@ -271,7 +277,7 @@ def test_short_range_kernel_central_axis(tmp_path):
     idx = rows if source[1] < 0 else dose.shape[1] - 1 - rows
     world = np.array([image.TransformIndexToPhysicalPoint((int(c), int(i), int(c))) for i in idx])
     inv_square = (machine.sad / np.linalg.norm(world - source, axis=1)) ** 2
-    terma = cc.terma_depth_factor(params["mu0"], params["beta"], depth) * inv_square
+    terma = terma_depth_factor(params["mu0"], params["beta"], depth) * inv_square
     expected = params["normalization"] * (0.6 + 0.3) * terma
     np.testing.assert_allclose(column[rows], expected, rtol=0.01)
 

@@ -23,7 +23,15 @@ from pyRadPlan.stf import FieldShape, SteeringInformation
 from ._base import ct_phase_images
 from ._base_pencilbeam import PencilBeamEngineAbstract
 from ._svdpb import DijSamplingConfig, PhotonPencilBeamSVDEngine
-from . import _collapsed_cone as cc
+from ._collapsed_cone import (
+    analytical_depth_dose,
+    broad_field_depth_dose,
+    calc_terma,
+    cone_directions,
+    fit_hardening,
+    tilt_directions,
+)
+from .kernels._collapsed_cone_transport import transport
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +237,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             self._local_directions,
             self._direction_weights,
             self._direction_att,
-        ) = cc.cone_directions(self._kernel, self.num_azimuthal_angles)
+        ) = cone_directions(self._kernel, self.num_azimuthal_angles)
 
         # Relative electron density of every CT phase on the full dose grid, since the
         # transport also crosses voxels outside the structures
@@ -294,7 +302,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         ssd_ix = int(np.argmin(np.abs(np.asarray(kernel.kernel_ssds) - sad)))
 
         def reference(depths: np.ndarray) -> np.ndarray:
-            return cc.analytical_depth_dose(
+            return analytical_depth_dose(
                 kernel.kernel_data[ssd_ix],
                 kernel.kernel_pos,
                 kernel.kernel_betas,
@@ -305,7 +313,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         dz = float(np.min(self._dose_res))
         mu0, beta = float(kernel.m), 0.0
         if self.hardening_correction:
-            mu0, beta = cc.fit_hardening(
+            mu0, beta = fit_hardening(
                 self._kernel, reference, float(kernel.m), dz, self.normalization_depth
             )
             logger.info(
@@ -315,7 +323,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         # Absolute dose normalization to the machine depth dose
         depth = np.array([self.normalization_depth])
         dd_svd = reference(depth)[0]
-        dd_ccc = cc.broad_field_depth_dose(self._kernel, mu0, depth, dz, beta)[0]
+        dd_ccc = broad_field_depth_dose(self._kernel, mu0, depth, dz, beta)[0]
         normalization = dd_svd / dd_ccc
         logger.info(
             "Collapsed cone normalization factor %g at %g mm depth.",
@@ -369,7 +377,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         # BEV coordinates are world coordinates times rot_mat_t, so world = bev @ rot_mat_t.T
         axis_world = np.asarray(axis_bev, dtype=np.float64) @ rot_mat_t.T
         lateral_world = np.array([1.0, 0.0, 0.0]) @ rot_mat_t.T
-        dirs_world = cc.tilt_directions(self._local_directions, axis_world, lateral_world)
+        dirs_world = tilt_directions(self._local_directions, axis_world, lateral_world)
         return self._world_to_array_dirs(dirs_world)
 
     def _init_beam(
@@ -508,7 +516,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             TERMA per unit bixel weight on ``ray["ix"]``.
         """
         params = ray["ccc"]
-        return cc.calc_terma(
+        return calc_terma(
             float(ray["sad"]),
             params["mu0"],
             params["sigma"],
@@ -647,7 +655,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
 
         # The transport lattice is anchored to the dose grid through the origin of the box,
         # so that the doses of different sub-volumes are consistent
-        dose_box = cc.transport(
+        dose_box = transport(
             terma_box,
             rho_box,
             self._dose_res,
@@ -868,7 +876,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             if a["box_lo"] is None:
                 continue
             box = tuple(slice(int(lo), int(hi) + 1) for lo, hi in zip(a["box_lo"], a["box_hi"]))
-            dose_box = normalization * cc.transport(
+            dose_box = normalization * transport(
                 xp.reshape(a["terma"], self._dose_dims)[box],
                 self._density_cubes[a["ct_phase"]][box],
                 self._dose_res,
