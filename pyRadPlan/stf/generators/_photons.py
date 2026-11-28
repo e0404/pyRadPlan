@@ -161,6 +161,9 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
         1.0). A segment whose leaves or jaws move is sampled at ``DYNAMIC_SAMPLES``
         intermediate states; gantry or couch motion within a segment is not supported.
         If not given, each beam gets a single ray with no field shape.
+    resolution : float, optional
+        Resolution in mm of the transmission masks of the beam limiting devices, required
+        with ``beam_sequences``.
     """
 
     name = "Photon Single Bixel Geometry"
@@ -173,11 +176,26 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
     DYNAMIC_SAMPLES: int = 5
 
     beam_sequences: Optional[list[BeamSequence]]
+    resolution: Optional[float]
+
+    #: Options of earlier versions, replaced by ``beam_sequences``.
+    _REMOVED_OPTIONS = frozenset({"blds", "field_shape", "field_based"})
 
     def __init__(self, pln=None):
         self.radiation_mode = "photons"  # Radiation mode must be photons
         self.beam_sequences = None
+        self.resolution = None
         super().__init__(pln)
+
+    def _assign_parameters_from_pln(self, pln):
+        removed = sorted(self._REMOVED_OPTIONS & set(pln.prop_stf or {}))
+        if removed:
+            raise ValueError(
+                f"The {self.short_name} generator no longer has the option(s) "
+                f"{', '.join(removed)}; give the fields as beam_sequences (one BeamSequence "
+                "per beam, e.g. BeamSequence.from_shapes([mlc], [1.0], jaws=[...]))."
+            )
+        super()._assign_parameters_from_pln(pln)
 
     def _initialize(self):
         super()._initialize()
@@ -197,7 +215,8 @@ class StfGeneratorPhotonSingleBixel(StfGeneratorSingleBixel):
             self.energy = machine_energy
 
         if self.beam_sequences is not None:
-            if not hasattr(self, "resolution"):
+            self.beam_sequences = [BeamSequence.model_validate(b) for b in self.beam_sequences]
+            if self.resolution is None:
                 raise ValueError(
                     "Resolution must be given to calculate transmission masks from beam "
                     "limiting devices"

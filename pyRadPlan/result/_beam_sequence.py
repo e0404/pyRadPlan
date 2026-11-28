@@ -57,17 +57,24 @@ class MachineState(PyRadPlanBaseModel):
             return [v]
         return list(v)
 
-    def interpolate(self, other: "MachineState", fraction: float) -> "MachineState":
+    def interpolate(
+        self, other: "MachineState", fraction: float, rotation: Optional[str] = None
+    ) -> "MachineState":
         """State a *fraction* (0 to 1) of the way to *other*, all axes moving linearly.
 
-        Angles are interpolated as given, so a state pair has to be free of the 360 degree
-        wrap (see :meth:`Segment.state_at`).
+        The gantry turns in the direction *rotation* (``"cw"``, ``"ccw"``, or ``None`` for the
+        shorter way), the couch always the shorter way; both angles stay within [0, 360).
         """
 
         def lerp(a: Any, b: Any) -> Any:
             if a is None or b is None:
                 return a
             return a + fraction * (np.asarray(b) - np.asarray(a))
+
+        def turn(a: Optional[float], b: Optional[float], direction: Optional[str]) -> Any:
+            if a is None or b is None:
+                return a
+            return (a + fraction * _angle_span(a, b, direction)) % _FULL_CIRCLE
 
         mlc = self.mlc
         if mlc is not None and other.mlc is not None:
@@ -83,8 +90,8 @@ class MachineState(PyRadPlanBaseModel):
                 for jaw, to in zip(jaws, other.jaws)
             ]
         return MachineState(
-            gantry_angle=lerp(self.gantry_angle, other.gantry_angle),
-            couch_angle=lerp(self.couch_angle, other.couch_angle),
+            gantry_angle=turn(self.gantry_angle, other.gantry_angle, rotation),
+            couch_angle=turn(self.couch_angle, other.couch_angle, None),
             mlc=mlc,
             jaws=jaws,
         )
@@ -169,14 +176,13 @@ class Segment(PyRadPlanBaseModel):
         return None if self.duration is None else self.weight / self.duration
 
     def state_at(self, fraction: float, rotation: Optional[str] = None) -> MachineState:
-        """Return the machine a *fraction* (0 to 1) of the way through the segment."""
+        """Return the machine a *fraction* (0 to 1) of the way through the segment.
+
+        *rotation* is the direction the gantry turns in, see :meth:`MachineState.interpolate`.
+        """
         if self.end is None:
             return self.start
-        state = self.start.interpolate(self.end, fraction)
-        if self.start.gantry_angle is not None and self.end.gantry_angle is not None:
-            angle = self.start.gantry_angle + fraction * self.gantry_travel(rotation)
-            state = state.model_copy(update={"gantry_angle": angle % _FULL_CIRCLE})
-        return state
+        return self.start.interpolate(self.end, fraction, rotation)
 
 
 class ControlPoint(PyRadPlanBaseModel):
@@ -246,7 +252,9 @@ class BeamSequence(PyRadPlanBaseModel):
         weights : array-like
             The weight of each segment.
         jaws : list, optional
-            The jaws of the beam (a list of ``Jaw``), or one such list per segment.
+            The jaws of the beam (a list of ``Jaw``), or one such list per segment. A jaw
+            also bounds the field across its axis at ``±field_width / 2``, so a field with a
+            single jaw needs a ``field_width`` that covers the field.
         stf_beam : int, optional
             Index of the beam of the steering information the segments are planned on.
         """
@@ -317,11 +325,12 @@ class BeamSequence(PyRadPlanBaseModel):
         """List the sequence as control points with cumulative weights, as in a DICOM RT Plan.
 
         A segment contributes the state it starts in at the weight delivered before it, and
-        the state it ends in at the weight delivered after it. A start that repeats the
-        control point before it is left out, so a continuous arc of ``n`` segments gives
-        ``n + 1`` control points and ``n`` step-and-shoot segments give ``2 n``. Between two
-        control points, rising weight means the beam is on and unchanged weight that the
-        machine moves with the beam off.
+        the state it ends in at the weight delivered after it. A control point equal to the
+        one before it (same state, same cumulative weight) is left out: a continuous arc of
+        ``n`` segments gives ``n + 1`` control points, ``n`` step-and-shoot segments of
+        different shapes and positive weights give ``2 n``, and a segment without weight or
+        a repeated shape adds fewer. Between two control points, rising weight means the
+        beam is on, unchanged weight that the machine moves with the beam off.
 
         Parameters
         ----------
@@ -340,7 +349,6 @@ class BeamSequence(PyRadPlanBaseModel):
                 "mlc": state.mlc,
                 "jaws": state.jaws,
             }
-            # skip a start that repeats the previous point (continuous arc)
             if points and all(points[-1][key] == value for key, value in point.items()):
                 return
             points.append(point)

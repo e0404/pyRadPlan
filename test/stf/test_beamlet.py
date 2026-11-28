@@ -290,3 +290,9 @@ def test_shape_even_mask_is_padded(caplog):
 def test_shape_missing_field_width_message():
     with pytest.raises(ValueError, match="field_width or grid"):
         FieldShape._resolve_field_width(None, None)
+
+
+def test_shape_refuses_a_collimator_angle():
+    mlc = sample_MLC("X").model_copy(update={"device_angle": 10.0})
+    with pytest.raises(NotImplementedError, match="collimator angle"):
+        FieldShapeAsBLD(energy=6.0, bld=mlc, resolution=0.5)

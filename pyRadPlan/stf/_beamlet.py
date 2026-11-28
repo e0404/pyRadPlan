@@ -324,7 +324,8 @@ class FieldShapeAsBLD(FieldShape):
     Attributes
     ----------
     bld : BeamLimitingDevice
-        The beam limiting device from which to compute the field shape mask.
+        The beam limiting device from which to compute the field shape mask. A collimator
+        angle (``device_angle``) is not supported yet and refused.
 
     """
 
@@ -354,6 +355,11 @@ class FieldShapeAsBLD(FieldShape):
 
     @model_validator(mode="after")
     def setup_spatial_parameters(self) -> "FieldShapeAsBLD":
+        if (self.bld.device_angle or 0.0) % 360.0 != 0.0:
+            raise NotImplementedError(
+                "Beam limiting devices with a collimator angle (device_angle) are not "
+                "supported yet."
+            )
         self.__dict__["resolution"] = self._resolve_resolution(self.resolution, self.grid)
 
         # TODO: add field_width here directly & build grid with _build_grid

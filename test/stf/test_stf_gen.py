@@ -865,3 +865,19 @@ def test_ray_padding_is_symmetric_for_bixels_below_ct_resolution(tg119):
 
     offsets = {(float(x), float(z)) for x, z in ray_pos[[0, 2]].T}
     assert offsets == {(x, z) for x in (-2.0, 0.0, 2.0) for z in (-2.0, 0.0, 2.0)}
+
+
+@pytest.mark.parametrize("option", ["blds", "field_shape", "field_based"])
+def test_photon_single_bixel_refuses_the_removed_field_options(sample_photon_pln_dict, option):
+    sample_photon_pln_dict["prop_stf"] = {"generator": "photonSingleBixel", option: None}
+    pln = create_pln(sample_photon_pln_dict)
+    with pytest.raises(ValueError, match="beam_sequences"):
+        StfGeneratorPhotonSingleBixel(pln)
+
+
+def test_stf_generator_warns_about_unknown_options(sample_photon_pln_dict):
+    sample_photon_pln_dict["prop_stf"] = {"generator": "photonSingleBixel", "no_such": 1}
+    pln = create_pln(sample_photon_pln_dict)
+    with pytest.warns(UserWarning, match="no_such not existing"):
+        stf_gen = StfGeneratorPhotonSingleBixel(pln)
+    assert not hasattr(stf_gen, "no_such")

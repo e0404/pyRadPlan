@@ -226,14 +226,20 @@ class StfGeneratorBase(ProgressReporter, ABC):
 
         self._radiation_mode = pln.radiation_mode
 
-        # pln.prop_stf is a dictionary. For every key we try to assign the value
-        # If the key is not existing as an attribute, we throw a warning
+        # pln.prop_stf is a dictionary. Every key the generator has is assigned, any other
+        # key is ignored with a warning ("generator" selects the generator itself)
         for key in pln.prop_stf:
+            if key == "generator":
+                continue
             attr = "mult_scen" if key == "scenarios" else key
+            # Look the attribute up without calling a property (deprecated aliases warn)
+            if not (hasattr(type(self), attr) or attr in vars(self)):
+                warnings.warn(f"Attribute {key} not existing in {self.name} generator")
+                continue
             try:
                 setattr(self, attr, pln.prop_stf[key])
             except AttributeError:
-                warnings.warn(f"Attribute {key} not existing in {self.name} generator")
+                warnings.warn(f"Attribute {key} cannot be set in {self.name} generator")
 
         self.machine = pln.machine
 

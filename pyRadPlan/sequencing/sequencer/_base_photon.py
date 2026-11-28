@@ -399,21 +399,22 @@ class PhotonSequencer(Sequencer):
             ``[travel_min, travel_max, stack_min, stack_max]`` (the beam's
             ``MLCWindow``), on the leaf travel/stack axes rather than fixed BEV axes.
         travel_axis : int
-            BEV index (0 or 2) of the leaf travel direction; identifies
-            which of the two window axes is the BEV "X" axis vs. "Y" axis.
+            ``ray_pos_bev`` index (0 or 2) of the leaf travel direction; identifies which
+            of the two window axes the X jaw (along ``ray_pos_bev`` x) and the Y jaw (along
+            ``ray_pos_bev`` z) bound.
         """
         travel_min, travel_max, stack_min, stack_max = mlc_window
         travel_bounds = (travel_min, travel_max)
         stack_bounds = (stack_min, stack_max)
-        bev_x_bounds = travel_bounds if travel_axis == 0 else stack_bounds
-        bev_y_bounds = stack_bounds if travel_axis == 0 else travel_bounds
+        jaw_x_bounds = travel_bounds if travel_axis == 0 else stack_bounds
+        jaw_y_bounds = stack_bounds if travel_axis == 0 else travel_bounds
 
         def _jaw(orientation: str, bounds: tuple[float, float]) -> Jaw:
             lo, hi = bounds
             field_width = 2 * max(abs(bound) for bound in mlc_window)
             return Jaw(device_orientation=orientation, positions=[lo, hi], field_width=field_width)
 
-        return [_jaw("X", bev_x_bounds), _jaw("Y", bev_y_bounds)]
+        return [_jaw("X", jaw_x_bounds), _jaw("Y", jaw_y_bounds)]
 
     def _build_beam_sequencing(
         self,

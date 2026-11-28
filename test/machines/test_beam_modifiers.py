@@ -427,3 +427,17 @@ def test_full_leaf_positions_follow_the_device_leaf_order():
     np.testing.assert_array_equal(np.flatnonzero(mlc.is_active_leaf_pair(3.5)), [1, 2, 3])
     np.testing.assert_array_equal(full[[3, 2, 1]], openings)
     np.testing.assert_array_equal(full[[0, 4, 5]], np.zeros((3, 2)))
+
+
+def test_central_leaf_pair_needs_leaf_rows():
+    mlc = MLC(device_orientation="X")
+    with pytest.raises(ValueError, match="leaf rows"):
+        _ = mlc.central_leaf_pair
+
+
+def test_leaf_rows_from_positions_with_rounding_errors_are_consistent():
+    centers = -12.3 + np.arange(6) * 4.1  # 4.1 mm rows, spacings differ in the last bit
+    assert len(np.unique(np.diff(centers))) > 1
+    assert MLC.validate_leaf_width_consistency(centers, None) == pytest.approx(4.1)
+    with pytest.raises(ValueError, match="inconsistent leaf widths"):
+        MLC.validate_leaf_width_consistency(np.array([0.0, 5.0, 11.0]), None)

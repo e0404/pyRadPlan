@@ -158,6 +158,10 @@ class MLC(BeamLimitingDevice):
         other way). ``k + 0.5`` means the isocenter lies between pairs ``k`` and ``k + 1``.
         Needs ``leaf_position_boundaries`` and ``leaf_width``.
         """
+        if self.leaf_position_boundaries is None or self.leaf_width is None:
+            raise ValueError(
+                "central_leaf_pair needs the MLC's leaf rows (leaf_position_boundaries)."
+            )
         fraction = (self.leaf_position_boundaries[0] / self.leaf_width + 0.5) % 1.0
         on_center = min(fraction, 1.0 - fraction) < 1e-6  # noqa: PLR2004
         num = self.number_of_elements
@@ -264,19 +268,23 @@ class MLC(BeamLimitingDevice):
         """Return the common width of the leaf rows, derived from their spacing if not given.
 
         Raises ValueError if the rows are spaced unevenly, if the spacing differs from
-        ``leaf_width``, or if there is a single row and no ``leaf_width``.
+        ``leaf_width``, or if there is a single row and no ``leaf_width``. Spacings are
+        compared with a relative tolerance of 1e-9, as positions computed from ray positions
+        carry rounding errors.
         """
         if len(leaf_position_boundaries) > 1:
-            boundary_diffs = np.unique(np.abs(np.diff(leaf_position_boundaries)))
-            if len(boundary_diffs) != 1:
+            boundary_diffs = np.abs(np.diff(leaf_position_boundaries))
+            spacing = float(boundary_diffs.mean())
+            if not np.allclose(boundary_diffs, spacing, rtol=1e-9, atol=0.0):
                 raise ValueError(
-                    f"Leaf boundary positions contain inconsistent leaf widths: {boundary_diffs}"
+                    "Leaf boundary positions contain inconsistent leaf widths: "
+                    f"{np.unique(boundary_diffs)}"
                 )
             if leaf_width is None:
-                leaf_width = boundary_diffs[0]
-            elif not math.isclose(leaf_width, boundary_diffs[0]):
+                leaf_width = spacing
+            elif not math.isclose(leaf_width, spacing):
                 raise ValueError(
-                    f"Distance between leaf boundary positions ({boundary_diffs[0]})"
+                    f"Distance between leaf boundary positions ({spacing})"
                     f" differs from given leaf_width ({leaf_width})"
                 )
         elif len(leaf_position_boundaries) == 1 and leaf_width is None:
@@ -467,7 +475,7 @@ class Jaw(BeamLimitingDevice):
     Attributes
     ----------
     positions : list[float]
-        Jaw edge positions in mm (in isocenter plane).
+        Jaw edge positions in mm (in isocenter plane), lower edge first.
     field_width : float
         Maximum field width of the device in mm (in isocenter plane). Positions must lie
         within ``±field_width / 2``. A single jaw collimates along its other axis too, unless
@@ -492,6 +500,10 @@ class Jaw(BeamLimitingDevice):
 
     @model_validator(mode="after")
     def validate_field_width(self) -> "Jaw":
+        if self.positions[0] > self.positions[1]:
+            raise ValueError(
+                f"Jaw positions must be ascending (lower edge first): {self.positions}"
+            )
         if self.field_width / 2 < np.abs(self.positions).max():
             raise ValueError(
                 f"Field width ({self.field_width}) must be twice as large "

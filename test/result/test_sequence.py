@@ -153,6 +153,20 @@ def test_state_at_interpolates_linearly_across_the_wrap(moving_segment):
     assert static.gantry_travel() == 0.0
 
 
+def test_state_at_turns_gantry_and_couch_across_the_wrap(moving_segment):
+    start = moving_segment.start.model_copy(update={"couch_angle": 350.0})
+    end = moving_segment.end.model_copy(update={"couch_angle": 10.0})
+    segment = moving_segment.model_copy(update={"start": start, "end": end})
+
+    halfway = segment.state_at(0.5)
+    assert halfway.gantry_angle == pytest.approx(0.0)
+    assert halfway.couch_angle == pytest.approx(0.0)
+    # Only the gantry follows the rotation direction, the couch takes the shorter way
+    long_way = segment.state_at(0.5, rotation="ccw")
+    assert long_way.gantry_angle == pytest.approx(180.0)
+    assert long_way.couch_angle == pytest.approx(0.0)
+
+
 def test_control_points_of_step_and_shoot(sequence):
     points = sequence.beams[0].control_points(gantry_angle=30.0, couch_angle=0.0)
 
@@ -166,6 +180,16 @@ def test_control_points_of_step_and_shoot(sequence):
     assert points[0].mlc == points[1].mlc
     assert points[2].mlc == points[3].mlc
     assert points[1].mlc != points[2].mlc
+
+
+def test_control_points_leave_out_points_that_repeat_the_one_before():
+    first, second = _mlc([0.0], [[-5.0, 5.0]]), _mlc([0.0], [[-2.0, 2.0]])
+
+    distinct = BeamSequence.from_shapes([first, second], [1.0, 2.0]).control_points()
+    assert len(distinct) == 4  # noqa: PLR2004 - 2 n for n distinct, weighted segments
+    # A segment without weight, then the same shape again: nothing new to deliver
+    repeated = BeamSequence.from_shapes([first, second, second], [1.0, 0.0, 2.0]).control_points()
+    np.testing.assert_allclose([p.cumulative_weight for p in repeated], [0.0, 1.0, 1.0, 3.0])
 
 
 def test_control_points_of_a_continuous_arc(moving_segment):
@@ -332,6 +356,53 @@ def test_bixel_jacobian_within_jaws_matches_finite_differences(stf):
     assert not jacobian[1].any()
     assert not jacobian[1 + 3 + 1].any()
     np.testing.assert_allclose(jacobian, numeric, atol=1e-8)
+
+
+def test_bixel_jacobian_reopens_a_closed_leaf_pair(stf):
+    rows = [-7.5, -2.5, 2.5]
+    mlc = _mlc(rows, [[-11.7, 1.8], [-3.1, -3.1], [-3.1, 3.3]])
+    closed = Sequence(beams=[BeamSequence.from_shapes([mlc], [1.5], stf_beam=0)])
+    info = closed.aperture_info(SimpleNamespace(beams=stf.beams[:1]))
+    vector = info.to_vector()
+    left, right = 1 + 1, 1 + 3 + 1  # row 1 in [weights | left leaves | right leaves]
+
+    jacobian = info.bixel_jacobian().toarray()
+
+    # Opening the row: the left leaf moves down, the right leaf up (one-sided differences)
+    step = 1e-4
+    for ix, direction in ((left, -1.0), (right, 1.0)):
+        moved = vector.copy()
+        moved[ix] += direction * step
+        opening = (info.update(moved).bixel_weights() - info.bixel_weights()) / (direction * step)
+        assert opening.any()
+        np.testing.assert_allclose(jacobian[ix], opening, atol=1e-8)
+
+
+def test_update_stores_a_negative_weight_as_zero(sequence, stf):
+    info = sequence.aperture_info(stf)
+    vector = info.to_vector()
+    vector[0] = -1e-3
+
+    updated = info.update(vector)
+
+    assert updated.sequence.beams[0].segments[0].weight == 0.0
+    assert Sequence.model_validate(updated.sequence.model_dump()) == updated.sequence
+
+
+@pytest.mark.parametrize(
+    "change", [{"device_orientation": "Y", "device_type": "MLCY"}, {"leaf_width": 2.5}]
+)
+def test_aperture_info_refuses_segments_of_one_beam_with_other_leaf_rows(stf, change):
+    mlc = _mlc([0.0], [[-5.0, 5.0]])
+    other = mlc.model_copy(update=change)
+    beam = BeamSequence.from_shapes([mlc, other], [1.0, 1.0], stf_beam=0)
+    with pytest.raises(ValueError, match="do not share their leaf rows"):
+        Sequence(beams=[beam]).aperture_info(SimpleNamespace(beams=stf.beams[:1]))
+
+
+def test_jaw_positions_must_be_ascending():
+    with pytest.raises(ValueError, match="ascending"):
+        Jaw(device_orientation="X", positions=[10.0, -10.0], field_width=40.0)
 
 
 def test_aperture_info_refuses_a_collimator_angle(sequence, stf):

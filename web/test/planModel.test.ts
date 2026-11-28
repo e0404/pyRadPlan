@@ -15,7 +15,8 @@ import {
   planSetParams,
   syncedCouch,
 } from "../src/components/plan/planModel";
-import { evaluationQueue, isUnappliedPick, pickComboOptions, tissueForModel } from "../src/components/plan/TissueDialog";import { withModel, withoutIdentity } from "../src/components/plan/tissueDraft";
+import { evaluationQueue, isUnappliedPick, pickComboOptions, tissueForModel } from "../src/components/plan/TissueDialog";
+import { withModel, withoutIdentity } from "../src/components/plan/tissueDraft";
 import { sameTissue } from "../src/components/vois/EditVoiDialog";
 import type { TissueDraft } from "../src/api/protocol";
 import { formatSummary, logAxis, pyExp } from "../src/components/optimization/StatusWindow";

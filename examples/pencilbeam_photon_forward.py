@@ -130,7 +130,7 @@ mask_mlc_shape_1 = mlc_shape_1.calculate_transmission_mask(resolution)
 mask_jaw_x = jaw_x.calculate_transmission_mask(resolution)
 mask_shape_1 = mask_mlc_shape_1 * mask_jaw_x
 
-half_size = jaw_info["field_width"]
+half_size = jaw_info["field_width"] / 2
 extent = [-half_size, half_size, -half_size, half_size]
 
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
