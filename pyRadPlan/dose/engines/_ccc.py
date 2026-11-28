@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from typing import Annotated, Any, ClassVar, Literal, Optional, cast
+from typing import Annotated, Any, ClassVar, Literal, Optional, TypedDict, cast
 import logging
 import time
 
@@ -34,6 +34,16 @@ from ._collapsed_cone import (
 from .kernels._collapsed_cone_transport import transport
 
 logger = logging.getLogger(__name__)
+
+
+class CollapsedConeEnergyParams(TypedDict):
+    """TERMA parameters and absolute normalization of a beam energy."""
+
+    mu0: float
+    beta: float
+    normalization: float
+    sigma: float
+    primary_fluence: np.ndarray
 
 
 class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
@@ -88,8 +98,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         Dij sampling configuration.
     random_seed : int
         Random seed used for the dij sampling.
-    ignore_invalid_values : bool
-        Do not raise an error for NaN, infinite or negative doses.
 
     Notes
     -----
@@ -124,16 +132,23 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
     kernel_file: Annotated[
         Optional[str], Field(description="Kernel data file, default: 6 MV water kernel")
     ] = None
-    hardening_correction: bool = True
-    num_scatter_exponentials: Literal[1, 2] = 1
-    kernel_tilt: Literal["beam", "ray"] = "beam"
-    beam_forward: bool = True
+    hardening_correction: Annotated[
+        bool, Field(description="Fit a depth dependent effective attenuation of the TERMA")
+    ] = True
+    num_scatter_exponentials: Annotated[
+        Literal[1, 2], Field(description="Number of exponential terms of the scatter kernel")
+    ] = 1
+    kernel_tilt: Annotated[
+        Literal["beam", "ray"], Field(description="Polar axis of the cones: beam axis or ray")
+    ] = "beam"
+    beam_forward: Annotated[
+        bool, Field(description="Forward dose with one transport per beam")
+    ] = True
     enable_dij_sampling: bool = True
     dij_sampling: DijSamplingConfig = DijSamplingConfig(
         rel_dose_threshold=0.01, lat_cut_off=20, type="radius", delta_rad_depth=5
     )
     random_seed: int = 0
-    ignore_invalid_values: bool = False
 
     # Same lateral dij sampling as the SVD pencil beam engine
     _sample_dij = PhotonPencilBeamSVDEngine._sample_dij
@@ -144,7 +159,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         self._direction_weights: Optional[np.ndarray] = None  # kernel weights per direction
         self._direction_att: Optional[np.ndarray] = None  # attenuation per direction
         self._density_cubes: list[Array] = []  # electron density on the dose grid per phase
-        self._energy_params: dict[float, dict] = {}  # hardening / normalization per energy
+        self._energy_params: dict[float, CollapsedConeEnergyParams] = {}
         self._dose_dims: Optional[tuple[int, ...]] = None  # dose grid shape (z, y, x)
         self._dose_res: Optional[np.ndarray] = None  # voxel size along (z, y, x) [mm]
         super().__init__(pln)
@@ -266,7 +281,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
 
         return dij
 
-    def _get_energy_params(self, kernel: PhotonSVDKernel) -> dict[str, Any]:
+    def _get_energy_params(self, kernel: PhotonSVDKernel) -> CollapsedConeEnergyParams:
         """
         Get the TERMA parameters and the absolute normalization of a beam energy.
 
@@ -331,7 +346,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             self.normalization_depth,
         )
 
-        params = {
+        params: CollapsedConeEnergyParams = {
             "mu0": mu0,
             "beta": beta,
             "normalization": float(normalization),
@@ -342,38 +357,12 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         return params
 
     def _world_to_array_dirs(self, dirs_world: np.ndarray) -> np.ndarray:
-        """
-        Convert directions in world coordinates to the numpy axes of the dose grid.
-
-        Parameters
-        ----------
-        dirs_world : np.ndarray
-            ``(3, n_dirs)`` directions in world coordinates (x, y, z).
-
-        Returns
-        -------
-        np.ndarray
-            ``(3, n_dirs)`` directions along the numpy axes (z, y, x) of the dose grid.
-        """
+        """Convert ``(3, n)`` world directions to the numpy axes (z, y, x) of the dose grid."""
         index_dirs = np.asarray(self.dose_grid.direction, dtype=np.float64).T @ dirs_world
         return index_dirs[::-1, :]
 
     def _tilted_directions(self, rot_mat_t: np.ndarray, axis_bev: np.ndarray) -> np.ndarray:
-        """
-        Tilt the cones so that their polar axis is along a direction in beam's eye view.
-
-        Parameters
-        ----------
-        rot_mat_t : np.ndarray
-            The beam's ``rot_mat_system_T``.
-        axis_bev : np.ndarray
-            Polar axis in beam's eye view (the beam axis is ``[0, 1, 0]``).
-
-        Returns
-        -------
-        np.ndarray
-            ``(3, n_dirs)`` cone directions along the numpy axes of the dose grid.
-        """
+        """Cone directions along the numpy axes with the polar axis along ``axis_bev``."""
         # BEV coordinates are world coordinates times rot_mat_t, so world = bev @ rot_mat_t.T
         axis_world = np.asarray(axis_bev, dtype=np.float64) @ rot_mat_t.T
         lateral_world = np.array([1.0, 0.0, 0.0]) @ rot_mat_t.T
@@ -480,41 +469,12 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         return scen_ray
 
     def _as_xp(self, a: Array, dtype: Any = None) -> Array:
-        """
-        Move an array to the namespace and device of the engine.
-
-        Parameters
-        ----------
-        a : Array
-            Array of any supported backend.
-        dtype : Any
-            Dtype of the result in the engine's namespace, default: float64.
-
-        Returns
-        -------
-        Array
-            The array in ``self.xp`` on ``self.device``.
-        """
+        """Cast an array of the engine's namespace to ``dtype`` (default: float64)."""
         xp = self.xp
-        a = to_namespace(xp, a, device=self.device)
         return xp.astype(a, xp.float64 if dtype is None else dtype, copy=False)
 
     def _ray_terma(self, ray: dict) -> Array:
-        """
-        Compute the TERMA of a bixel of the (scenario) ray on the ray's voxels.
-
-        Parameters
-        ----------
-        ray : dict
-            Ray information struct (see ``_init_ray``). Keys used here: ``ccc``, ``sad``,
-            ``bixel_width``, ``ray_pos_bev``, ``rad_depths``, ``geo_depths`` and
-            ``iso_lat_dists``.
-
-        Returns
-        -------
-        Array
-            TERMA per unit bixel weight on ``ray["ix"]``.
-        """
+        """TERMA per unit bixel weight on the voxels ``ray["ix"]`` of a (scenario) ray."""
         params = ray["ccc"]
         return calc_terma(
             float(ray["sad"]),
@@ -530,39 +490,12 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         )
 
     def _subscripts(self, ix: Array) -> tuple[Array, Array, Array]:
-        """
-        Array subscripts (z, y, x) of linear dose grid indices.
-
-        Parameters
-        ----------
-        ix : Array
-            Linear (C order) dose grid indices.
-
-        Returns
-        -------
-        tuple[Array, Array, Array]
-            The subscripts along the three array axes.
-        """
+        """Array subscripts (z, y, x) of linear C order dose grid indices."""
         _, ny, nx = self._dose_dims
         return ix // (ny * nx), (ix // nx) % ny, ix % nx
 
     def _source_box(self, ix: Array, terma: Array) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Get the transport sub-volume around the relevant TERMA.
-
-        Parameters
-        ----------
-        ix : Array
-            Dose grid indices of the TERMA values.
-        terma : Array
-            TERMA values.
-
-        Returns
-        -------
-        tuple[np.ndarray, np.ndarray]
-            Lowest and highest array subscripts (z, y, x) of the sub-volume, which extends
-            ``scatter_cutoff`` around the voxels with more than 1e-6 of the maximum TERMA.
-        """
+        """Sub-volume within ``scatter_cutoff`` of the voxels with > 1e-6 of the maximum TERMA."""
         xp = self.xp
         is_source = terma > 1e-6 * xp.max(terma)
         num_vox = int(np.prod(self._dose_dims))
@@ -575,22 +508,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         return box_lo, box_hi
 
     def _box_local(self, ix: Array, box_lo: np.ndarray, box_hi: np.ndarray) -> tuple:
-        """
-        Locate dose grid indices in a sub-volume.
-
-        Parameters
-        ----------
-        ix : Array
-            Dose grid indices.
-        box_lo, box_hi : np.ndarray
-            Lowest and highest array subscripts of the sub-volume.
-
-        Returns
-        -------
-        tuple
-            Mask of the indices inside the sub-volume and their linear (C order) indices in
-            it, 0 outside.
-        """
+        """Mask of the indices inside a sub-volume and their linear indices in it (0 outside)."""
         xp = self.xp
         subs = self._subscripts(ix)
         inside = xp.ones(ix.shape, dtype=xp.bool, device=self.device)
@@ -599,12 +517,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             inside = inside & (a >= lo) & (a <= hi)
             local = local * (hi - lo + 1) + (a - lo)
         return inside, xp.where(inside, local, 0)
-
-    def _check_dose(self, dose: Array) -> None:
-        """Raise an error for NaN, infinite or negative doses unless they are ignored."""
-        xp = self.xp
-        if not self.ignore_invalid_values and bool(xp.any(~xp.isfinite(dose) | (dose < 0))):
-            raise ValueError("Invalid numerical values in collapsed cone dose calculation.")
 
     def _transport_on_box(
         self,
@@ -617,31 +529,7 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         out_ix: Array,
         normalization: float,
     ) -> Array:
-        """
-        Transport TERMA within a sub-volume and get the absolute dose on given voxels.
-
-        Parameters
-        ----------
-        source_ix : Array
-            Dose grid indices of the TERMA values.
-        terma : Array
-            TERMA values.
-        box_lo, box_hi : np.ndarray
-            Lowest and highest array subscripts of the sub-volume.
-        ct_phase : int
-            CT phase of the density cube.
-        dirs : np.ndarray
-            ``(3, n_dirs)`` cone directions along the numpy axes of the dose grid.
-        out_ix : Array
-            Dose grid indices to return the dose on.
-        normalization : float
-            Absolute dose normalization factor.
-
-        Returns
-        -------
-        Array
-            Dose on ``out_ix``, zero outside the sub-volume.
-        """
+        """Transport TERMA within a sub-volume; absolute dose on ``out_ix``, 0 outside it."""
         xp = self.xp
         box = tuple(slice(int(lo), int(hi) + 1) for lo, hi in zip(box_lo, box_hi))
         rho_box = self._density_cubes[ct_phase][box]
@@ -668,23 +556,10 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
         inside, local = self._box_local(out_ix, box_lo, box_hi)
         dose = xp.take(xp.reshape(dose_box, (-1,)), local)
         dose = normalization * xp.where(inside, dose, 0.0)
-        self._check_dose(dose)
         return dose
 
     def _bixel_dose(self, ray: dict) -> Array:
-        """
-        Compute the collapsed cone dose of a bixel on the voxels of its ray.
-
-        Parameters
-        ----------
-        ray : dict
-            Ray information struct of the scenario (see ``_apply_scenario_to_ray``).
-
-        Returns
-        -------
-        Array
-            Dose per unit bixel weight on ``ray["ix"]``.
-        """
+        """Dose per unit bixel weight on the voxels of the ray."""
         xp = self.xp
         ix = self._as_xp(ray["ix"], dtype=xp.int64)
         terma = self._ray_terma(ray)
@@ -726,19 +601,19 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
             - ``ix``: the dose grid indices of the voxels (with ``enable_dij_sampling``,
               only the kept voxels)
         """
-        ix = np.asarray(to_numpy(curr_ray["ix"]), dtype=np.int64)
-        dose = to_numpy(self._bixel_dose(curr_ray), dtype=np.float32)
+        xp = self.xp
+        dose = xp.astype(self._bixel_dose(curr_ray), xp.float32)
         bixel = {
             "weight": curr_ray["beamlets"][k]["weight"],
-            "ix": ix,
+            "ix": curr_ray["ix"],
             "physical_dose": dose,
         }
         if self.enable_dij_sampling and not self._calc_dose_direct:
             bixel["ix"], bixel["physical_dose"] = self._sample_dij(
-                ix,
-                bixel["physical_dose"],
-                np.asarray(to_numpy(curr_ray["rad_depths"])),
-                np.asarray(to_numpy(curr_ray["radial_dist_sq"])),
+                curr_ray["ix"],
+                dose,
+                curr_ray["rad_depths"],
+                curr_ray["radial_dist_sq"],
                 bixel_width=curr_ray["bixel_width"],
             )
         return bixel
@@ -885,7 +760,6 @@ class PhotonCollapsedConeEngine(PencilBeamEngineAbstract):
                 self._direction_att,
                 origin=a["box_lo"],
             )
-            self._check_dose(dose_box)
             dose = np.zeros(self._dose_dims, dtype=np.float32)
             dose[box] = to_numpy(dose_box, dtype=np.float32)
             out_ix = np.flatnonzero(to_numpy(a["mask"]))
